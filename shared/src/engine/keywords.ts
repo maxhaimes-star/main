@@ -109,8 +109,8 @@ export interface LevelStats { power?: number; toughness?: number; keywords: stri
 /**
  * What a leveler is at a given level, from its S: lines ("IsPresent$ Card.Self+counters_GE2_LEVEL+counters_LE6_LEVEL").
  * Returns undefined below the first level band.
- * TODO(statics): effectivePT / hasKeyword don't apply this yet — the static-effects layer should call it
- * (or evaluate these S: lines generically).
+ * The static-effects layer (statics.ts) applies these S: lines in effectivePT / hasKeyword (with `state`)
+ * via the generic counters_GE<n>_LEVEL property; this helper is for display / tests.
  */
 export function levelStats(f: ForgeFace, level: number): LevelStats | undefined {
   let found: LevelStats | undefined;

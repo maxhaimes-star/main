@@ -81,10 +81,19 @@ export interface AutoInfo {
   cardId: string;
   /** Script face index (0 front, 1 back / adventure / second split half). */
   face: number;
-  /** 'spell' = the face's SP$ ability; 'ability' = the face's Nth AB$ ability. */
-  source: 'spell' | 'ability';
-  /** Index into the face's abilities[] array (A: lines). */
+  /**
+   * 'spell' = the face's SP$ ability; 'ability' = the face's Nth AB$ ability;
+   * 'trigger' (Stage 2) = a triggered ability: the chain starts at SVar `svar` (or the synthesized `line`).
+   */
+  source: 'spell' | 'ability' | 'trigger';
+  /** Index into the face's abilities[] array (A: lines); for 'trigger', the T: line index (-1 = delayed / reflexive / keyword trigger). */
   index: number;
+  /** 'trigger' only: name of the Execute$ SVar that starts the chain. */
+  svar?: string;
+  /** 'trigger' only: a synthesized ability line used instead of `svar` (e.g. prowess, "sacrifice it at end of turn"). */
+  line?: string;
+  /** 'trigger' only: what the trigger saw (Triggered* objects, remembered objects of delayed triggers, intervening-if). */
+  trigger?: TriggerContext;
   /** One list of chosen targets per TargetSpec (same order as targetSpecs()). */
   targets: TargetRef[][];
   x?: number;
@@ -103,6 +112,68 @@ export interface AutoInfo {
  * (variant 0 = the main ability; Reconfigure's "unattach" is variant 1). See engine/keywords.ts.
  */
 export const SYNTH_BASE = 1000;
+
+
+/**
+ * Stage 2: the objects a triggered ability refers to (Forge "Triggered*" / "DelayTriggerRemembered").
+ * All ids are card iids or player ids.
+ */
+export interface TriggerContext {
+  /** Forge trigger mode (ChangesZone, Phase, Attacks, SpellCast, DamageDone, ..., 'Delayed', 'Immediate'). */
+  mode: string;
+  /** TriggeredCard (the card that moved / attacked / was cast / was drawn). */
+  card?: string;
+  /** TriggeredPlayer / TriggeredActivator / TriggeredCardController (whose turn, who cast, who drew ...). */
+  player?: string;
+  /** TriggeredTarget: damaged player (pid) or permanent (iid). */
+  target?: string;
+  /** TriggeredDefendingPlayer. */
+  defender?: string;
+  /** TriggeredSource (damage source iid). */
+  source?: string;
+  /** Damage amount etc. */
+  amount?: number;
+  /** Delayed / reflexive triggers: the objects the creating effect remembered. */
+  remembered?: string[];
+  /** Last-known information (e.g. the creature that died). */
+  lki?: Record<string, Lki>;
+  /** Intervening "if" clause (IsPresent$ / CheckSVar$), re-checked on resolution. */
+  condition?: Record<string, string>;
+}
+
+/** Stage 2: a triggered ability waiting to be put on the stack (needs a decision / targets first). Engine-internal. */
+export interface QueuedTrigger {
+  id: string;
+  controller: string;
+  sourceIid?: string;
+  /** Public label, e.g. "Thraben Inspector". */
+  sourceName: string;
+  /** Stack text. */
+  text: string;
+  auto: AutoInfo;
+  /** OptionalDecider$ ("you may"): asked before it goes on the stack. */
+  optional?: boolean;
+  /** Set once the controller said yes (optional) / chose targets. */
+  accepted?: boolean;
+  targetsChosen?: boolean;
+  /** Not automatable (e.g. an optional cost): goes on the stack without `auto`, resolved by hand. */
+  manual?: boolean;
+}
+
+/** Stage 2: a delayed trigger ("at the beginning of the next end step, return it"). Engine-internal. */
+export interface DelayedTrigger {
+  id: string;
+  controller: string;
+  sourceIid?: string;
+  sourceName: string;
+  text: string;
+  /** Step it fires at (start of). */
+  step: import('../game/types.ts').Step;
+  /** Turn / step it was created in (it fires at the *next* such step). */
+  turn: number;
+  createdStep: import('../game/types.ts').Step;
+  auto: AutoInfo;
+}
 
 /** A question the engine needs a player to answer (e.g. "Pay {3}?" for Mana Leak). */
 export interface Pending {

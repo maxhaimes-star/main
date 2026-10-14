@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  activatedAbilitiesOf, applyAction, createGame, type Ctx, effectivePT, type GameAction, type GameState, isCreature, levelStatsOf,
+  activatedAbilitiesOf, applyAction, createGame, type Ctx, effectivePT, type GameAction, type GameState, hasKeyword, isCreature, levelStatsOf,
   moveCard, SYNTH_BASE, targetSpecs,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
@@ -172,8 +172,13 @@ describe('keyword abilities: Level up, Crew, Ninjutsu, Ward', () => {
     }
     expect(g.cards[sw].counters.level).toBe(2);
     expect(levelStatsOf(g.cards[sw])).toMatchObject({ power: 3, toughness: 3, keywords: ['First Strike'] });
+    // applied by the static-effects layer
+    expect(effectivePT(g.cards[sw], getCard, g)).toEqual([3, 3]);
+    expect(hasKeyword(g.cards[sw], getCard, 'First strike', g)).toBe(true);
     g.cards[sw].counters.level = 7;
     expect(levelStatsOf(g.cards[sw])).toMatchObject({ power: 4, toughness: 4, keywords: ['Double Strike'] });
+    expect(effectivePT(g.cards[sw], getCard, g)).toEqual([4, 4]);
+    expect(hasKeyword(g.cards[sw], getCard, 'Double strike', g)).toBe(true);
   });
 
   it("Smuggler's Copter: crew 1 taps a creature and makes it a creature until end of turn", () => {
@@ -210,6 +215,12 @@ describe('keyword abilities: Level up, Crew, Ninjutsu, Ward', () => {
     act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
     act(g, ctx, 'a', { t: 'declareAttacker', iid: gg, target: 'b' });
     act(g, ctx, 'a', { t: 'confirmAttackers' });
+    // Goblin Guide's attack trigger resolves first.
+    for (let k = 0; k < 20 && g.step === 'attackers'; k++) {
+      const q = g.pending[0];
+      if (q) { act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
     expect(g.step).toBe('blockers');
     act(g, ctx, 'b', { t: 'confirmBlockers' });
     expect(g.combat.blockersDeclared).toBe(true);

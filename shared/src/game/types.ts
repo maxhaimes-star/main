@@ -1,5 +1,5 @@
 import type { TokenData } from '../cards.ts';
-import type { AutoCont, AutoInfo, Pending, TargetRef } from '../engine/types.ts';
+import type { AutoCont, AutoInfo, DelayedTrigger, Pending, QueuedTrigger, TargetRef } from '../engine/types.ts';
 
 export const STEPS = [
   'untap', 'upkeep', 'draw', 'main1',
@@ -94,6 +94,8 @@ export interface GamePlayer {
   conceded: boolean;
   /** City's blessing, monarch, initiative... */
   designations: string[];
+  /** Stage 2: put this player's triggered abilities on the stack automatically (undefined = true). */
+  autoTriggers?: boolean;
 }
 
 export interface LogEntry { at: number; pid: string | null; text: string }
@@ -102,6 +104,8 @@ export interface CombatProposal {
   lifeChange: Record<string, number>;
   /** Damage to each creature/planeswalker by iid. */
   damage: Record<string, number>;
+  /** Stage 2: each damage assignment (source iid -> player id or permanent iid), for damage triggers. */
+  hits?: { source: string; target: string; amount: number }[];
   /** Creatures / planeswalkers expected to die. */
   dies: string[];
   lines: string[];
@@ -131,7 +135,30 @@ export interface GameState {
   /** Questions the engine is waiting on (answered with the 'choose' action). */
   pending: Pending[];
   seq: number;
+  /** Stage 2, engine-internal (not sent to clients): events of the current action, for trigger detection. */
+  events?: GameEvent[];
+  /** Stage 2, engine-internal: triggered abilities waiting for a decision before going on the stack. */
+  triggerQueue?: QueuedTrigger[];
+  /** Stage 2, engine-internal: delayed triggers ("at the beginning of the next end step ..."). */
+  delayedTriggers?: DelayedTrigger[];
+  /** Stage 2, engine-internal: objects a permanent's abilities remembered (source iid -> iids). */
+  remembered?: Record<string, string[]>;
+  /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
+  turnStats?: { cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number> };
 }
+
+/** Stage 2: something that happened during an action (engine-internal; used to detect triggers). */
+export type GameEvent =
+  /** from 'none' = a token was created. */
+  | { t: 'zone'; iid: string; from: Zone | 'none'; to: Zone; snap: CardInstance; cause?: 'discard' | 'sacrifice' }
+  | { t: 'phase'; step: Step; active: string; turn: number }
+  | { t: 'attacks'; iid: string; defender: string }
+  | { t: 'attackersDeclared'; pid: string }
+  | { t: 'blocks'; iid: string; attacker: string }
+  | { t: 'cast'; iid: string; pid: string; nth: number }
+  | { t: 'drawn'; iid: string; pid: string; nth: number; firstInDrawStep?: boolean }
+  | { t: 'damage'; source: string; target: string; amount: number; combat: boolean; sourceSnap?: CardInstance; targetSnap?: CardInstance }
+  | { t: 'landPlayed'; iid: string; pid: string };
 
 /** Actions a player can send. All are validated in the reducer. */
 export type GameAction =
@@ -151,14 +178,16 @@ export type GameAction =
   | { t: 'revealTop'; n: number }
   | { t: 'move'; iid: string; to: Zone; toOwner?: boolean; position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean }
   | { t: 'playLand'; iid: string }
-  /** targets: one list per TargetSpec of the spell. manual: skip the engine (resolve by hand). */
-  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[] }
+  /** targets: one list per TargetSpec of the spell. manual: skip the engine (resolve by hand). force: ignore static restrictions (e.g. "can't be cast"). */
+  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[]; force?: boolean }
   /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. */
   | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number }
   | { t: 'choose'; id: string; value: string }
   /** Answer a Pending that has `targets`: one list per spec. */
   | { t: 'chooseTargets'; id: string; targets: TargetRef[][] }
   | { t: 'trigger'; text: string; sourceIid?: string }
+  /** Stage 2: turn automatic triggered abilities on/off for yourself. */
+  | { t: 'setAutoTriggers'; on: boolean }
   | { t: 'resolve' }
   | { t: 'counterTop' }
   | { t: 'removeStackItem'; id: string }
@@ -184,8 +213,9 @@ export type GameAction =
   | { t: 'revealHand' }
   | { t: 'lookAtHand'; pid: string | null }
   | { t: 'designation'; name: string; on: boolean }
-  | { t: 'declareAttacker'; iid: string; target: string | null }
-  | { t: 'declareBlocker'; iid: string; attacker: string | null }
+  /** force: ignore static restrictions (defender, Ensnaring Bridge, "can't block" ...). */
+  | { t: 'declareAttacker'; iid: string; target: string | null; force?: boolean }
+  | { t: 'declareBlocker'; iid: string; attacker: string | null; force?: boolean }
   | { t: 'confirmAttackers' }
   | { t: 'confirmBlockers' }
   | { t: 'proposeDamage' }

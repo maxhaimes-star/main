@@ -5,6 +5,7 @@ import type { CardInstance, GameAction, GameState, StackItem } from '../game/typ
 import { abilityAt, abilityLine, getScript, spellAbility, targetSpecs } from './script.ts';
 import { afterActivation, checkActivation } from './keyword-play.ts';
 import { isValidTarget } from './targets.ts';
+import { adjustCost } from './statics.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
@@ -24,7 +25,7 @@ function refKey(ref: TargetRef): string {
 }
 
 /** Validate targets for an ability chain. Returns normalized targets or an error. */
-function checkTargets(state: GameState, ab: ParsedAbility, modes: string[] | undefined, given: TargetRef[][], controller: string, sourceIid: string, ctx: Ctx, what: string):
+export function checkTargets(state: GameState, ab: ParsedAbility, modes: string[] | undefined, given: TargetRef[][], controller: string, sourceIid: string, ctx: Ctx, what: string):
   { targets: TargetRef[][]; targetZones: Record<string, string> } | { error: string } {
   const specs = targetSpecs(ab, modes);
   if (given.length > specs.length && given.slice(specs.length).some((l) => l.length)) return { error: `${what} doesn't have that many targets` };
@@ -138,6 +139,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (tap) c.tapped = true;
   if (untap) c.tapped = false;
   if (mana) {
+    const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
+    if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
     const paid = payFromPool(mana, me.manaPool, x);
     if (paid) { me.manaPool = paid.pool; if (paid.lifePaid) { me.life -= paid.lifePaid; notes.push(`paid ${paid.lifePaid} life`); } }
     else notes.push('mana not deducted');
@@ -155,9 +158,9 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const loy = counterDelta.loyalty;
   log(state, ctx, pid, `${me.name} activates ${src}${loy != null ? ` [${loy > 0 ? '+' : ''}${loy}]` : ''}: ${ab.description}${notes.length ? ` (${notes.join(', ')})` : ''}`);
   if (byHand.length) log(state, ctx, pid, `Pay by hand: ${byHand.join(' ')}.`);
-  if (sacSelf && c.zone === 'battlefield') { moveCard(state, ctx, c.iid, 'graveyard'); log(state, ctx, pid, `${me.name} sacrifices ${src}.`); }
+  if (sacSelf && c.zone === 'battlefield') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'sacrifice' }); log(state, ctx, pid, `${me.name} sacrifices ${src}.`); }
   if (exileSelf) { moveCard(state, ctx, c.iid, 'exile'); log(state, ctx, pid, `${me.name} exiles ${src}.`); }
-  if (discardSelf && c.zone === 'hand') { moveCard(state, ctx, c.iid, 'graveyard'); log(state, ctx, pid, `${me.name} discards ${src}.`); }
+  if (discardSelf && c.zone === 'hand') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'discard' }); log(state, ctx, pid, `${me.name} discards ${src}.`); }
   afterActivation(state, ctx, pid, c, ab, item);
   return null;
 }

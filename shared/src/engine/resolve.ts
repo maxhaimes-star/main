@@ -3,14 +3,16 @@
  * continuations) and state-based actions.
  */
 import { cardName, effectivePT, faceOf, hasKeyword, isCreature, payFromPool } from '../game/rules.ts';
-import { type Ctx, drawCards, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
-import type { CardInstance, GamePlayer, GameState, StackItem, Zone } from '../game/types.ts';
-import { abilityAt, flatten, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
+import { type Ctx, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
+import type { CardInstance, GamePlayer, GameState, StackItem, Step, Zone } from '../game/types.ts';
+import type { TokenData } from '../cards.ts';
+import { chainOf, describe, flatten, PHASES, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
-import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
+import { staticsDefineToughness } from './statics.ts';
+import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { KEYWORD_APIS } from './keywords.ts';
 import { answerKeywordPending, execKeywordStep } from './keyword-play.ts';
-import { answerReplacementPending, cantBeCountered, counterAmount, damagePrevented, replaceDraws, tokenMultiplier } from './replacements.ts';
+import { answerReplacementPending, cantBeCountered, counterAmount, damagePrevented, replaceDraws, tokenEntered, tokenMultiplier } from './replacements.ts';
 
 // ------------------------------------------------------------------ run context
 
@@ -23,10 +25,12 @@ interface Run extends AutoCont {
   sourceName: string;
   /** Creatures dealt damage by a deathtouch source during this run. */
   deathtouched: string[];
+  /** Stage 2: what the trigger saw (triggered abilities only). */
+  trig?: TriggerContext;
 }
 
 export function abilityFor(auto: AutoInfo): ParsedAbility | undefined {
-  return abilityAt(auto.cardId, auto.face, auto.index);
+  return chainOf(auto);
 }
 
 function makeRun(state: GameState, ctx: Ctx, cont: AutoCont): Run | undefined {
@@ -37,9 +41,11 @@ function makeRun(state: GameState, ctx: Ctx, cont: AutoCont): Run | undefined {
   const sourceIid = cont.item.iid ?? cont.item.sourceIid;
   const src = sourceIid ? state.cards[sourceIid] : undefined;
   const face = SCRIPTS.cards[auto.cardId]?.[auto.face];
+  const trig = auto.trigger;
+  const lki = trig?.lki ? { ...trig.lki, ...cont.lki } : cont.lki;
   return {
-    ...cont, steps, specOf: specIndexByStep(steps), svars: face?.svars ?? {}, controller: cont.item.controller, sourceIid,
-    sourceName: src ? cardName(src, ctx.lookup) : face?.name ?? 'It', deathtouched: [],
+    ...cont, lki, steps, specOf: specIndexByStep(steps), svars: face?.svars ?? {}, controller: cont.item.controller, sourceIid,
+    sourceName: src ? cardName(src, ctx.lookup) : face?.name ?? 'It', deathtouched: [], trig,
   };
 }
 
@@ -47,8 +53,8 @@ function contAt(r: Run, next: number): AutoCont {
   return JSON.parse(JSON.stringify({ item: r.item, next, targets: r.targets, lki: r.lki, remembered: r.remembered })) as AutoCont;
 }
 
-function lkiOf(c: CardInstance, ctx: Ctx): Lki {
-  const [power, toughness] = effectivePT(c, ctx.lookup);
+export function lkiOf(c: CardInstance, ctx: Ctx, state?: GameState): Lki {
+  const [power, toughness] = effectivePT(c, ctx.lookup, state);
   const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
   return { power, toughness, mv: c.token && !c.cardId ? 0 : data?.cmc ?? 0, controller: c.controller, owner: c.owner, name: cardName(c, ctx.lookup) };
 }
@@ -118,9 +124,32 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     }
     case 'Player': return { cards: [], players: live };
     case 'Opponent': case 'Player.Opponent': return { cards: [], players: live.filter((p) => p !== r.controller) };
-    case 'Remembered': case 'RememberedLKI': return { cards: [...r.remembered], players: [] };
+    case 'Remembered': case 'RememberedLKI': {
+      // The run's own memory, else what the permanent remembered earlier (e.g. Journey to Nowhere's exiled card).
+      const mem = r.remembered.length ? r.remembered : (r.sourceIid && r.item.kind !== 'spell' ? state.remembered?.[r.sourceIid] ?? [] : []);
+      return { cards: [...mem], players: [] };
+    }
     case 'Enchanted': case 'Equipped': return { cards: src?.attachedTo ? [src.attachedTo] : [], players: [] };
   }
+  // Stage 2: objects the trigger saw.
+  const t = r.trig;
+  if (t && value?.startsWith('Triggered')) {
+    const isPlayer = (id: string | undefined) => !!id && state.players.some((p) => p.pid === id);
+    const cardIds = (id: string | undefined) => (id && !isPlayer(id) && (state.cards[id] || r.lki[id]) ? [id] : []);
+    const players = (...ids: (string | undefined)[]) => [...new Set(ids.filter((x): x is string => !!x && isPlayer(x)))];
+    const ctrl = (id: string | undefined) => (id ? (r.lki[id]?.controller ?? state.cards[id]?.controller) : undefined);
+    switch (value) {
+      case 'TriggeredCard': case 'TriggeredCardLKICopy': case 'TriggeredNewCardLKICopy': return { cards: cardIds(t.card).filter((x) => state.cards[x]), players: [] };
+      case 'TriggeredSource': return { cards: cardIds(t.source).filter((x) => state.cards[x]), players: [] };
+      case 'TriggeredCardController': return { cards: [], players: players(t.card ? ctrl(t.card) : t.player) };
+      case 'TriggeredCardOwner': return { cards: [], players: players(t.card ? (r.lki[t.card]?.owner ?? state.cards[t.card]?.owner) : undefined) };
+      case 'TriggeredPlayer': case 'TriggeredActivator': case 'TriggeredAttackingPlayer': return { cards: [], players: players(t.player) };
+      case 'TriggeredDefendingPlayer': return { cards: [], players: players(t.defender) };
+      case 'TriggeredSourceController': return { cards: [], players: players(ctrl(t.source)) };
+      case 'TriggeredTarget': return isPlayer(t.target) ? { cards: [], players: players(t.target) } : { cards: cardIds(t.target), players: [] };
+    }
+  }
+  if (value === 'DelayTriggerRemembered' || value === 'DelayTriggerRememberedLKI') return { cards: [...(t?.remembered ?? [])], players: [] };
   return undefined;
 }
 
@@ -149,15 +178,25 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
   if (m) {
     const iid = m[1].startsWith('Remembered') ? r.remembered[0] ?? firstCardTarget(r) : firstCardTarget(r);
     if (!iid) return 0;
-    const l = r.lki[iid] ?? (state.cards[iid] ? lkiOf(state.cards[iid], ctx) : undefined);
+    const l = r.lki[iid] ?? (state.cards[iid] ? lkiOf(state.cards[iid], ctx, state) : undefined);
     if (!l) return 0;
     return m[2] === 'Power' ? l.power : m[2] === 'Toughness' ? l.toughness : l.mv;
   }
   const src = r.sourceIid ? state.cards[r.sourceIid] : undefined;
+  const valid = /^Count\$Valid (.+)$/.exec(v);
+  if (valid) {
+    let n = 0;
+    for (const iid of state.battlefield) {
+      const m = matchCard(state.cards[iid], valid[1], { controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup });
+      if (m === 'unknown') return undefined;
+      if (m) n++;
+    }
+    return n;
+  }
   switch (v) {
-    case 'Count$CardPower': return src ? effectivePT(src, ctx.lookup)[0] : undefined;
-    case 'Count$CardToughness': return src ? effectivePT(src, ctx.lookup)[1] : undefined;
-    case 'Count$CardManaCost': return src ? lkiOf(src, ctx).mv : undefined;
+    case 'Count$CardPower': return src ? effectivePT(src, ctx.lookup, state)[0] : undefined;
+    case 'Count$CardToughness': return src ? effectivePT(src, ctx.lookup, state)[1] : undefined;
+    case 'Count$CardManaCost': return src ? lkiOf(src, ctx, state).mv : undefined;
     case 'Count$YourLifeTotal': return player(state, r.controller).life;
     case 'Count$CardsInYourHand': return player(state, r.controller).zones.hand.length;
   }
@@ -241,7 +280,7 @@ function onBattlefield(state: GameState, iid: string): CardInstance | undefined 
 
 function damageCard(state: GameState, ctx: Ctx, r: Run, c: CardInstance, n: number, deathtouch: boolean) {
   const f = faceOf(c, ctx.lookup);
-  if (isCreature(c, ctx.lookup)) {
+  if (isCreature(c, ctx.lookup, state)) {
     c.damage += n;
     if (deathtouch && n > 0) r.deathtouched.push(c.iid);
   } else if (f.types.includes('Planeswalker')) {
@@ -299,6 +338,12 @@ interface PickData {
   cont?: AutoCont;
 }
 
+interface ColorData {
+  kind: 'color';
+  n: number;
+  cont?: AutoCont;
+}
+
 interface UnlessData {
   kind: 'unless';
   stackId: string;
@@ -329,6 +374,65 @@ function startPicks(state: GameState, ctx: Ctx, picks: Omit<PickData, 'queue' | 
   return false;
 }
 
+
+/** Scry / Surveil / Dig (look at the top N, choose by hand) / RearrangeTopOfLibrary: open the player's peek window. */
+function peekStep(state: GameState, ctx: Ctx, r: Run, i: number, me: GamePlayer): StepResult {
+  const step = r.steps[i];
+  const p = step.params;
+  const raw = step.api === 'Scry' ? p.ScryNum : step.api === 'Surveil' ? p.Amount : step.api === 'Dig' ? p.DigNum : p.NumCards;
+  const n = amount(state, ctx, r, raw, 1);
+  const o = objects(state, r, i, 'You');
+  if (n == null || !o || o.players.length !== 1 || o.players[0] !== r.controller) { manual(state, ctx, r, step); return 'ok'; }
+  const mode = step.api === 'Scry' ? 'scry' : step.api === 'Surveil' ? 'surveil' : 'look';
+  openPeek(state, ctx, r, i, me, mode, n);
+  const verb = mode === 'scry' ? `scries ${n}` : mode === 'surveil' ? `surveils ${n}` : `looks at the top ${n}`;
+  log(state, ctx, r.controller, `${me.name} ${verb} (${r.sourceName}${mode === 'look' ? `: ${step.description}` : ''}).`);
+  return 'wait';
+}
+
+/** Stage 2: a permanent's abilities remember objects across resolutions (Journey to Nowhere, Tidehollow Sculler ...). */
+function rememberOnCard(state: GameState, item: StackItem, iids: string[]) {
+  const src = item.sourceIid ?? item.iid;
+  if (!src || item.kind === 'spell') return;
+  (state.remembered ??= {})[src] = [...iids];
+}
+
+/** Create a token on the battlefield (Stage 2: emits an "enters the battlefield" event). */
+export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, token: TokenData, tapped: boolean, cardId?: string): CardInstance {
+  const inst = newInstance(state, ctx.rng, owner, 'battlefield', cardId, token);
+  inst.tapped = tapped;
+  inst.summoningSick = true;
+  state.battlefield.push(inst.iid);
+  tokenEntered(state, ctx, inst); // ETB replacements from other permanents (e.g. "enters tapped")
+  emit(state, { t: 'zone', iid: inst.iid, from: 'none', to: 'battlefield', snap: JSON.parse(JSON.stringify(inst)) as CardInstance });
+  return inst;
+}
+
+/** Register a delayed trigger created by the resolving ability. */
+function addDelayed(state: GameState, ctx: Ctx, r: Run, at: Step, chain: { svar?: string; line?: string }, remembered: string[], text: string) {
+  const auto = r.item.auto!;
+  const lki: Record<string, Lki> = {};
+  for (const iid of remembered) {
+    if (r.lki[iid]) lki[iid] = r.lki[iid];
+    else if (state.cards[iid]) lki[iid] = lkiOf(state.cards[iid], ctx);
+  }
+  const info: AutoInfo = { cardId: auto.cardId, face: auto.face, source: 'trigger', index: -1, targets: [], trigger: { mode: 'Delayed', remembered: [...remembered], lki } };
+  if (chain.svar) info.svar = chain.svar;
+  if (chain.line) info.line = chain.line;
+  (state.delayedTriggers ??= []).push({
+    id: randomId(ctx.rng), controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, text: `${r.sourceName}: ${text}`,
+    step: at, turn: state.turn, createdStep: state.step, auto: info,
+  });
+  log(state, ctx, r.controller, `${r.sourceName}: delayed trigger set up (${text}).`);
+}
+
+/** AtEOT$ Sacrifice / Exile / ExileCombat: "sacrifice it at the beginning of the next end step". */
+function atEndOf(state: GameState, ctx: Ctx, r: Run, iids: string[], what: string) {
+  const dest = what === 'Sacrifice' ? 'Graveyard' : 'Exile';
+  const line = `DB$ ChangeZone | Defined$ DelayTriggerRemembered | Origin$ Battlefield | Destination$ ${dest} | SpellDescription$ ${what === 'Sacrifice' ? 'Sacrifice' : 'Exile'} the token${iids.length === 1 ? '' : 's'}.`;
+  addDelayed(state, ctx, r, what === 'ExileCombat' ? 'endCombat' : 'end', { line }, iids, `${what === 'Sacrifice' ? 'sacrifice' : 'exile'} ${names(state, ctx, iids)} at ${what === 'ExileCombat' ? 'end of combat' : 'the beginning of the next end step'}`);
+}
+
 // ------------------------------------------------------------------ steps
 
 type StepResult = 'ok' | 'wait';
@@ -352,8 +456,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   if (cond === 'unknown') log(state, ctx, r.controller, `Check by hand: ${p.ConditionDescription ?? step.description} (condition not verified).`);
   const remember = (iids: string[]) => {
     if (Object.keys(p).some((k) => k.startsWith('Remember'))) {
-      for (const iid of iids) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx);
+      for (const iid of iids) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx, state);
       r.remembered = [...iids];
+      rememberOnCard(state, r.item, iids);
     }
   };
   const bad = () => { manual(state, ctx, r, step); return 'ok' as const; };
@@ -361,7 +466,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
 
   switch (step.api) {
     case 'Cleanup': {
-      if (p.ClearRemembered) r.remembered = [];
+      if (p.ClearRemembered) {
+        r.remembered = [];
+        const src = r.item.sourceIid ?? r.item.iid;
+        if (src && state.remembered) delete state.remembered[src];
+      }
       return 'ok';
     }
     case 'DealDamage': {
@@ -372,16 +481,17 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const srcObj = p.DamageSource ? defined(state, r, i, p.DamageSource)?.cards[0] : r.sourceIid;
       const src = srcObj ? state.cards[srcObj] : undefined;
       const srcName = src ? cardName(src, ctx.lookup) : r.sourceName;
-      const deathtouch = !!src && hasKeyword(src, ctx.lookup, 'Deathtouch');
+      const deathtouch = !!src && hasKeyword(src, ctx.lookup, 'Deathtouch', state);
       const hit: string[] = [];
-      for (const iid of o.cards) { const c = onBattlefield(state, iid); if (c) { damageCard(state, ctx, r, c, n, deathtouch); hit.push(cardName(c, ctx.lookup)); } }
+      for (const iid of o.cards) { const c = onBattlefield(state, iid); if (c) { damageCard(state, ctx, r, c, n, deathtouch); hit.push(cardName(c, ctx.lookup)); if (srcObj && n > 0) emit(state, { t: 'damage', source: srcObj, target: iid, amount: n, combat: false }); } }
       for (const pid of o.players) {
         const prev = damagePrevented(state, ctx.lookup, pid);
         if (prev) { log(state, ctx, pid, `Damage to ${pname(state, pid)} is prevented (${prev}).`); continue; }
         player(state, pid).life -= n; hit.push(pname(state, pid));
+        if (srcObj && n > 0) emit(state, { t: 'damage', source: srcObj, target: pid, amount: n, combat: false });
       }
       log(state, ctx, r.controller, `${srcName} deals ${n} damage to ${hit.join(', ') || 'nothing'}.`);
-      if (src && hasKeyword(src, ctx.lookup, 'Lifelink') && hit.length) {
+      if (src && hasKeyword(src, ctx.lookup, 'Lifelink', state) && hit.length) {
         const gain = n * hit.length;
         player(state, src.controller).life += gain;
         log(state, ctx, src.controller, `${pname(state, src.controller)} gains ${gain} life (lifelink).`);
@@ -419,8 +529,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const iid of o.cards) {
         const c = onBattlefield(state, iid);
         if (!c) continue;
-        if (hasKeyword(c, ctx.lookup, 'Indestructible')) { log(state, ctx, null, `${cardName(c, ctx.lookup)} is indestructible.`); continue; }
-        r.lki[iid] ??= lkiOf(c, ctx);
+        if (hasKeyword(c, ctx.lookup, 'Indestructible', state)) { log(state, ctx, null, `${cardName(c, ctx.lookup)} is indestructible.`); continue; }
+        r.lki[iid] ??= lkiOf(c, ctx, state);
         const nm = cardName(c, ctx.lookup);
         moveCard(state, ctx, iid, 'graveyard');
         done.push(nm);
@@ -444,9 +554,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const done: string[] = [];
       for (const iid of list) {
         const c = state.cards[iid];
-        if (step.api === 'DestroyAll' && hasKeyword(c, ctx.lookup, 'Indestructible')) continue;
+        if (step.api === 'DestroyAll' && hasKeyword(c, ctx.lookup, 'Indestructible', state)) continue;
         done.push(cardName(c, ctx.lookup));
-        moveCard(state, ctx, iid, 'graveyard');
+        moveCard(state, ctx, iid, 'graveyard', step.api === 'SacrificeAll' ? { cause: 'sacrifice' } : {});
       }
       log(state, ctx, r.controller, `${r.sourceName}: ${step.api === 'DestroyAll' ? 'destroyed' : 'sacrificed'} ${done.length ? done.join(', ') : 'nothing'}.`);
       return 'ok';
@@ -457,18 +567,27 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const origins = (p.Origin ?? '').split(',').map((z) => zoneOf(z)).filter((z): z is Zone => !!z);
       let cards: string[] | undefined;
       const own = ownTargets(r, i);
-      if (own) cards = split(state, own).cards;
+      const targetPlayers = own ? split(state, own) : undefined;
+      // Targets a player and picks a card from their zone (Tidehollow Sculler, Mesmeric Fiend, Vendilion Clique ...).
+      const pickFromPlayer = !!targetPlayers && !targetPlayers.cards.length && (!!p.ChangeType || !!p.Hidden || !!p.DefinedPlayer);
+      if (own && pickFromPlayer && !targetPlayers!.players.length) { log(state, ctx, r.controller, `${r.sourceName}: no target player.`); return 'ok'; }
+      if (own && !pickFromPlayer) cards = targetPlayers!.cards;
       else if (p.Defined) {
         const d = defined(state, r, i, p.Defined);
         if (!d) return bad();
         cards = d.cards;
+      } else if (!own && !p.ChangeType && !p.Hidden && !p.ChangeNum && origins.length && origins.every((z) => z === 'graveyard' || z === 'battlefield' || z === 'exile')) {
+        // Forge: a known-origin ChangeZone without targets / Defined$ moves the card itself (e.g. Bloodghast, Kytheon).
+        cards = r.sourceIid && state.cards[r.sourceIid] ? [r.sourceIid] : [];
       }
       if (!cards) {
         // Hidden choice: search the library, or pick from hand / graveyard / battlefield.
-        const chooserPid = p.DefinedPlayer ? defined(state, r, i, p.DefinedPlayer)?.players[0] : r.controller;
-        if (!chooserPid) return bad();
-        const chooser = player(state, chooserPid);
+        const ownerPid = p.DefinedPlayer ? defined(state, r, i, p.DefinedPlayer)?.players[0] : pickFromPlayer ? targetPlayers!.players[0] : r.controller;
+        if (!ownerPid) return bad();
+        const chooser = player(state, ownerPid);
+        const chooserPid = p.Chooser === 'You' ? r.controller : ownerPid;
         if (origins.includes('library')) {
+          if (chooserPid !== ownerPid) return bad();
           openPeek(state, ctx, r, i, chooser, 'search', 0);
           log(state, ctx, chooserPid, `${chooser.name} searches their library (${r.sourceName}: ${step.description}) — choose the card.`);
           return 'wait';
@@ -485,9 +604,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const n = p.ChangeNum === 'All' ? cands.length : amount(state, ctx, r, p.ChangeNum, 1);
         if (n == null) return bad();
         if (!cands.length) { log(state, ctx, chooserPid, `${r.sourceName}: no card to choose.`); return 'ok'; }
-        const where = dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of your library' : 'on top of your library') : `to ${dest === 'battlefield' ? 'the battlefield' : `your ${dest}`}`;
+        const yours = ownerPid === chooserPid ? 'your' : `${chooser.name}'s`;
+        if (origin === 'hand' && ownerPid !== chooserPid) log(state, ctx, r.controller, `${chooser.name} reveals their hand to ${pname(state, chooserPid)}.`);
+        const where = dest === 'library' ? (p.LibraryPosition === '-1' ? `on the bottom of ${yours} library` : `on top of ${yours} library`) : `to ${dest === 'battlefield' ? 'the battlefield' : dest === 'exile' ? 'exile' : `${yours} ${dest}`}`;
         const created = startPicks(state, ctx, [{
-          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && origin !== 'hand',
+          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True'),
           dest, params: p, label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
         return created ? 'wait' : 'ok';
@@ -498,7 +619,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         if (!c) continue;
         const self = iid === r.sourceIid && (p.Defined === 'Self' || p.Defined === 'Parent');
         if (!self && origins.length && !origins.includes(c.zone) && !p.Origin?.includes('Any')) continue;
-        r.lki[iid] ??= lkiOf(c, ctx);
+        r.lki[iid] ??= lkiOf(c, ctx, state);
         const nm = cardName(c, ctx.lookup);
         moveTo(state, ctx, r, iid, dest, p);
         moved.push(nm);
@@ -543,10 +664,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         for (const owner of owners) {
           const count = n * tokenMultiplier(state, ctx, owner);
           for (let k = 0; k < count; k++) {
-            const inst = newInstance(state, ctx.rng, owner, 'battlefield', undefined, token);
-            inst.tapped = p.TokenTapped === 'True';
-            inst.summoningSick = true;
-            state.battlefield.push(inst.iid);
+            const inst = createTokenInstance(state, ctx, owner, token, p.TokenTapped === 'True');
             made.push(inst.iid);
           }
           log(state, ctx, owner, `${pname(state, owner)} creates ${count} ${token.name}${token.power != null ? ` ${token.power}/${token.toughness}` : ''} token${count === 1 ? '' : 's'}.`);
@@ -554,6 +672,54 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       }
       remember(made);
       if (p.TokenAttacking) log(state, ctx, r.controller, 'Reminder: the token enters attacking — declare it by hand.');
+      if (p.AtEOT && made.length) atEndOf(state, ctx, r, made, p.AtEOT);
+      return 'ok';
+    }
+    case 'Investigate': {
+      const n = amount(state, ctx, r, p.Num, 1);
+      const clue = SCRIPTS.tokens.c_a_clue_draw;
+      if (n == null || !clue) return bad();
+      for (let k = 0; k < n; k++) createTokenInstance(state, ctx, r.controller, clue, false);
+      log(state, ctx, r.controller, `${me.name} investigates (creates ${n} Clue token${n === 1 ? '' : 's'}).`);
+      return 'ok';
+    }
+    case 'CopyPermanent': {
+      const o = objects(state, r, i, 'Self');
+      if (!o) return bad();
+      const made: string[] = [];
+      for (const iid of o.cards) {
+        const src = state.cards[iid];
+        if (!src?.cardId || src.zone !== 'battlefield') continue;
+        const f = faceOf(src, ctx.lookup);
+        const inst = createTokenInstance(state, ctx, r.controller, {
+          name: f.name, typeLine: f.typeLine, colors: ctx.lookup(src.cardId)?.colors ?? [], oracle: f.oracle, keywords: f.keywords, power: f.power, toughness: f.toughness,
+        }, false, src.cardId);
+        inst.transformed = src.transformed;
+        if (f.loyalty) inst.counters.loyalty = parseInt(f.loyalty, 10) || 0;
+        if (p.AddKeywords) inst.tempKeywords = p.AddKeywords.split('&').map((k) => k.trim());
+        made.push(inst.iid);
+        log(state, ctx, r.controller, `${me.name} creates a token copy of ${f.name}${p.AddKeywords ? ` with ${p.AddKeywords.replace(/&/g, ', ').toLowerCase()}` : ''}.`);
+      }
+      remember(made);
+      if (p.AtEOT && made.length) atEndOf(state, ctx, r, made, p.AtEOT);
+      return 'ok';
+    }
+    case 'DelayedTrigger': {
+      const at = PHASES[p.Phase ?? ''];
+      if (!at || !p.Execute) return bad();
+      const objs = p.RememberObjects ? defined(state, r, i, p.RememberObjects) : undefined;
+      const rememberedNow = objs ? objs.cards : [];
+      addDelayed(state, ctx, r, at, { svar: p.Execute }, rememberedNow, describe(p.TriggerDescription ?? p.SpellDescription ?? 'Delayed trigger', r.sourceName));
+      return 'ok';
+    }
+    case 'ImmediateTrigger': {
+      if (!p.Execute) return bad();
+      const auto = r.item.auto!;
+      const text = describe(p.TriggerDescription ?? p.SpellDescription ?? 'Reflexive trigger', r.sourceName);
+      (state.triggerQueue ??= []).push({
+        id: randomId(ctx.rng), controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, text: `${r.sourceName}: ${text}`,
+        auto: { cardId: auto.cardId, face: auto.face, source: 'trigger', index: -1, svar: p.Execute, targets: [], trigger: { ...(r.trig ?? {}), mode: 'Immediate', remembered: [...r.remembered], lki: { ...r.lki } } },
+      });
       return 'ok';
     }
     case 'PutCounter': case 'PutCounterAll': {
@@ -685,7 +851,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
             ids = chosen;
           }
           const nm = names(state, ctx, ids);
-          for (const iid of ids) moveCard(state, ctx, iid, 'graveyard');
+          for (const iid of ids) moveCard(state, ctx, iid, 'graveyard', { cause: 'discard' });
           remember(ids);
           log(state, ctx, pid, `${pl.name} discards ${ids.length ? nm : 'nothing'}${p.Mode === 'Random' ? ' at random' : ''}.`);
           continue;
@@ -720,17 +886,45 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       remember(all);
       return 'ok';
     }
-    case 'Scry': case 'Surveil': case 'Dig': case 'RearrangeTopOfLibrary': {
-      const raw = step.api === 'Scry' ? p.ScryNum : step.api === 'Surveil' ? p.Amount : step.api === 'Dig' ? p.DigNum : p.NumCards;
-      const n = amount(state, ctx, r, raw, 1);
+    case 'Dig': if (p.ChangeNum !== 'All') return peekStep(state, ctx, r, i, me);
+    {
+      const n = amount(state, ctx, r, p.DigNum, 1);
       const o = objects(state, r, i, 'You');
-      if (n == null || !o || o.players.length !== 1 || o.players[0] !== r.controller) return bad();
-      const mode = step.api === 'Scry' ? 'scry' : step.api === 'Surveil' ? 'surveil' : 'look';
-      openPeek(state, ctx, r, i, me, mode, n);
-      const verb = mode === 'scry' ? `scries ${n}` : mode === 'surveil' ? `surveils ${n}` : `looks at the top ${n}`;
-      log(state, ctx, r.controller, `${me.name} ${verb} (${r.sourceName}${mode === 'look' ? `: ${step.description}` : ''}).`);
-      return 'wait';
+      const dest = zoneOf(p.DestinationZone ?? 'Hand');
+      const dest2 = zoneOf(p.DestinationZone2 ?? 'Library');
+      if (n == null || !o || !dest || !dest2 || dest === 'stack' || dest2 === 'stack') return bad();
+      const valid = p.ChangeValid ?? 'Card';
+      const tops = o.players.map((pid) => player(state, pid).zones.library.slice(0, n));
+      const ms = tops.flat().map((x) => [x, matchCard(state.cards[x], valid, E)] as const);
+      if (ms.some(([, m]) => m === 'unknown')) return bad();
+      const hits = new Set(ms.filter(([, m]) => m).map(([x]) => x));
+      const moved: string[] = [];
+      o.players.forEach((pid, k) => {
+        const top = tops[k];
+        const pl = player(state, pid);
+        const reveal = p.Reveal === 'True';
+        const nm = names(state, ctx, top);
+        const into = top.filter((x) => hits.has(x));
+        const rest = top.filter((x) => !hits.has(x));
+        for (const iid of into) {
+          if (dest === 'library') moveCard(state, ctx, iid, 'library', { position: libraryIndex(state, ctx, r, p.LibraryPosition) });
+          else if (dest === 'battlefield') moveCard(state, ctx, iid, 'battlefield', { controller: r.controller });
+          else moveCard(state, ctx, iid, dest, { faceDown: dest === 'exile' && p.ExileFaceDown === 'True' });
+          moved.push(iid);
+        }
+        for (const iid of [...rest].reverse()) {
+          if (dest2 === 'library') moveCard(state, ctx, iid, 'library', { position: p.LibraryPosition2 != null && parseInt(p.LibraryPosition2, 10) >= 0 ? 'top' : 'bottom' });
+          else moveCard(state, ctx, iid, dest2);
+        }
+        const publicDest = (z: Zone) => z === 'graveyard' || z === 'battlefield' || (z === 'exile' && p.ExileFaceDown !== 'True');
+        const shown = reveal || (publicDest(dest) && (!rest.length || publicDest(dest2)));
+        if (!top.length) log(state, ctx, pid, `${pl.name}'s library is empty (${r.sourceName}).`);
+        else log(state, ctx, r.controller, `${r.sourceName}: ${reveal ? `${pl.name} reveals ${nm}; ` : ''}${into.length ? `${shown || publicDest(dest) ? names(state, ctx, into) : `${into.length} card${into.length === 1 ? '' : 's'}`} → ${dest === 'hand' ? `${pname(state, state.cards[into[0]]?.owner ?? pid)}'s hand` : dest}` : 'nothing taken'}${rest.length ? `; ${shown ? names(state, ctx, rest) : `${rest.length} card${rest.length === 1 ? '' : 's'}`} → ${dest2 === 'library' ? (p.LibraryPosition2 != null && parseInt(p.LibraryPosition2, 10) >= 0 ? 'top of library' : 'bottom of library') : dest2}` : ''}.`);
+      });
+      remember(moved);
+      return 'ok';
     }
+    case 'Scry': case 'Surveil': case 'RearrangeTopOfLibrary': return peekStep(state, ctx, r, i, me);
     case 'GainControl': {
       const o = objects(state, r, i, 'Self');
       const to = p.NewController ? defined(state, r, i, p.NewController)?.players[0] : r.controller;
@@ -753,7 +947,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const sacValid = p.SacValid ?? 'Card';
       if (p.Defined === 'Self' || sacValid === 'Self' || sacValid === 'Card.Self') {
         const c = r.sourceIid ? onBattlefield(state, r.sourceIid) : undefined;
-        if (c) { const nm = cardName(c, ctx.lookup); moveCard(state, ctx, c.iid, 'graveyard'); log(state, ctx, r.controller, `${pname(state, c.controller)} sacrifices ${nm}.`); remember([c.iid]); }
+        if (c) { const nm = cardName(c, ctx.lookup); moveCard(state, ctx, c.iid, 'graveyard', { cause: 'sacrifice' }); log(state, ctx, r.controller, `${pname(state, c.controller)} sacrifices ${nm}.`); remember([c.iid]); }
         return 'ok';
       }
       const own = ownTargets(r, i);
@@ -783,6 +977,14 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const n = amount(state, ctx, r, p.Amount, 1);
       if (n == null) return bad();
       if (n <= 0) return 'ok';
+      if (p.Produced === 'Any') {
+        const data: ColorData = { kind: 'color', n, cont: contAt(r, i + 1) };
+        state.pending.push({
+          id: randomId(ctx.rng), pid: r.controller, prompt: `${r.sourceName}: add ${n} mana of any one color`,
+          options: ['W', 'U', 'B', 'R', 'G'].map((c) => ({ value: c, label: `{${c}}` })), data: data as unknown as Record<string, unknown>,
+        });
+        return 'wait';
+      }
       const syms = (p.Produced ?? '').split(' ');
       for (let k = 0; k < n; k++) for (const s of syms) me.manaPool[s] = (me.manaPool[s] ?? 0) + 1;
       log(state, ctx, r.controller, `${me.name} adds ${Array(n).fill(syms.map((s) => `{${s}}`).join('')).join('')}.`);
@@ -822,7 +1024,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
 function counterItem(state: GameState, ctx: Ctx, item: StackItem, p: Record<string, string>, by: string, r?: Run) {
   if (item.iid && state.cards[item.iid]) {
     const nm = cardName(state.cards[item.iid], ctx.lookup);
-    if (r) r.lki[item.id] = lkiOf(state.cards[item.iid], ctx);
+    if (r) r.lki[item.id] = lkiOf(state.cards[item.iid], ctx, state);
     const dest = zoneOf(p.Destination) ?? 'graveyard';
     if (dest === 'library') moveCard(state, ctx, item.iid, 'library', { position: p.LibraryPosition === '-1' ? 'bottom' : 'top' });
     else moveCard(state, ctx, item.iid, dest === 'battlefield' || dest === 'stack' ? 'graveyard' : dest);
@@ -888,10 +1090,10 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
   if (left < total) log(state, ctx, item.controller, `${name}: ${total - left} target${total - left === 1 ? ' is' : 's are'} no longer legal.`);
   const lki: Record<string, Lki> = {};
   for (const ref of legal.flat()) {
-    if (ref.kind === 'card' && state.cards[ref.iid]) lki[ref.iid] = lkiOf(state.cards[ref.iid], ctx);
+    if (ref.kind === 'card' && state.cards[ref.iid]) lki[ref.iid] = lkiOf(state.cards[ref.iid], ctx, state);
     if (ref.kind === 'stack') {
       const it = state.stack.find((s) => s.id === ref.id);
-      if (it?.iid && state.cards[it.iid]) lki[ref.id] = lkiOf(state.cards[it.iid], ctx);
+      if (it?.iid && state.cards[it.iid]) lki[ref.id] = lkiOf(state.cards[it.iid], ctx, state);
       else if (it) lki[ref.id] = { power: 0, toughness: 0, mv: 0, controller: it.controller, owner: it.controller, name: it.text };
     }
   }
@@ -917,8 +1119,14 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   let ext = answerReplacementPending(state, ctx, pend, value);
   if (ext === undefined) ext = answerKeywordPending(state, ctx, pend, value);
   if (ext !== undefined) return ext;
-  const data = pend.data as unknown as PickData | UnlessData;
+  const data = pend.data as unknown as PickData | UnlessData | ColorData;
   const who = player(state, pid);
+  if (data.kind === 'color') {
+    who.manaPool[value] = (who.manaPool[value] ?? 0) + data.n;
+    log(state, ctx, pid, `${who.name} adds ${Array(data.n).fill(`{${value}}`).join('')}.`);
+    if (data.cont) runFrom(state, ctx, data.cont);
+    return null;
+  }
   if (data.kind === 'unless') {
     const item = state.stack.find((s) => s.id === data.stackId);
     if (item) {
@@ -942,10 +1150,10 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
     if (c) {
       const nm = cardName(c, ctx.lookup);
       if (data.action === 'discard') {
-        moveCard(state, ctx, value, 'graveyard');
+        moveCard(state, ctx, value, 'graveyard', { cause: 'discard' });
         log(state, ctx, pid, `${pname(state, c.owner)} discards ${nm}.`);
       } else if (data.action === 'sacrifice') {
-        moveCard(state, ctx, value, 'graveyard');
+        moveCard(state, ctx, value, 'graveyard', { cause: 'sacrifice' });
         log(state, ctx, pid, `${who.name} sacrifices ${nm}.`);
       } else {
         const p = data.params ?? {};
@@ -953,6 +1161,10 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
         if (data.dest === 'library') moveCard(state, ctx, value, 'library', { position: p.LibraryPosition === '-1' ? 'bottom' : 'top' });
         else if (data.dest === 'battlefield') moveCard(state, ctx, value, 'battlefield', { tapped: p.Tapped === 'True', controller: pid });
         else moveCard(state, ctx, value, data.dest ?? 'hand');
+        if (data.cont && Object.keys(p).some((k) => k.startsWith('Remember'))) {
+          data.cont.remembered = [...data.cont.remembered, value];
+          rememberOnCard(state, data.cont.item, data.cont.remembered);
+        }
         const hidden = (z: Zone) => z === 'hand' || z === 'library';
         log(state, ctx, pid, `${who.name} puts ${hidden(from) && hidden(data.dest ?? 'hand') ? 'a card' : nm} ${data.dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of their library' : 'on top of their library') : `into ${data.dest === 'battlefield' ? 'play' : `their ${data.dest}`}`}.`);
       }
@@ -974,12 +1186,13 @@ export function stateBasedActions(state: GameState, ctx: Ctx, deathtouched: stri
     for (const iid of state.battlefield) {
       const c = state.cards[iid];
       const f = faceOf(c, ctx.lookup);
-      if (isCreature(c, ctx.lookup)) {
-        const [, t] = effectivePT(c, ctx.lookup);
-        // Only when a printed positive toughness was reduced (0/0 bodies usually get their size from statics we don't model).
+      if (isCreature(c, ctx.lookup, state)) {
+        const [, t] = effectivePT(c, ctx.lookup, state);
+        // Only when a printed positive toughness was reduced, or static abilities define the toughness
+        // (other 0/0 bodies usually get their size from effects we don't model).
         const base = c.faceDown ? 2 : /^-?\d+$/.test(f.toughness ?? '') ? parseInt(f.toughness!, 10) : 0;
-        if (base > 0 && t <= 0) { dead.push([iid, 'has 0 toughness']); continue; }
-        if (hasKeyword(c, ctx.lookup, 'Indestructible')) continue;
+        if ((base > 0 || staticsDefineToughness(state, iid, ctx.lookup)) && t <= 0) { dead.push([iid, 'has 0 toughness']); continue; }
+        if (hasKeyword(c, ctx.lookup, 'Indestructible', state)) continue;
         if ((t > 0 && c.damage >= t) || (c.damage > 0 && deathtouched.includes(iid))) dead.push([iid, 'dies (lethal damage)']);
       } else if (f.types.includes('Planeswalker') && !c.faceDown && (c.counters.loyalty ?? 0) <= 0) {
         dead.push([iid, 'is put into the graveyard (0 loyalty)']);

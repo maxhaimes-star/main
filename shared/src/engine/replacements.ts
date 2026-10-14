@@ -18,7 +18,7 @@
  *  - counterAmount   (Event$ AddCounter -> ReplaceCounter, "that many plus one")
  */
 import { cardName, type Lookup } from '../game/rules.ts';
-import { type Ctx, log, moveCard, moveHooks, type MoveOpts, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
+import { type Ctx, emit, log, moveCard, moveHooks, type MoveOpts, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import { getScript, parseParams, SCRIPTS } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';
@@ -254,6 +254,18 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
   };
 }
 
+/** A token was just created on the battlefield: apply other permanents' "enters tapped" replacements (Spider-Woman). */
+export function tokenEntered(state: GameState, ctx: Ctx, inst: CardInstance) {
+  for (const { host, r } of hosted(state, 'Moved', inst.iid)) {
+    if (r.params.Destination !== 'Battlefield' || !r.params.ValidCard || inst.tapped) continue;
+    if (!validCard(inst, r.params.ValidCard, { controller: host.controller, sourceIid: host.iid, lookup: ctx.lookup }, { wasCast: false })) continue;
+    if (svarParams(r, r.params.ReplaceWith)?.api === 'Tap') {
+      inst.tapped = true;
+      log(state, ctx, null, `${cardName(inst, ctx.lookup)} enters tapped (${cardName(host, ctx.lookup)}).`);
+    }
+  }
+}
+
 function payBeforeEtbPending(state: GameState, ctx: Ctx, d: MoxData) {
   if (state.cards[d.iid]?.zone !== 'battlefield') return;
   const env: MatchEnv = { controller: d.pid, sourceIid: d.iid, lookup: ctx.lookup };
@@ -289,7 +301,7 @@ export function answerReplacementPending(state: GameState, ctx: Ctx, pend: Pendi
     const me = player(state, d.pid);
     if (value !== 'decline' && state.cards[value]?.zone === 'hand') {
       const nm = cardName(state.cards[value], ctx.lookup);
-      moveCard(state, ctx, value, 'graveyard');
+      moveCard(state, ctx, value, 'graveyard', { cause: 'discard' });
       log(state, ctx, d.pid, `${me.name} discards ${nm} — ${d.name} stays on the battlefield.`);
     } else {
       if (state.cards[d.iid]?.zone === 'battlefield') moveCard(state, ctx, d.iid, 'graveyard');
@@ -377,6 +389,8 @@ export function replaceDraws(state: GameState, ctx: Ctx, pid: string, n: number)
       const inst = newInstance(state, ctx.rng, host.controller, 'battlefield', undefined, token);
       inst.summoningSick = true;
       state.battlefield.push(inst.iid);
+      tokenEntered(state, ctx, inst);
+      emit(state, { t: 'zone', iid: inst.iid, from: 'none', to: 'battlefield', snap: JSON.parse(JSON.stringify(inst)) as CardInstance });
     }
     log(state, ctx, host.controller, `${cardName(host, ctx.lookup)}: instead of ${pname(state, pid)} drawing ${n} card${n === 1 ? '' : 's'}, ${pname(state, host.controller)} creates ${n} ${token.name} token${n === 1 ? '' : 's'}.`);
     return 0;

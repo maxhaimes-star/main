@@ -16,10 +16,11 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
   const damage: Record<string, number> = {};
   const deathtouched = new Set<string>();
   const lines: string[] = [];
+  const hits: { source: string; target: string; amount: number }[] = [];
   const alive = (id: string) => {
     const c = cards[id];
-    const [, t] = effectivePT(c, lookup);
-    if (hasKeyword(c, lookup, 'Indestructible')) return t > 0;
+    const [, t] = effectivePT(c, lookup, state);
+    if (hasKeyword(c, lookup, 'Indestructible', state)) return t > 0;
     const dmg = c.damage + (damage[id] ?? 0);
     return t > 0 && dmg < t && !deathtouched.has(id);
   };
@@ -28,9 +29,10 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
 
   const deal = (src: string, target: string, amount: number) => {
     if (amount <= 0) return;
+    hits.push({ source: src, target, amount });
     const s = cards[src];
     const name = cardName(s, lookup);
-    const infect = hasKeyword(s, lookup, 'Infect');
+    const infect = hasKeyword(s, lookup, 'Infect', state);
     if (cards[target]) {
       if (infect && !isPW(target)) {
         damage[target] = damage[target] ?? 0;
@@ -40,7 +42,7 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
         damage[target] = (damage[target] ?? 0) + amount;
         lines.push(`${name} deals ${amount} to ${cardName(cards[target], lookup)}`);
       }
-      if (hasKeyword(s, lookup, 'Deathtouch') && !isPW(target)) deathtouched.add(target);
+      if (hasKeyword(s, lookup, 'Deathtouch', state) && !isPW(target)) deathtouched.add(target);
     } else {
       const pl = state.players.find((p) => p.pid === target);
       const prevented = damagePrevented(state, lookup, target);
@@ -53,15 +55,15 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
         lines.push(`${name} deals ${amount} to ${pl?.name ?? 'player'}`);
       }
     }
-    if (hasKeyword(s, lookup, 'Lifelink')) addLife(s.controller, amount);
+    if (hasKeyword(s, lookup, 'Lifelink', state)) addLife(s.controller, amount);
   };
 
   const blockersOf = (a: string) => state.battlefield.filter((id) => cards[id].blocking === a);
 
   for (const phase of ['first', 'regular'] as const) {
     const strikes = (id: string) => {
-      const fs = hasKeyword(cards[id], lookup, 'First strike');
-      const ds = hasKeyword(cards[id], lookup, 'Double strike');
+      const fs = hasKeyword(cards[id], lookup, 'First strike', state);
+      const ds = hasKeyword(cards[id], lookup, 'Double strike', state);
       return phase === 'first' ? fs || ds : !fs || ds;
     };
     // Collect all damage for this phase first (simultaneous), then apply.
@@ -70,29 +72,29 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
       const ac = cards[a];
       const target = ac.attacking!;
       if (alive(a) && strikes(a)) {
-        const [power] = effectivePT(ac, lookup);
+        const [power] = effectivePT(ac, lookup, state);
         if (blockers.length === 0) {
           deal(a, target, power);
         } else {
           let left = power;
-          const dt = hasKeyword(ac, lookup, 'Deathtouch');
+          const dt = hasKeyword(ac, lookup, 'Deathtouch', state);
           const liveBlockers = blockers.filter(alive);
           liveBlockers.forEach((b, i) => {
             const bc = cards[b];
-            const [, bt] = effectivePT(bc, lookup);
+            const [, bt] = effectivePT(bc, lookup, state);
             const already = bc.damage + (damage[b] ?? 0);
             const lethal = dt ? (already > 0 && deathtouched.has(b) ? 0 : 1) : Math.max(0, bt - already);
             const isLast = i === liveBlockers.length - 1;
-            const trample = hasKeyword(ac, lookup, 'Trample');
+            const trample = hasKeyword(ac, lookup, 'Trample', state);
             const assign = isLast && !trample ? left : Math.min(left, lethal);
             deal(a, b, assign);
             left -= assign;
           });
-          if (left > 0 && hasKeyword(ac, lookup, 'Trample')) deal(a, target, left);
+          if (left > 0 && hasKeyword(ac, lookup, 'Trample', state)) deal(a, target, left);
         }
       }
       for (const b of blockers) {
-        if (alive(b) && strikes(b)) deal(b, a, effectivePT(cards[b], lookup)[0]);
+        if (alive(b) && strikes(b)) deal(b, a, effectivePT(cards[b], lookup, state)[0]);
       }
     }
   }
@@ -101,11 +103,11 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
     const c = cards[id];
     if (!c) return false;
     if (isPW(id)) return (c.counters['loyalty'] ?? 0) - damage[id] <= 0;
-    if (hasKeyword(c, lookup, 'Indestructible')) return false;
-    const [, t] = effectivePT(c, lookup);
+    if (hasKeyword(c, lookup, 'Indestructible', state)) return false;
+    const [, t] = effectivePT(c, lookup, state);
     return c.damage + damage[id] >= t || deathtouched.has(id);
   });
   for (const [pid, n] of Object.entries(poison)) lifeChange[`poison:${pid}`] = n;
   if (!lines.length) lines.push('No combat damage.');
-  return { lifeChange, damage, dies, lines, confirmed: [] };
+  return { lifeChange, damage, dies, lines, confirmed: [], hits };
 }

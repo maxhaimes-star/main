@@ -195,8 +195,16 @@ describe('replacements: counter / untap / damage / draw', () => {
     const hand = P(g, 'b').zones.hand.length;
     act(g, ctx, 'a', { t: 'nextTurn' });
     expect(g.activePlayer).toBe('b');
-    expect(P(g, 'b').zones.hand.length).toBe(hand);
+    // Its upkeep trigger ("sacrifice unless you discard") goes on the stack first: discard to keep it.
+    for (let k = 0; k < 20 && ['untap', 'upkeep'].includes(g.step); k++) {
+      const q = g.pending[0];
+      if (q) { act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options.find((o) => o.value !== 'none' && !/sacrifice|don't/i.test(o.label))?.value ?? q.options[0].value }); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(['untap', 'upkeep', 'draw']).not.toContain(g.step);
+    expect(P(g, 'b').zones.hand.length).toBeLessThanOrEqual(hand); // nothing drawn (maybe one discarded)
     expect(g.log.some((l) => /skips their draw step/.test(l.text))).toBe(true);
+    expect(g.log.some((l) => /Bob draws for the turn/.test(l.text))).toBe(false);
   });
 
   it('Hullbreacher: opponent draws from effects become Treasures', () => {
