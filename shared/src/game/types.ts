@@ -141,6 +141,8 @@ export interface GameState {
   triggerQueue?: QueuedTrigger[];
   /** Stage 2, engine-internal: delayed triggers ("at the beginning of the next end step ..."). */
   delayedTriggers?: DelayedTrigger[];
+  /** Stage 2, engine-internal: objects a permanent's abilities remembered (source iid -> iids). */
+  remembered?: Record<string, string[]>;
   /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
   turnStats?: { cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number> };
 }

@@ -120,7 +120,11 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     }
     case 'Player': return { cards: [], players: live };
     case 'Opponent': case 'Player.Opponent': return { cards: [], players: live.filter((p) => p !== r.controller) };
-    case 'Remembered': case 'RememberedLKI': return { cards: [...r.remembered], players: [] };
+    case 'Remembered': case 'RememberedLKI': {
+      // The run's own memory, else what the permanent remembered earlier (e.g. Journey to Nowhere's exiled card).
+      const mem = r.remembered.length ? r.remembered : (r.sourceIid && r.item.kind !== 'spell' ? state.remembered?.[r.sourceIid] ?? [] : []);
+      return { cards: [...mem], players: [] };
+    }
     case 'Enchanted': case 'Equipped': return { cards: src?.attachedTo ? [src.attachedTo] : [], players: [] };
   }
   // Stage 2: objects the trigger saw.
@@ -382,6 +386,13 @@ function peekStep(state: GameState, ctx: Ctx, r: Run, i: number, me: GamePlayer)
   return 'wait';
 }
 
+/** Stage 2: a permanent's abilities remember objects across resolutions (Journey to Nowhere, Tidehollow Sculler ...). */
+function rememberOnCard(state: GameState, item: StackItem, iids: string[]) {
+  const src = item.sourceIid ?? item.iid;
+  if (!src || item.kind === 'spell') return;
+  (state.remembered ??= {})[src] = [...iids];
+}
+
 /** Create a token on the battlefield (Stage 2: emits an "enters the battlefield" event). */
 export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, token: TokenData, tapped: boolean, cardId?: string): CardInstance {
   const inst = newInstance(state, ctx.rng, owner, 'battlefield', cardId, token);
@@ -442,6 +453,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     if (Object.keys(p).some((k) => k.startsWith('Remember'))) {
       for (const iid of iids) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx);
       r.remembered = [...iids];
+      rememberOnCard(state, r.item, iids);
     }
   };
   const bad = () => { manual(state, ctx, r, step); return 'ok' as const; };
@@ -449,7 +461,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
 
   switch (step.api) {
     case 'Cleanup': {
-      if (p.ClearRemembered) r.remembered = [];
+      if (p.ClearRemembered) {
+        r.remembered = [];
+        const src = r.item.sourceIid ?? r.item.iid;
+        if (src && state.remembered) delete state.remembered[src];
+      }
       return 'ok';
     }
     case 'DealDamage': {
@@ -541,21 +557,27 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const origins = (p.Origin ?? '').split(',').map((z) => zoneOf(z)).filter((z): z is Zone => !!z);
       let cards: string[] | undefined;
       const own = ownTargets(r, i);
-      if (own) cards = split(state, own).cards;
+      const targetPlayers = own ? split(state, own) : undefined;
+      // Targets a player and picks a card from their zone (Tidehollow Sculler, Mesmeric Fiend, Vendilion Clique ...).
+      const pickFromPlayer = !!targetPlayers && !targetPlayers.cards.length && (!!p.ChangeType || !!p.Hidden || !!p.DefinedPlayer);
+      if (own && pickFromPlayer && !targetPlayers!.players.length) { log(state, ctx, r.controller, `${r.sourceName}: no target player.`); return 'ok'; }
+      if (own && !pickFromPlayer) cards = targetPlayers!.cards;
       else if (p.Defined) {
         const d = defined(state, r, i, p.Defined);
         if (!d) return bad();
         cards = d.cards;
-      } else if (!p.ChangeType && !p.Hidden && !p.ChangeNum && origins.length && origins.every((z) => z === 'graveyard' || z === 'battlefield' || z === 'exile')) {
+      } else if (!own && !p.ChangeType && !p.Hidden && !p.ChangeNum && origins.length && origins.every((z) => z === 'graveyard' || z === 'battlefield' || z === 'exile')) {
         // Forge: a known-origin ChangeZone without targets / Defined$ moves the card itself (e.g. Bloodghast, Kytheon).
         cards = r.sourceIid && state.cards[r.sourceIid] ? [r.sourceIid] : [];
       }
       if (!cards) {
         // Hidden choice: search the library, or pick from hand / graveyard / battlefield.
-        const chooserPid = p.DefinedPlayer ? defined(state, r, i, p.DefinedPlayer)?.players[0] : r.controller;
-        if (!chooserPid) return bad();
-        const chooser = player(state, chooserPid);
+        const ownerPid = p.DefinedPlayer ? defined(state, r, i, p.DefinedPlayer)?.players[0] : pickFromPlayer ? targetPlayers!.players[0] : r.controller;
+        if (!ownerPid) return bad();
+        const chooser = player(state, ownerPid);
+        const chooserPid = p.Chooser === 'You' ? r.controller : ownerPid;
         if (origins.includes('library')) {
+          if (chooserPid !== ownerPid) return bad();
           openPeek(state, ctx, r, i, chooser, 'search', 0);
           log(state, ctx, chooserPid, `${chooser.name} searches their library (${r.sourceName}: ${step.description}) — choose the card.`);
           return 'wait';
@@ -572,9 +594,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const n = p.ChangeNum === 'All' ? cands.length : amount(state, ctx, r, p.ChangeNum, 1);
         if (n == null) return bad();
         if (!cands.length) { log(state, ctx, chooserPid, `${r.sourceName}: no card to choose.`); return 'ok'; }
-        const where = dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of your library' : 'on top of your library') : `to ${dest === 'battlefield' ? 'the battlefield' : `your ${dest}`}`;
+        const yours = ownerPid === chooserPid ? 'your' : `${chooser.name}'s`;
+        if (origin === 'hand' && ownerPid !== chooserPid) log(state, ctx, r.controller, `${chooser.name} reveals their hand to ${pname(state, chooserPid)}.`);
+        const where = dest === 'library' ? (p.LibraryPosition === '-1' ? `on the bottom of ${yours} library` : `on top of ${yours} library`) : `to ${dest === 'battlefield' ? 'the battlefield' : dest === 'exile' ? 'exile' : `${yours} ${dest}`}`;
         const created = startPicks(state, ctx, [{
-          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && origin !== 'hand',
+          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True'),
           dest, params: p, label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
         return created ? 'wait' : 'ok';
@@ -1119,6 +1143,10 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
         if (data.dest === 'library') moveCard(state, ctx, value, 'library', { position: p.LibraryPosition === '-1' ? 'bottom' : 'top' });
         else if (data.dest === 'battlefield') moveCard(state, ctx, value, 'battlefield', { tapped: p.Tapped === 'True', controller: pid });
         else moveCard(state, ctx, value, data.dest ?? 'hand');
+        if (data.cont && Object.keys(p).some((k) => k.startsWith('Remember'))) {
+          data.cont.remembered = [...data.cont.remembered, value];
+          rememberOnCard(state, data.cont.item, data.cont.remembered);
+        }
         const hidden = (z: Zone) => z === 'hand' || z === 'library';
         log(state, ctx, pid, `${who.name} puts ${hidden(from) && hidden(data.dest ?? 'hand') ? 'a card' : nm} ${data.dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of their library' : 'on top of their library') : `into ${data.dest === 'battlefield' ? 'play' : `their ${data.dest}`}`}.`);
       }

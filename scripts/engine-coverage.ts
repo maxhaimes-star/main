@@ -3,7 +3,8 @@
  * Usage: npx tsx scripts/engine-coverage.ts
  */
 import { CUBE } from '../shared/src/cube.ts';
-import { activatedAbilitiesOf, flatten, getScript, isAutomatable, spellAbility, type ParsedAbility } from '../shared/src/engine/index.ts';
+import { activatedAbilitiesOf, flatten, getScript, isAutomatable, spellAbility, SUPPORTED_MODES, triggerSupport, type ParsedAbility } from '../shared/src/engine/index.ts';
+import { triggersOf } from '../shared/src/engine/script.ts';
 
 const count = (ab: ParsedAbility) => {
   let n = 0;
@@ -48,3 +49,36 @@ console.log(`  not automatable:       ${none} (${Math.round((100 * none) / withC
 console.log(`Abilities (spells + activated): ${abFull}/${abTotal} fully automatable`);
 console.log('Top unsupported APIs (abilities affected):');
 for (const [api, n] of [...apis].sort((a, b) => b[1] - a[1]).slice(0, 20)) console.log(`  ${api.padEnd(22)} ${n}`);
+
+// ------------------------------------------------------------------ Stage 2: triggered abilities
+let trTotal = 0, trDetect = 0, trFull = 0, trCards = 0, trCardsFull = 0;
+const modes = new Map<string, { n: number; ok: boolean }>();
+const reasons = new Map<string, number>();
+for (const card of CUBE.cards) {
+  const faces = getScript(card.id);
+  if (!faces) continue;
+  let any = false, all = true;
+  faces.forEach((f, face) => f.triggers.forEach((_l, i) => {
+    const t = triggersOf(card.id, face)[i];
+    any = true;
+    trTotal++;
+    const m = modes.get(t.params.Mode) ?? { n: 0, ok: SUPPORTED_MODES.has(t.params.Mode) };
+    m.n++;
+    modes.set(t.params.Mode, m);
+    const s = triggerSupport(card.id, face, i);
+    if (s.detect) trDetect++;
+    if (s.detect && s.chain) trFull++;
+    else all = false;
+    const why = s.reason ?? '?';
+    if (!(s.detect && s.chain)) reasons.set(why, (reasons.get(why) ?? 0) + 1);
+  }));
+  if (any) { trCards++; if (all) trCardsFull++; }
+}
+console.log('');
+console.log(`Triggered abilities (T: lines): ${trTotal} on ${trCards} cards`);
+console.log(`  detected automatically:              ${trDetect} (${Math.round((100 * trDetect) / trTotal)}%)`);
+console.log(`  detected + Execute chain automatable: ${trFull} (${Math.round((100 * trFull) / trTotal)}%)`);
+console.log(`  cards whose triggers are all fully automatic: ${trCardsFull}/${trCards}`);
+console.log(`Trigger modes (supported ✓): ${[...modes].sort((a, b) => b[1].n - a[1].n).map(([k, v]) => `${k}${v.ok ? '✓' : ''}:${v.n}`).join('  ')}`);
+console.log('Why triggers are not fully automatic:');
+for (const [r, n] of [...reasons].sort((a, b) => b[1] - a[1]).slice(0, 20)) console.log(`  ${r.padEnd(32)} ${n}`);

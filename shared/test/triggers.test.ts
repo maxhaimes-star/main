@@ -234,6 +234,40 @@ describe('other trigger events', () => {
   });
 });
 
+describe('leaves-the-battlefield + remembered objects', () => {
+  it('Journey to Nowhere exiles on ETB and returns the card when it leaves', () => {
+    const { g, ctx } = setup(['journey_to_nowhere'], ['goblin_guide']);
+    const gg = put(g, ctx, 'b', 'goblin_guide');
+    const jn = find(g, 'a', 'journey_to_nowhere');
+    act(g, ctx, 'a', { t: 'move', iid: jn, to: 'battlefield' });
+    act(g, ctx, 'a', { t: 'chooseTargets', id: g.pending[0].id, targets: [[cardRef(gg)]] });
+    resolveAll(g, ctx);
+    expect(g.cards[gg].zone).toBe('exile');
+    act(g, ctx, 'a', { t: 'move', iid: jn, to: 'graveyard' });
+    resolveAll(g, ctx);
+    expect(g.cards[gg].zone).toBe('battlefield');
+    expect(g.cards[gg].controller).toBe('b');
+  });
+
+  it('Tidehollow Sculler: you pick a nonland card from the target opponent\'s hand; it comes back when Sculler leaves', () => {
+    const { g, ctx } = setup(['tidehollow_sculler'], ['lightning_bolt']);
+    const bolt = tutor(g, ctx, 'b', 'lightning_bolt');
+    const ts = find(g, 'a', 'tidehollow_sculler');
+    act(g, ctx, 'a', { t: 'move', iid: ts, to: 'battlefield' });
+    act(g, ctx, 'a', { t: 'chooseTargets', id: g.pending[0].id, targets: [[player('b')]] });
+    resolveAll(g, ctx);
+    const pick = g.pending[0];
+    expect(pick.pid).toBe('a');
+    expect(pick.options.map((o) => o.value)).toEqual([bolt]); // lands can't be chosen
+    expect(viewFor(g, 'b').pending[0].options).toEqual([]);
+    act(g, ctx, 'a', { t: 'choose', id: pick.id, value: bolt });
+    expect(g.cards[bolt].zone).toBe('exile');
+    act(g, ctx, 'a', { t: 'move', iid: ts, to: 'graveyard' });
+    resolveAll(g, ctx);
+    expect(g.cards[bolt].zone).toBe('hand');
+  });
+});
+
 describe('optional, delayed and ordering', () => {
   it('"may" with a target: Eternal Witness — decline, then accept', () => {
     const { g, ctx } = setup(['eternal_witness', 'lightning_bolt']);

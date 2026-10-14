@@ -56,8 +56,11 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
   const unknown = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
   const chain = triggerChain(cardId, face, p.Execute);
-  const auto = !!chain && !(chain.kind === 'AB' && chain.params.Cost) && isAutomatable(chain).ok;
-  return unknown ? { detect: false, chain: auto, reason: `param ${unknown}` } : { detect: true, chain: auto };
+  const cost = !!chain && chain.kind === 'AB' && !!chain.params.Cost;
+  const un = chain ? isAutomatable(chain).unsupported : ['no chain'];
+  const auto = !!chain && !cost && un.length === 0;
+  if (unknown) return { detect: false, chain: auto, reason: `param ${unknown}` };
+  return auto ? { detect: true, chain: true } : { detect: true, chain: false, reason: cost ? 'optional cost (AB$ Cost$)' : `effect ${un[0].split(' ')[0]}` };
 }
 
 function triggerChain(cardId: string, face: number, svar: string | undefined): ParsedAbility | undefined {
@@ -259,6 +262,15 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
   return null;
 }
 
+/** Static$ True state-maintenance triggers: only "forget what this card remembered" is applied (immediately). */
+function staticCleanup(state: GameState, ctx: Ctx, host: Host, p: Record<string, string>, ev: GameEvent, env: MatchEnv) {
+  if (!SUPPORTED_MODES.has(p.Mode) || !host.c.cardId || !hostZoneOk(host, p, ev)) return;
+  const chain = triggerChain(host.c.cardId, host.face, p.Execute);
+  if (chain?.api !== 'Cleanup' || !chain.params.ClearRemembered) return;
+  const hit = matchEvent(state, ctx, host, p, ev, env);
+  if (hit && hit !== 'unknown' && state.remembered) delete state.remembered[host.c.iid];
+}
+
 /** "Once"/"All" modes trigger once per batch (per target / per source for the damage ones). */
 function onceKey(mode: string, hit: TriggerContext): string | null {
   switch (mode) {
@@ -355,7 +367,8 @@ function detect(state: GameState, ctx: Ctx) {
         if (!c.cardId) continue;
         for (const t of triggersOf(c.cardId, host.face)) {
           const p = t.params;
-          if (p.Static === 'True' || !SUPPORTED_MODES.has(p.Mode)) continue;
+          if (p.Static === 'True') { staticCleanup(state, ctx, host, p, ev, env); continue; }
+          if (!SUPPORTED_MODES.has(p.Mode)) continue;
           if (!hostZoneOk(host, p, ev)) continue;
           const hit = matchEvent(state, ctx, host, p, ev, env);
           if (!hit) continue;
