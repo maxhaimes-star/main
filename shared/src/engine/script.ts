@@ -3,7 +3,7 @@
  * and "can the engine run this" checks.
  */
 import data from '../../data/scripts.json' with { type: 'json' };
-import type { ForgeFace, ParsedAbility, ScriptData, TargetSpec } from './types.ts';
+import type { AutoInfo, ForgeFace, ParsedAbility, ScriptData, TargetSpec } from './types.ts';
 
 export const SCRIPTS = data as unknown as ScriptData;
 
@@ -81,6 +81,41 @@ export function abilityAt(cardId: string, face: number, index: number): ParsedAb
   }
   cache.set(key, ab ?? null);
   return ab;
+}
+
+/** Stage 2: the chain of a triggered ability (Execute$ SVar of a T: line, or a synthesized line). */
+export function triggerChain(cardId: string, face: number, svar: string | undefined, line: string | undefined): ParsedAbility | undefined {
+  const key = `${cardId}|${face}|t|${svar ?? ''}|${line ?? ''}`;
+  if (cache.has(key)) return cache.get(key) ?? undefined;
+  const f = getScript(cardId)?.[face];
+  const svars = f?.svars ?? {};
+  const src = line ?? (svar ? svars[svar] : undefined);
+  const ab = src ? parseAbility(src, svars, f?.name ?? 'It') : undefined;
+  cache.set(key, ab ?? null);
+  return ab;
+}
+
+/** The ability chain an AutoInfo refers to (spell / activated / triggered). */
+export function chainOf(auto: AutoInfo): ParsedAbility | undefined {
+  if (auto.source === 'trigger') return triggerChain(auto.cardId, auto.face, auto.svar, auto.line);
+  return abilityAt(auto.cardId, auto.face, auto.index);
+}
+
+/** Stage 2: the T: lines of a face, parsed into params. */
+export function triggersOf(cardId: string, face: number): { index: number; params: Record<string, string> }[] {
+  const key = `${cardId}|${face}`;
+  let out = trigCache.get(key);
+  if (!out) {
+    out = (getScript(cardId)?.[face]?.triggers ?? []).map((line, index) => ({ index, params: parseParams(line).params }));
+    trigCache.set(key, out);
+  }
+  return out;
+}
+const trigCache = new Map<string, { index: number; params: Record<string, string> }[]>();
+
+/** Human text with CARDNAME replaced. */
+export function describe(text: string, cardName: string): string {
+  return nameText(text, cardName);
 }
 
 /** Auras: "K:Enchant:<valid>[:<description>]" -> an equivalent "SP$ Attach" line. */
@@ -186,6 +221,13 @@ function specFor(step: ParsedAbility, index: number): TargetSpec {
   return spec;
 }
 
+/** Forge Phase$ names -> steps. */
+export const PHASES: Record<string, import('../game/types.ts').Step> = {
+  Upkeep: 'upkeep', Draw: 'draw', Main1: 'main1', 'Main 1': 'main1', BeginCombat: 'beginCombat', 'Beginning of Combat': 'beginCombat',
+  'Declare Attackers': 'attackers', 'Declare Blockers': 'blockers', 'Combat Damage': 'damage', EndCombat: 'endCombat', 'End Combat': 'endCombat',
+  Main2: 'main2', 'Main 2': 'main2', 'End of Turn': 'end', End: 'end', Cleanup: 'cleanup',
+};
+
 export function targetSpecs(ab: ParsedAbility, modes?: string[]): TargetSpec[] {
   const out: TargetSpec[] = [];
   flatten(ab, modes).forEach((step, i) => { if (step.params.ValidTgts) out.push(specFor(step, i)); });
@@ -205,11 +247,17 @@ export const SUPPORTED_APIS = new Set([
   'GainLife', 'LoseLife', 'SetLife', 'Counter', 'Pump', 'PumpAll', 'Tap', 'Untap', 'TapAll', 'UntapAll', 'Discard', 'Mill',
   'Scry', 'Surveil', 'Dig', 'RearrangeTopOfLibrary', 'GainControl', 'Sacrifice', 'SacrificeAll', 'Attach', 'Mana', 'Charm',
   'Cleanup', 'Shuffle', 'BecomeMonarch', 'TakeInitiative', 'RevealHand',
+  // Stage 2
+  'Investigate', 'DelayedTrigger', 'ImmediateTrigger', 'CopyPermanent',
 ]);
 
 export const SUPPORTED_DEFINED = new Set([
   'You', 'Self', 'Parent', 'Targeted', 'TargetedCard', 'TargetedController', 'TargetedOwner', 'TargetedPlayer', 'Player', 'Opponent',
   'ParentTarget', 'Remembered', 'RememberedLKI', 'Enchanted', 'Equipped', 'TargetedAndYou', 'Player.Opponent',
+  // Stage 2: objects a trigger saw
+  'TriggeredCard', 'TriggeredCardLKICopy', 'TriggeredNewCardLKICopy', 'TriggeredCardController', 'TriggeredCardOwner',
+  'TriggeredPlayer', 'TriggeredActivator', 'TriggeredTarget', 'TriggeredDefendingPlayer', 'TriggeredSourceController',
+  'TriggeredAttackingPlayer', 'TriggeredSource', 'DelayTriggerRemembered', 'DelayTriggerRememberedLKI',
 ]);
 
 const AMOUNT_PARAMS = ['NumDmg', 'NumCards', 'LifeAmount', 'TokenAmount', 'CounterNum', 'NumAtt', 'NumDef', 'ScryNum', 'DigNum', 'Amount'];
@@ -219,7 +267,8 @@ export function supportedVar(v: string | undefined): boolean {
   if (!v) return false;
   return /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v)
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
-    || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v);
+    || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
+    || /^Count\$Valid [A-Za-z.+,!]+$/.test(v);
 }
 
 export function amountSupported(raw: string | undefined, svars: Record<string, string> | undefined): boolean {
@@ -245,10 +294,23 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   }
   switch (api) {
     case 'Discard': if (p.Mode && !['Random', 'TgtChoose', 'RevealYouChoose', 'Hand'].includes(p.Mode)) return `Discard (Mode$ ${p.Mode})`; break;
-    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
+    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any') return 'Mana (choice)'; break;
+    case 'DelayedTrigger':
+      if (step.kind !== 'DB' || p.Mode !== 'Phase' || !PHASES[p.Phase ?? ''] || !p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
+      if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
+      break;
+    case 'ImmediateTrigger': if (step.kind !== 'DB' || !p.Execute || !step.svars?.[p.Execute] || p.TriggerAmount) return 'ImmediateTrigger'; break;
+    case 'CopyPermanent': {
+      const extra = Object.keys(p).filter((k) => !['Defined', 'ValidTgts', 'TgtPrompt', 'AddKeywords', 'AtEOT', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'TargetMin', 'TargetMax', 'AILogic'].includes(k));
+      if (extra.length) return `CopyPermanent (${extra[0]})`;
+      if (p.AtEOT && !['Sacrifice', 'Exile'].includes(p.AtEOT)) return 'CopyPermanent (AtEOT)';
+      break;
+    }
+    case 'Investigate': if (p.Num && !amountSupported(p.Num, step.svars)) return 'Investigate'; break;
     case 'Tap': case 'Untap': if (p.UntapType || p.TapType) return `${api} (choice)`; break;
     case 'Counter': if (p.UnlessCost && !/^[\dWUBRGCX ]+$/.test(p.UnlessCost)) return 'Counter (UnlessCost)'; break;
-    case 'Token': if (!p.TokenScript || p.TokenScript.split(',').some((t) => !SCRIPTS.tokens[t.trim()])) return 'Token (unknown token)'; break;
+    case 'Token': if (p.AtEOT && !['Sacrifice', 'Exile', 'ExileCombat'].includes(p.AtEOT)) return 'Token (AtEOT)';
+      if (!p.TokenScript || p.TokenScript.split(',').some((t) => !SCRIPTS.tokens[t.trim()])) return 'Token (unknown token)'; break;
     case 'ChangeZone': {
       if (p.Destination && !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination)) return `ChangeZone (to ${p.Destination})`;
       break;

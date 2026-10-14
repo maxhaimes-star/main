@@ -15,6 +15,8 @@ export interface MatchEnv {
   lookup: Lookup;
   /** Resolve a variable like "X" to a number (undefined = unknown). */
   num?: (name: string) => number | undefined;
+  /** Stage 2: what the source is attached to ('' = nothing), for EquippedBy / EnchantedBy / AttachedBy. */
+  attachedTo?: string;
 }
 
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -82,7 +84,8 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'YouOwn': return c.owner === env.controller;
     case 'OppOwn': case 'YouDontOwn': return c.owner !== env.controller;
     case 'Other': case 'StrictlyOther': return c.iid !== env.sourceIid;
-    case 'Self': return c.iid === env.sourceIid;
+    case 'Self': case 'StrictlySelf': return c.iid === env.sourceIid;
+    case 'EquippedBy': case 'EnchantedBy': case 'AttachedBy': return env.attachedTo === undefined ? 'unknown' : c.iid === env.attachedTo;
     case 'tapped': return c.tapped;
     case 'untapped': return !c.tapped;
     case 'attacking': return !!c.attacking;

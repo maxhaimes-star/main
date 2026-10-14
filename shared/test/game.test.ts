@@ -195,6 +195,7 @@ describe('combat', () => {
     const thalia = put('a', 'thalia_guardian_of_thraben'); // 2/1 first strike
     const gg = put('a', 'goblin_guide'); // 2/2 haste
     const beast = put('b', 'questing_beast'); // 4/4 vigilance deathtouch haste
+    act(g, ctx, 'a', { t: 'setAutoTriggers', on: false }); // this test is about combat itself (Goblin Guide's attack trigger is tested in triggers.test.ts)
     act(g, ctx, 'a', { t: 'pass' }); // to attackers
     expect(g.step).toBe('attackers');
     act(g, ctx, 'a', { t: 'declareAttacker', iid: thalia, target: 'b' });

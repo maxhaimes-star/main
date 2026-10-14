@@ -8,6 +8,8 @@
  * - isAutomatable(ability)                  { ok, unsupported[] }
  * - targetSpecs(ability, modes?)            targets needed, in order (pass Charm modes to get their targets)
  * - isValidTarget(state, spec, ref, ...)    legality of one choice (works on GameView too)
+ * - processTriggers(state, ctx)             Stage 2: put triggered abilities from recorded events on the stack
+ * - triggerSupport(cardId, face, index)     Stage 2: is a T: line detected / its chain automatable
  */
 import type { Rng } from '../draft.ts';
 import type { Lookup } from '../game/rules.ts';
@@ -15,5 +17,6 @@ import type { Lookup } from '../game/rules.ts';
 export * from './types.ts';
 export { getScript, spellAbility, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility } from './script.ts';
 export { isValidTarget, matchCard, matchPlayer } from './targets.ts';
+export { processTriggers, queuedTriggers, triggerSupport, SUPPORTED_MODES, MAX_TRIGGERS_PER_ACTION } from './triggers.ts';
 
 export interface EngineCtx { rng: Rng; lookup: Lookup; now: number }

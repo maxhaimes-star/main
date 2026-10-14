@@ -145,6 +145,8 @@ export interface QueuedTrigger {
   /** Set once the controller said yes (optional) / chose targets. */
   accepted?: boolean;
   targetsChosen?: boolean;
+  /** Not automatable (e.g. an optional cost): goes on the stack without `auto`, resolved by hand. */
+  manual?: boolean;
 }
 
 /** Stage 2: a delayed trigger ("at the beginning of the next end step, return it"). Engine-internal. */
