@@ -10,6 +10,9 @@
  * - isValidTarget(state, spec, ref, ...)    legality of one choice (works on GameView too)
  * - processTriggers(state, ctx)             Stage 2: put triggered abilities from recorded events on the stack
  * - triggerSupport(cardId, face, index)     Stage 2: is a T: line detected / its chain automatable
+ * - activeStatics(state, lookup)            static abilities in effect, for an "Active effects" panel
+ * - effectiveCost(state, iid, face, lookup) mana cost after cost increases / reductions (Thalia ...)
+ * - attackRestriction / blockRestriction / castRestriction   why a static forbids an action (or null)
  */
 import type { Rng } from '../draft.ts';
 import type { Lookup } from '../game/rules.ts';
@@ -18,5 +21,9 @@ export * from './types.ts';
 export { getScript, spellAbility, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility } from './script.ts';
 export { isValidTarget, matchCard, matchPlayer } from './targets.ts';
 export { processTriggers, queuedTriggers, triggerSupport, SUPPORTED_MODES, MAX_TRIGGERS_PER_ACTION } from './triggers.ts';
+export {
+  activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,
+  parseStatic, staticGaps, staticMods, staticSupport, type ActiveStatic, type CardMods, type StaticSupport, type StaticsState,
+} from './statics.ts';
 
 export interface EngineCtx { rng: Rng; lookup: Lookup; now: number }

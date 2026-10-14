@@ -5,6 +5,7 @@
 import { CUBE } from '../shared/src/cube.ts';
 import { activatedAbilitiesOf, flatten, getScript, isAutomatable, spellAbility, SUPPORTED_MODES, triggerSupport, type ParsedAbility } from '../shared/src/engine/index.ts';
 import { triggersOf } from '../shared/src/engine/script.ts';
+import { reportStatics } from './static-coverage.ts';
 
 const count = (ab: ParsedAbility) => {
   let n = 0;
@@ -82,3 +83,5 @@ console.log(`  cards whose triggers are all fully automatic: ${trCardsFull}/${tr
 console.log(`Trigger modes (supported ✓): ${[...modes].sort((a, b) => b[1].n - a[1].n).map(([k, v]) => `${k}${v.ok ? '✓' : ''}:${v.n}`).join('  ')}`);
 console.log('Why triggers are not fully automatic:');
 for (const [r, n] of [...reasons].sort((a, b) => b[1] - a[1]).slice(0, 20)) console.log(`  ${r.padEnd(32)} ${n}`);
+
+reportStatics();

@@ -178,8 +178,8 @@ export type GameAction =
   | { t: 'revealTop'; n: number }
   | { t: 'move'; iid: string; to: Zone; toOwner?: boolean; position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean }
   | { t: 'playLand'; iid: string }
-  /** targets: one list per TargetSpec of the spell. manual: skip the engine (resolve by hand). */
-  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[] }
+  /** targets: one list per TargetSpec of the spell. manual: skip the engine (resolve by hand). force: ignore static restrictions (e.g. "can't be cast"). */
+  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[]; force?: boolean }
   /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. */
   | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number }
   | { t: 'choose'; id: string; value: string }
@@ -213,8 +213,9 @@ export type GameAction =
   | { t: 'revealHand' }
   | { t: 'lookAtHand'; pid: string | null }
   | { t: 'designation'; name: string; on: boolean }
-  | { t: 'declareAttacker'; iid: string; target: string | null }
-  | { t: 'declareBlocker'; iid: string; attacker: string | null }
+  /** force: ignore static restrictions (defender, Ensnaring Bridge, "can't block" ...). */
+  | { t: 'declareAttacker'; iid: string; target: string | null; force?: boolean }
+  | { t: 'declareBlocker'; iid: string; attacker: string | null; force?: boolean }
   | { t: 'confirmAttackers' }
   | { t: 'confirmBlockers' }
   | { t: 'proposeDamage' }

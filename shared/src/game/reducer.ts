@@ -5,6 +5,7 @@ import { cardName, effectivePT, faceOf, hasKeyword, isCreature, type Lookup, pay
 import { activateAuto, prepareCast } from '../engine/play.ts';
 import { answerPending, createTokenInstance, resolveAuto, resumeAuto } from '../engine/resolve.ts';
 import { answerTriggerChoice, answerTriggerTargets, beginAction, processTriggers, triggerStillApplies } from '../engine/triggers.ts';
+import { adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders } from '../engine/statics.ts';
 import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
 } from './state.ts';
@@ -173,7 +174,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
     case 'attackers': {
       const canAttack = state.battlefield.some((id) => {
         const c = state.cards[id];
-        return c.controller === state.activePlayer && !c.tapped && isCreature(c, ctx.lookup);
+        return c.controller === state.activePlayer && !c.tapped && isCreature(c, ctx.lookup, state);
       });
       if (!canAttack) { state.combat.attackersDeclared = true; log(state, ctx, null, 'No attackers.'); }
       break;
@@ -549,6 +550,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (c.zone === 'battlefield' || c.zone === 'stack') return 'That card is already in play';
       const prep = prepareCast(state, c, pid, a, ctx);
       if (prep.error) return prep.error;
+      const restricted = a.force ? null : castRestriction(state, c.iid, pid, ctx.lookup);
+      if (restricted) return `${restricted} (cast with force to override)`;
       const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
       const from = c.zone;
       detach(state, c);
@@ -565,15 +568,17 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         c.castAs = undefined;
       }
       const face = faceOf(c, ctx.lookup);
-      const cost = data?.layout === 'split' && data.faces && a.face != null ? data.faces[a.face].manaCost : face.manaCost;
-      let paid = '';
+      const printed = data?.layout === 'split' && data.faces && a.face != null ? data.faces[a.face].manaCost : face.manaCost;
+      const adj = !a.faceDown && printed ? adjustCost(state, c, pid, printed, 'Spell', ctx.lookup) : { cost: printed, notes: [] };
+      const cost = adj.cost;
+      let paid = adj.notes.length ? ` (cost ${cost}: ${adj.notes.join(', ')})` : '';
       if (!a.faceDown && cost) {
         const res = payFromPool(cost, me.manaPool, a.x ?? 0);
         if (res) {
           me.manaPool = res.pool;
-          if (res.lifePaid) { me.life -= res.lifePaid; paid = ` (paid ${res.lifePaid} life)`; }
+          if (res.lifePaid) { me.life -= res.lifePaid; paid += ` (paid ${res.lifePaid} life)`; }
         } else if (Object.values(me.manaPool).some((v) => v > 0)) {
-          paid = ' (mana pool did not cover the cost — not deducted)';
+          paid += ' (mana pool did not cover the cost — not deducted)';
         }
       } else if (a.faceDown) {
         const res = payFromPool('{3}', me.manaPool);
@@ -723,7 +728,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!c) return 'No such card';
       const key = a.permanent ? 'permPT' : 'tempPT';
       c[key] = [c[key][0] + a.dp, c[key][1] + a.dt];
-      const [p, t] = effectivePT(c, ctx.lookup);
+      const [p, t] = effectivePT(c, ctx.lookup, state);
       log(state, ctx, pid, `${cardName(c, ctx.lookup)} gets ${a.dp >= 0 ? '+' : ''}${a.dp}/${a.dt >= 0 ? '+' : ''}${a.dt}${a.permanent ? '' : ' until end of turn'} (${p}/${t}).`);
       return null;
     }
@@ -731,8 +736,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       const c = card(state, a.iid);
       if (!c) return 'No such card';
       c.damage = Math.max(0, c.damage + a.delta);
-      const [, t] = effectivePT(c, ctx.lookup);
-      log(state, ctx, pid, `${cardName(c, ctx.lookup)} has ${c.damage} damage${c.damage >= t && t > 0 && !hasKeyword(c, ctx.lookup, 'Indestructible') ? ' (lethal)' : ''}.`);
+      const [, t] = effectivePT(c, ctx.lookup, state);
+      log(state, ctx, pid, `${cardName(c, ctx.lookup)} has ${c.damage} damage${c.damage >= t && t > 0 && !hasKeyword(c, ctx.lookup, 'Indestructible', state) ? ' (lethal)' : ''}.`);
       return null;
     }
     case 'transform': {
@@ -842,6 +847,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (state.combat.attackersDeclared) return 'Attackers are already declared';
       if (a.target) {
         if (c.tapped) return 'Tapped creatures can’t attack';
+        const no = a.force ? null : attackRestriction(state, c.iid, ctx.lookup);
+        if (no) return `${no} (use force to override)`;
         c.attacking = a.target;
       } else c.attacking = undefined;
       return null;
@@ -861,7 +868,9 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         const att = state.cards[a.attacker];
         if (!att?.attacking) return 'That creature is not attacking';
         if (c.tapped) return 'Tapped creatures can’t block';
-        if (hasKeyword(att, ctx.lookup, 'Flying') && !hasKeyword(c, ctx.lookup, 'Flying') && !hasKeyword(c, ctx.lookup, 'Reach')) {
+        const no = a.force ? null : blockRestriction(state, c.iid, a.attacker, ctx.lookup);
+        if (no) return `${no} (use force to override)`;
+        if (hasKeyword(att, ctx.lookup, 'Flying', state) && !hasKeyword(c, ctx.lookup, 'Flying', state) && !hasKeyword(c, ctx.lookup, 'Reach', state)) {
           // Not enforced: just warn in the log so odd cases (e.g. effects granting reach) still work.
           log(state, ctx, pid, `Warning: ${cardName(c, ctx.lookup)} blocks a flier without flying or reach.`);
         }
@@ -934,7 +943,7 @@ function confirmAttackers(state: GameState, ctx: Ctx) {
   const atk = state.battlefield.filter((id) => state.cards[id].attacking);
   for (const id of atk) {
     const c = state.cards[id];
-    if (!hasKeyword(c, ctx.lookup, 'Vigilance')) c.tapped = true;
+    if (!hasKeyword(c, ctx.lookup, 'Vigilance', state)) c.tapped = true;
   }
   state.combat.attackersDeclared = true;
   for (const id of atk) {
@@ -944,6 +953,7 @@ function confirmAttackers(state: GameState, ctx: Ctx) {
   if (atk.length) emit(state, { t: 'attackersDeclared', pid: state.activePlayer });
   const names = atk.map((id) => cardName(state.cards[id], ctx.lookup));
   log(state, ctx, state.activePlayer, atk.length ? `${player(state, state.activePlayer).name} attacks with ${names.join(', ')}.` : 'No attackers.');
+  for (const r of combatReminders(state, ctx.lookup, 'attackers')) log(state, ctx, null, r);
 }
 
 function confirmBlockers(state: GameState, ctx: Ctx, pid: string) {
@@ -953,6 +963,7 @@ function confirmBlockers(state: GameState, ctx: Ctx, pid: string) {
   log(state, ctx, pid, blocks.length
     ? `${player(state, pid).name} blocks: ${blocks.map((b) => `${cardName(state.cards[b], ctx.lookup)} → ${cardName(state.cards[state.cards[b].blocking!], ctx.lookup)}`).join(', ')}.`
     : `${player(state, pid).name} doesn't block.`);
+  for (const r of combatReminders(state, ctx.lookup, 'blockers')) log(state, ctx, null, r);
 }
 
 function undo(state: GameState, ctx: Ctx, pid: string) {

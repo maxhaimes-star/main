@@ -1,6 +1,7 @@
 import { type CardData, type CardFace, type TokenData, parseManaSymbols } from '../cards.ts';
 import type { CardInstance, GameState, ViewCard } from './types.ts';
 import { isHidden } from './types.ts';
+import { type StaticsState, staticMods } from '../engine/statics.ts';
 
 export type Lookup = (id: string) => CardData | undefined;
 
@@ -69,8 +70,14 @@ export function faceOf(inst: CardInstance, lookup: Lookup): Face {
   };
 }
 
-export function hasKeyword(inst: CardInstance, lookup: Lookup, kw: string): boolean {
+/** Pass `state` (GameState or GameView) to include keywords granted / removed by static abilities. */
+export function hasKeyword(inst: CardInstance, lookup: Lookup, kw: string, state?: StaticsState): boolean {
   if (inst.tempKeywords?.some((k) => k.toLowerCase() === kw.toLowerCase())) return true;
+  const mods = state ? staticMods(state, inst.iid, lookup) : undefined;
+  if (mods) {
+    if (mods.removeKw.some((k) => k.toLowerCase() === kw.toLowerCase())) return false;
+    if (mods.addKw.some((k) => k.toLowerCase() === kw.toLowerCase())) return true;
+  }
   if (inst.faceDown) return false;
   const f = faceOf(inst, lookup);
   if (f.keywords.some((k) => k.toLowerCase() === kw.toLowerCase())) return true;
@@ -83,17 +90,30 @@ function num(v: string | undefined): number {
   return Number.isNaN(n) ? 0 : n;
 }
 
-export function isCreature(inst: CardInstance, lookup: Lookup): boolean {
+export function isCreature(inst: CardInstance, lookup: Lookup, state?: StaticsState): boolean {
   if (inst.faceDown) return true; // morph / manifest / disguise
+  const mods = state ? staticMods(state, inst.iid, lookup) : undefined;
+  if (mods?.addTypes.includes('Creature')) return true;
+  if (mods?.removeTypes.includes('Creature')) return false;
   return faceOf(inst, lookup).types.includes('Creature') || (inst.counters['animated'] ?? 0) > 0;
 }
 
-/** Power / toughness including counters and manual modifiers. */
-export function effectivePT(inst: CardInstance, lookup: Lookup): [number, number] {
+/**
+ * Power / toughness including counters and manual modifiers. Pass `state` (GameState or GameView) to apply
+ * static abilities: characteristic-defining P/T, then set P/T, then modifications (anthems), then counters.
+ */
+export function effectivePT(inst: CardInstance, lookup: Lookup, state?: StaticsState): [number, number] {
   let p: number, t: number;
   if (inst.faceDown) { p = 2; t = 2; } else {
     const f = faceOf(inst, lookup);
     p = num(f.power); t = num(f.toughness);
+  }
+  const mods = state ? staticMods(state, inst.iid, lookup) : undefined;
+  if (mods) {
+    if (!inst.faceDown) { if (mods.cdaP != null) p = mods.cdaP; if (mods.cdaT != null) t = mods.cdaT; }
+    if (mods.setP != null) p = mods.setP;
+    if (mods.setT != null) t = mods.setT;
+    p += mods.addP; t += mods.addT;
   }
   const plus = inst.counters['+1/+1'] ?? 0;
   const minus = inst.counters['-1/-1'] ?? 0;

@@ -8,6 +8,7 @@ import type { CardInstance, GamePlayer, GameState, StackItem, Step, Zone } from 
 import type { TokenData } from '../cards.ts';
 import { chainOf, describe, flatten, PHASES, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
+import { staticsDefineToughness } from './statics.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 
 // ------------------------------------------------------------------ run context
@@ -49,8 +50,8 @@ function contAt(r: Run, next: number): AutoCont {
   return JSON.parse(JSON.stringify({ item: r.item, next, targets: r.targets, lki: r.lki, remembered: r.remembered })) as AutoCont;
 }
 
-export function lkiOf(c: CardInstance, ctx: Ctx): Lki {
-  const [power, toughness] = effectivePT(c, ctx.lookup);
+export function lkiOf(c: CardInstance, ctx: Ctx, state?: GameState): Lki {
+  const [power, toughness] = effectivePT(c, ctx.lookup, state);
   const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
   return { power, toughness, mv: c.token && !c.cardId ? 0 : data?.cmc ?? 0, controller: c.controller, owner: c.owner, name: cardName(c, ctx.lookup) };
 }
@@ -174,7 +175,7 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
   if (m) {
     const iid = m[1].startsWith('Remembered') ? r.remembered[0] ?? firstCardTarget(r) : firstCardTarget(r);
     if (!iid) return 0;
-    const l = r.lki[iid] ?? (state.cards[iid] ? lkiOf(state.cards[iid], ctx) : undefined);
+    const l = r.lki[iid] ?? (state.cards[iid] ? lkiOf(state.cards[iid], ctx, state) : undefined);
     if (!l) return 0;
     return m[2] === 'Power' ? l.power : m[2] === 'Toughness' ? l.toughness : l.mv;
   }
@@ -190,9 +191,9 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
     return n;
   }
   switch (v) {
-    case 'Count$CardPower': return src ? effectivePT(src, ctx.lookup)[0] : undefined;
-    case 'Count$CardToughness': return src ? effectivePT(src, ctx.lookup)[1] : undefined;
-    case 'Count$CardManaCost': return src ? lkiOf(src, ctx).mv : undefined;
+    case 'Count$CardPower': return src ? effectivePT(src, ctx.lookup, state)[0] : undefined;
+    case 'Count$CardToughness': return src ? effectivePT(src, ctx.lookup, state)[1] : undefined;
+    case 'Count$CardManaCost': return src ? lkiOf(src, ctx, state).mv : undefined;
     case 'Count$YourLifeTotal': return player(state, r.controller).life;
     case 'Count$CardsInYourHand': return player(state, r.controller).zones.hand.length;
   }
@@ -276,7 +277,7 @@ function onBattlefield(state: GameState, iid: string): CardInstance | undefined 
 
 function damageCard(state: GameState, ctx: Ctx, r: Run, c: CardInstance, n: number, deathtouch: boolean) {
   const f = faceOf(c, ctx.lookup);
-  if (isCreature(c, ctx.lookup)) {
+  if (isCreature(c, ctx.lookup, state)) {
     c.damage += n;
     if (deathtouch && n > 0) r.deathtouched.push(c.iid);
   } else if (f.types.includes('Planeswalker')) {
@@ -451,7 +452,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   if (cond === 'unknown') log(state, ctx, r.controller, `Check by hand: ${p.ConditionDescription ?? step.description} (condition not verified).`);
   const remember = (iids: string[]) => {
     if (Object.keys(p).some((k) => k.startsWith('Remember'))) {
-      for (const iid of iids) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx);
+      for (const iid of iids) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx, state);
       r.remembered = [...iids];
       rememberOnCard(state, r.item, iids);
     }
@@ -476,12 +477,12 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const srcObj = p.DamageSource ? defined(state, r, i, p.DamageSource)?.cards[0] : r.sourceIid;
       const src = srcObj ? state.cards[srcObj] : undefined;
       const srcName = src ? cardName(src, ctx.lookup) : r.sourceName;
-      const deathtouch = !!src && hasKeyword(src, ctx.lookup, 'Deathtouch');
+      const deathtouch = !!src && hasKeyword(src, ctx.lookup, 'Deathtouch', state);
       const hit: string[] = [];
       for (const iid of o.cards) { const c = onBattlefield(state, iid); if (c) { damageCard(state, ctx, r, c, n, deathtouch); hit.push(cardName(c, ctx.lookup)); if (srcObj && n > 0) emit(state, { t: 'damage', source: srcObj, target: iid, amount: n, combat: false }); } }
       for (const pid of o.players) { player(state, pid).life -= n; hit.push(pname(state, pid)); if (srcObj && n > 0) emit(state, { t: 'damage', source: srcObj, target: pid, amount: n, combat: false }); }
       log(state, ctx, r.controller, `${srcName} deals ${n} damage to ${hit.join(', ') || 'nothing'}.`);
-      if (src && hasKeyword(src, ctx.lookup, 'Lifelink') && hit.length) {
+      if (src && hasKeyword(src, ctx.lookup, 'Lifelink', state) && hit.length) {
         const gain = n * hit.length;
         player(state, src.controller).life += gain;
         log(state, ctx, src.controller, `${pname(state, src.controller)} gains ${gain} life (lifelink).`);
@@ -519,8 +520,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const iid of o.cards) {
         const c = onBattlefield(state, iid);
         if (!c) continue;
-        if (hasKeyword(c, ctx.lookup, 'Indestructible')) { log(state, ctx, null, `${cardName(c, ctx.lookup)} is indestructible.`); continue; }
-        r.lki[iid] ??= lkiOf(c, ctx);
+        if (hasKeyword(c, ctx.lookup, 'Indestructible', state)) { log(state, ctx, null, `${cardName(c, ctx.lookup)} is indestructible.`); continue; }
+        r.lki[iid] ??= lkiOf(c, ctx, state);
         const nm = cardName(c, ctx.lookup);
         moveCard(state, ctx, iid, 'graveyard');
         done.push(nm);
@@ -544,7 +545,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const done: string[] = [];
       for (const iid of list) {
         const c = state.cards[iid];
-        if (step.api === 'DestroyAll' && hasKeyword(c, ctx.lookup, 'Indestructible')) continue;
+        if (step.api === 'DestroyAll' && hasKeyword(c, ctx.lookup, 'Indestructible', state)) continue;
         done.push(cardName(c, ctx.lookup));
         moveCard(state, ctx, iid, 'graveyard', step.api === 'SacrificeAll' ? { cause: 'sacrifice' } : {});
       }
@@ -609,7 +610,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         if (!c) continue;
         const self = iid === r.sourceIid && (p.Defined === 'Self' || p.Defined === 'Parent');
         if (!self && origins.length && !origins.includes(c.zone) && !p.Origin?.includes('Any')) continue;
-        r.lki[iid] ??= lkiOf(c, ctx);
+        r.lki[iid] ??= lkiOf(c, ctx, state);
         const nm = cardName(c, ctx.lookup);
         moveTo(state, ctx, r, iid, dest, p);
         moved.push(nm);
@@ -1009,7 +1010,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
 function counterItem(state: GameState, ctx: Ctx, item: StackItem, p: Record<string, string>, by: string, r?: Run) {
   if (item.iid && state.cards[item.iid]) {
     const nm = cardName(state.cards[item.iid], ctx.lookup);
-    if (r) r.lki[item.id] = lkiOf(state.cards[item.iid], ctx);
+    if (r) r.lki[item.id] = lkiOf(state.cards[item.iid], ctx, state);
     const dest = zoneOf(p.Destination) ?? 'graveyard';
     if (dest === 'library') moveCard(state, ctx, item.iid, 'library', { position: p.LibraryPosition === '-1' ? 'bottom' : 'top' });
     else moveCard(state, ctx, item.iid, dest === 'battlefield' || dest === 'stack' ? 'graveyard' : dest);
@@ -1075,10 +1076,10 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
   if (left < total) log(state, ctx, item.controller, `${name}: ${total - left} target${total - left === 1 ? ' is' : 's are'} no longer legal.`);
   const lki: Record<string, Lki> = {};
   for (const ref of legal.flat()) {
-    if (ref.kind === 'card' && state.cards[ref.iid]) lki[ref.iid] = lkiOf(state.cards[ref.iid], ctx);
+    if (ref.kind === 'card' && state.cards[ref.iid]) lki[ref.iid] = lkiOf(state.cards[ref.iid], ctx, state);
     if (ref.kind === 'stack') {
       const it = state.stack.find((s) => s.id === ref.id);
-      if (it?.iid && state.cards[it.iid]) lki[ref.id] = lkiOf(state.cards[it.iid], ctx);
+      if (it?.iid && state.cards[it.iid]) lki[ref.id] = lkiOf(state.cards[it.iid], ctx, state);
       else if (it) lki[ref.id] = { power: 0, toughness: 0, mv: 0, controller: it.controller, owner: it.controller, name: it.text };
     }
   }
@@ -1168,12 +1169,13 @@ export function stateBasedActions(state: GameState, ctx: Ctx, deathtouched: stri
     for (const iid of state.battlefield) {
       const c = state.cards[iid];
       const f = faceOf(c, ctx.lookup);
-      if (isCreature(c, ctx.lookup)) {
-        const [, t] = effectivePT(c, ctx.lookup);
-        // Only when a printed positive toughness was reduced (0/0 bodies usually get their size from statics we don't model).
+      if (isCreature(c, ctx.lookup, state)) {
+        const [, t] = effectivePT(c, ctx.lookup, state);
+        // Only when a printed positive toughness was reduced, or static abilities define the toughness
+        // (other 0/0 bodies usually get their size from effects we don't model).
         const base = c.faceDown ? 2 : /^-?\d+$/.test(f.toughness ?? '') ? parseInt(f.toughness!, 10) : 0;
-        if (base > 0 && t <= 0) { dead.push([iid, 'has 0 toughness']); continue; }
-        if (hasKeyword(c, ctx.lookup, 'Indestructible')) continue;
+        if ((base > 0 || staticsDefineToughness(state, iid, ctx.lookup)) && t <= 0) { dead.push([iid, 'has 0 toughness']); continue; }
+        if (hasKeyword(c, ctx.lookup, 'Indestructible', state)) continue;
         if ((t > 0 && c.damage >= t) || (c.damage > 0 && deathtouched.includes(iid))) dead.push([iid, 'dies (lethal damage)']);
       } else if (f.types.includes('Planeswalker') && !c.faceDown && (c.counters.loyalty ?? 0) <= 0) {
         dead.push([iid, 'is put into the graveyard (0 loyalty)']);
