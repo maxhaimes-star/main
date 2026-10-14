@@ -1,5 +1,5 @@
 import type { TokenData } from '../cards.ts';
-import type { AutoCont, AutoInfo, Pending, TargetRef } from '../engine/types.ts';
+import type { AutoCont, AutoInfo, DelayedTrigger, Pending, QueuedTrigger, TargetRef } from '../engine/types.ts';
 
 export const STEPS = [
   'untap', 'upkeep', 'draw', 'main1',
@@ -94,6 +94,8 @@ export interface GamePlayer {
   conceded: boolean;
   /** City's blessing, monarch, initiative... */
   designations: string[];
+  /** Stage 2: put this player's triggered abilities on the stack automatically (undefined = true). */
+  autoTriggers?: boolean;
 }
 
 export interface LogEntry { at: number; pid: string | null; text: string }
@@ -102,6 +104,8 @@ export interface CombatProposal {
   lifeChange: Record<string, number>;
   /** Damage to each creature/planeswalker by iid. */
   damage: Record<string, number>;
+  /** Stage 2: each damage assignment (source iid -> player id or permanent iid), for damage triggers. */
+  hits?: { source: string; target: string; amount: number }[];
   /** Creatures / planeswalkers expected to die. */
   dies: string[];
   lines: string[];
@@ -131,7 +135,27 @@ export interface GameState {
   /** Questions the engine is waiting on (answered with the 'choose' action). */
   pending: Pending[];
   seq: number;
+  /** Stage 2, engine-internal (not sent to clients): events of the current action, for trigger detection. */
+  events?: GameEvent[];
+  /** Stage 2, engine-internal: triggered abilities waiting for a decision before going on the stack. */
+  triggerQueue?: QueuedTrigger[];
+  /** Stage 2, engine-internal: delayed triggers ("at the beginning of the next end step ..."). */
+  delayedTriggers?: DelayedTrigger[];
+  /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
+  turnStats?: { cast: Record<string, number>; drawn: Record<string, number> };
 }
+
+/** Stage 2: something that happened during an action (engine-internal; used to detect triggers). */
+export type GameEvent =
+  | { t: 'zone'; iid: string; from: Zone; to: Zone; snap: CardInstance; cause?: 'discard' | 'sacrifice' }
+  | { t: 'phase'; step: Step; active: string; turn: number }
+  | { t: 'attacks'; iid: string; defender: string }
+  | { t: 'attackersDeclared'; pid: string }
+  | { t: 'blocks'; iid: string; attacker: string }
+  | { t: 'cast'; iid: string; pid: string; nth: number }
+  | { t: 'drawn'; iid: string; pid: string; nth: number; firstInDrawStep?: boolean }
+  | { t: 'damage'; source: string; target: string; amount: number; combat: boolean }
+  | { t: 'landPlayed'; iid: string; pid: string };
 
 /** Actions a player can send. All are validated in the reducer. */
 export type GameAction =
@@ -159,6 +183,8 @@ export type GameAction =
   /** Answer a Pending that has `targets`: one list per spec. */
   | { t: 'chooseTargets'; id: string; targets: TargetRef[][] }
   | { t: 'trigger'; text: string; sourceIid?: string }
+  /** Stage 2: turn automatic triggered abilities on/off for yourself. */
+  | { t: 'setAutoTriggers'; on: boolean }
   | { t: 'resolve' }
   | { t: 'counterTop' }
   | { t: 'removeStackItem'; id: string }

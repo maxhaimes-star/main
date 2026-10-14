@@ -15,6 +15,7 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
   const damage: Record<string, number> = {};
   const deathtouched = new Set<string>();
   const lines: string[] = [];
+  const hits: { source: string; target: string; amount: number }[] = [];
   const alive = (id: string) => {
     const c = cards[id];
     const [, t] = effectivePT(c, lookup);
@@ -27,6 +28,7 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
 
   const deal = (src: string, target: string, amount: number) => {
     if (amount <= 0) return;
+    hits.push({ source: src, target, amount });
     const s = cards[src];
     const name = cardName(s, lookup);
     const infect = hasKeyword(s, lookup, 'Infect');
@@ -104,5 +106,5 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
   });
   for (const [pid, n] of Object.entries(poison)) lifeChange[`poison:${pid}`] = n;
   if (!lines.length) lines.push('No combat damage.');
-  return { lifeChange, damage, dies, lines, confirmed: [] };
+  return { lifeChange, damage, dies, lines, confirmed: [], hits };
 }
