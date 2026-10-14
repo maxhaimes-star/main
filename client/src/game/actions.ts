@@ -1,0 +1,245 @@
+import {
+  activatedAbilities, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, triggeredAbilities, type CardInstance,
+} from '@ojb/shared';
+import { getCard } from '../cards.tsx';
+import type { GameCtx, MenuItem, Mode } from './ui.tsx';
+
+type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'setMode' | 'opp'> & { mode: Mode };
+
+const MANA_NAMES: Record<string, string> = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', C: 'Colorless' };
+
+function visible(g: GameView, iid: string): CardInstance | null {
+  const c = g.cards[iid];
+  return c && !isHidden(c) ? c : null;
+}
+
+export function manaOptions(c: CardInstance): string[] {
+  const card = c.cardId ? getCard(c.cardId) : undefined;
+  if (!card || c.transformed) return [];
+  const produced = card.producedMana;
+  // "Add {C}{C}" style (Ancient Tomb, Sol lands), and "Add {G}{G}" style
+  const doubles = /Add \{([WUBRGC])\}\{\1\}(?:\{\1\})?\.?/.exec(card.oracle);
+  if (doubles && produced.length === 1) return [doubles[0].match(/\{[WUBRGC]\}/g)!.join('').replace(/[{}]/g, '')];
+  return produced;
+}
+
+/** Default click behaviour for a card. */
+export function defaultAction(base: Base, iid: string, menu: (iid: string) => MenuItem[], open: (items: MenuItem[], title?: string) => void) {
+  const { g, me, act, mode, setMode } = base;
+  const c = g.cards[iid];
+  if (!c) return;
+  // Targeting modes first.
+  if (mode?.kind === 'attach') {
+    setMode(null);
+    if (mode.iid !== iid) act({ t: 'attach', iid: mode.iid, to: iid });
+    return;
+  }
+  if (mode?.kind === 'block') {
+    if (c.attacking && c.controller !== me) { act({ t: 'declareBlocker', iid: mode.iid, attacker: iid }); setMode(null); return; }
+    if (iid === mode.iid) { setMode(null); return; }
+  }
+  if (!me) return;
+  const vis = visible(g, iid);
+  if (c.zone === 'battlefield') {
+    // Combat declarations
+    if (g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && vis && faceOf(vis, getCard).types.includes('Creature')) {
+      act({ t: 'declareAttacker', iid, target: c.attacking ? null : base.opp });
+      return;
+    }
+    if (g.step === 'blockers' && g.activePlayer !== me && !g.combat.blockersDeclared && c.controller === me) {
+      if (c.blocking) act({ t: 'declareBlocker', iid, attacker: null });
+      else setMode({ kind: 'block', iid });
+      return;
+    }
+    if (c.controller !== me) return;
+    if (vis && !c.tapped) {
+      const opts = manaOptions(vis);
+      const isLand = faceOf(vis, getCard).types.includes('Land');
+      if (opts.length === 1 && (isLand || !faceOf(vis, getCard).types.includes('Creature'))) { act({ t: 'tapForMana', iid, mana: opts[0] }); return; }
+      if (opts.length > 1) { open(opts.map((m) => ({ label: `Add ${m.split('').map((x) => `{${x}}`).join('')} (${MANA_NAMES[m[0]]})`, onClick: () => act({ t: 'tapForMana', iid, mana: m }) })), 'Tap for mana'); return; }
+    }
+    act({ t: 'tap', iid });
+    return;
+  }
+  if (c.zone === 'hand' && c.owner === me && vis) {
+    const face = faceOf(vis, getCard);
+    const card = vis.cardId ? getCard(vis.cardId) : undefined;
+    if (face.types.includes('Land') && !(card?.layout === 'modal_dfc')) { act({ t: 'playLand', iid }); return; }
+    if (card?.faces || /\{X\}/.test(face.manaCost)) { open(menu(iid), face.name); return; }
+    act({ t: 'cast', iid });
+    return;
+  }
+  open(menu(iid), vis ? faceOf(vis, getCard).name : undefined);
+}
+
+async function castWithX(base: Base, iid: string, face?: number) {
+  const c = visible(base.g, iid);
+  const card = c?.cardId ? getCard(c.cardId) : undefined;
+  const cost = face != null && card?.faces ? card.faces[face].manaCost : card?.manaCost ?? '';
+  let x: number | undefined;
+  if (/\{X\}/.test(cost)) {
+    const v = await base.ask('Value of X', 1);
+    if (v == null) return;
+    x = v;
+  }
+  base.act({ t: 'cast', iid, face, x });
+}
+
+const moveItems = (base: Base, iid: string, c: CardInstance): MenuItem[] => {
+  const mv = (a: Omit<Extract<GameAction, { t: 'move' }>, 't' | 'iid'>) => () => base.act({ t: 'move', iid, ...a });
+  const items: MenuItem[] = [];
+  if (c.zone !== 'hand') items.push({ label: "To owner's hand", onClick: mv({ to: 'hand' }) });
+  if (c.zone !== 'battlefield') {
+    items.push({ label: 'Onto the battlefield', onClick: mv({ to: 'battlefield' }) });
+    items.push({ label: 'Onto the battlefield tapped', onClick: mv({ to: 'battlefield', tapped: true }) });
+    items.push({ label: 'Onto the battlefield face down', onClick: mv({ to: 'battlefield', faceDown: true }) });
+  }
+  if (c.zone !== 'graveyard') items.push({ label: 'To graveyard', onClick: mv({ to: 'graveyard' }) });
+  if (c.zone !== 'exile') {
+    items.push({ label: 'Exile', onClick: mv({ to: 'exile' }) });
+    items.push({ label: 'Exile face down', onClick: mv({ to: 'exile', faceDown: true }) });
+  }
+  items.push({ label: 'Top of library', onClick: mv({ to: 'library', position: 'top' }) });
+  items.push({ label: 'Bottom of library', onClick: mv({ to: 'library', position: 'bottom' }) });
+  items.push({
+    label: 'Nth from top…', onClick: async () => {
+      const n = await base.ask('Position from the top (1 = top)', 3);
+      if (n != null && n >= 1) base.act({ t: 'move', iid, to: 'library', position: n - 1 });
+    },
+  });
+  if (c.zone !== 'command') items.push({ label: 'Command zone', onClick: mv({ to: 'command' }) });
+  if (c.zone !== 'sideboard' && c.owner === base.me) items.push({ label: 'Sideboard', onClick: mv({ to: 'sideboard' }) });
+  return items;
+};
+
+export function menuFor(base: Base, iid: string): MenuItem[] {
+  const { g, me, act, ask, askText, setMode, opp } = base;
+  const raw = g.cards[iid];
+  if (!raw) return [];
+  const c = visible(g, iid);
+  if (!c) {
+    // Hidden card (opponent's hand / face-down): nothing much to do.
+    return [{ label: 'Hidden card', disabled: true }];
+  }
+  const face = faceOf(c, getCard);
+  const card = c.cardId ? getCard(c.cardId) : undefined;
+  const items: MenuItem[] = [];
+  const mine = c.controller === me || c.owner === me;
+
+  if (c.zone === 'battlefield') {
+    items.push({ label: c.tapped ? 'Untap' : 'Tap', onClick: () => act({ t: 'tap', iid }) });
+    const mana = manaOptions(c);
+    if (mana.length && !c.tapped && c.controller === me) {
+      items.push({ label: 'Tap for mana', sub: mana.map((m) => ({ label: m.split('').map((x) => `{${x}}`).join(''), onClick: () => act({ t: 'tapForMana', iid, mana: m }) })) });
+    }
+    const loyalty = loyaltyAbilities(face.oracle);
+    if (loyalty.length) {
+      items.push({
+        label: 'Loyalty ability', sub: loyalty.map((l) => ({
+          label: `[${l.cost > 0 ? '+' : ''}${l.cost}] ${l.text.slice(0, 70)}${l.text.length > 70 ? '…' : ''}`,
+          onClick: async () => {
+            let cost = l.cost;
+            if (/\[[−-]X\]/.test(face.oracle) && l.cost === 0 && /X/.test(l.text)) { const x = await ask('X', 1); if (x == null) return; cost = -x; }
+            act({ t: 'activate', iid, text: l.text, loyalty: cost });
+          },
+        })),
+      });
+    }
+    const abilities = activatedAbilities(face.oracle);
+    items.push({
+      label: 'Activate ability', sub: [
+        ...abilities.map((a) => ({ label: a.length > 80 ? a.slice(0, 80) + '…' : a, onClick: () => act({ t: 'activate', iid, text: a }) })),
+        { label: 'Other…', onClick: async () => { const t = await askText('Ability text'); if (t) act({ t: 'activate', iid, text: t }); } },
+      ],
+    });
+    const triggers = triggeredAbilities(face.oracle);
+    items.push({
+      label: 'Put trigger on stack', sub: [
+        ...triggers.map((t) => ({ label: t.length > 80 ? t.slice(0, 80) + '…' : t, onClick: () => act({ t: 'trigger', text: t, sourceIid: iid }) })),
+        { label: 'Other…', onClick: async () => { const t = await askText('Trigger text'); if (t) act({ t: 'trigger', text: t, sourceIid: iid }); } },
+      ],
+    });
+    // Combat
+    if (g.step === 'attackers' && g.activePlayer === me && c.controller === me && !g.combat.attackersDeclared) {
+      items.push(c.attacking ? { label: 'Remove from attack', onClick: () => act({ t: 'declareAttacker', iid, target: null }) } : { label: 'Attack opponent', onClick: () => act({ t: 'declareAttacker', iid, target: opp }) });
+      const pws = g.battlefield.filter((id) => { const x = visible(g, id); return x && x.controller !== me && faceOf(x, getCard).types.includes('Planeswalker'); });
+      for (const pw of pws) items.push({ label: `Attack ${faceOf(visible(g, pw)!, getCard).name}`, onClick: () => act({ t: 'declareAttacker', iid, target: pw }) });
+    }
+    if (g.step === 'blockers' && g.activePlayer !== me && c.controller === me && !g.combat.blockersDeclared) {
+      const attackers = g.battlefield.filter((id) => g.cards[id].attacking);
+      items.push({ label: 'Block', sub: attackers.map((a) => ({ label: visible(g, a) ? faceOf(visible(g, a)!, getCard).name : 'face-down', onClick: () => act({ t: 'declareBlocker', iid, attacker: a }) })) });
+      if (c.blocking) items.push({ label: 'Stop blocking', onClick: () => act({ t: 'declareBlocker', iid, attacker: null }) });
+    }
+    items.push({
+      label: 'Counters', sub: [
+        { label: '+1/+1 counter', onClick: () => act({ t: 'counter', iid, kind: '+1/+1', delta: 1 }) },
+        { label: 'Remove +1/+1 counter', onClick: () => act({ t: 'counter', iid, kind: '+1/+1', delta: -1 }) },
+        { label: '−1/−1 counter', onClick: () => act({ t: 'counter', iid, kind: '-1/-1', delta: 1 }) },
+        { label: 'Remove −1/−1 counter', onClick: () => act({ t: 'counter', iid, kind: '-1/-1', delta: -1 }) },
+        { label: 'Loyalty +1', onClick: () => act({ t: 'counter', iid, kind: 'loyalty', delta: 1 }) },
+        { label: 'Loyalty −1', onClick: () => act({ t: 'counter', iid, kind: 'loyalty', delta: -1 }) },
+        ...Object.keys(c.counters).filter((k) => !['+1/+1', '-1/-1', 'loyalty'].includes(k)).flatMap((k) => [
+          { label: `${k} +1`, onClick: () => act({ t: 'counter', iid, kind: k, delta: 1 }) },
+          { label: `${k} −1`, onClick: () => act({ t: 'counter', iid, kind: k, delta: -1 }) },
+        ]),
+        {
+          label: 'Other counter…', onClick: async () => {
+            const k = await askText('Counter type (e.g. level, valor, charge, lore, oil, stun)', 'charge');
+            if (!k) return;
+            const n = await ask(`How many ${k} counters? (negative removes)`, 1);
+            if (n) act({ t: 'counter', iid, kind: k, delta: n });
+          },
+        },
+      ],
+    });
+    items.push({
+      label: 'Power / toughness', sub: [
+        { label: '+1/+1 until end of turn', onClick: () => act({ t: 'pt', iid, dp: 1, dt: 1 }) },
+        { label: '−1/−1 until end of turn', onClick: () => act({ t: 'pt', iid, dp: -1, dt: -1 }) },
+        { label: '+X/+0 until end of turn…', onClick: async () => { const n = await ask('Power change', 2); if (n) act({ t: 'pt', iid, dp: n, dt: 0 }); } },
+        { label: 'Custom until end of turn…', onClick: async () => { const p = await ask('Power change', 0); if (p == null) return; const t = await ask('Toughness change', 0); if (t == null) return; act({ t: 'pt', iid, dp: p, dt: t }); } },
+        { label: 'Lasting modifier (anthem etc.)…', onClick: async () => { const p = await ask('Power change', 1); if (p == null) return; const t = await ask('Toughness change', 1); if (t == null) return; act({ t: 'pt', iid, dp: p, dt: t, permanent: true }); } },
+        { label: 'Mark damage…', onClick: async () => { const n = await ask('Damage (negative removes)', 1); if (n) act({ t: 'damage', iid, delta: n }); } },
+        { label: 'Animate (counts as a creature)', onClick: () => act({ t: 'counter', iid, kind: 'animated', delta: c.counters.animated ? -1 : 1 }) },
+      ],
+    });
+    if (card?.faces && (card.layout === 'transform' || card.layout === 'modal_dfc' || card.layout === 'flip')) items.push({ label: c.transformed ? 'Transform to front' : `Transform (${card.faces[1].name})`, onClick: () => act({ t: 'transform', iid }) });
+    items.push({ label: c.faceDown ? 'Turn face up' : 'Turn face down', onClick: () => act({ t: 'faceDown', iid, faceDown: !c.faceDown }) });
+    items.push(c.attachedTo ? { label: 'Unattach', onClick: () => act({ t: 'attach', iid, to: null }) } : { label: 'Attach to… (then click a card)', onClick: () => setMode({ kind: 'attach', iid }) });
+    items.push({ label: c.controller === me ? 'Give control to opponent' : 'Gain control', onClick: () => act({ t: 'control', iid, pid: c.controller === me ? opp : me! }) });
+    items.push({ label: 'Create a token copy', onClick: () => act({ t: 'copyCard', iid }) });
+    items.push({ label: c.noUntap ? 'Untaps normally' : "Doesn't untap", onClick: () => act({ t: 'noUntap', iid, value: !c.noUntap }) });
+    items.push({ label: 'Note…', onClick: async () => { const t = await askText('Note (e.g. "flying", "exiled: Lightning Bolt")', c.note ?? ''); if (t != null) act({ t: 'note', iid, note: t }); } });
+    items.push({ label: 'Move', sub: moveItems(base, iid, c) });
+    return items;
+  }
+
+  if (c.zone === 'hand' || c.zone === 'graveyard' || c.zone === 'exile' || c.zone === 'library' || c.zone === 'command' || c.zone === 'sideboard') {
+    const isLand = face.types.includes('Land');
+    if (isLand && c.owner === me) items.push({ label: 'Play land', onClick: () => act({ t: 'playLand', iid }) });
+    if (!isLand || card?.layout === 'modal_dfc') {
+      if (card?.faces && card.layout !== 'normal') {
+        items.push({ label: `Cast ${card.faces[0].name}`, hint: card.faces[0].manaCost, onClick: () => castWithX(base, iid, 0) });
+        items.push({ label: `Cast ${card.faces[1].name}`, hint: card.faces[1].manaCost, onClick: () => castWithX(base, iid, 1) });
+      } else {
+        items.push({ label: c.zone === 'hand' ? 'Cast' : `Cast from ${c.zone}`, hint: face.manaCost, onClick: () => castWithX(base, iid) });
+      }
+    }
+    if (c.zone === 'hand' && mine) {
+      items.push({ label: 'Cast face down (morph/disguise)', onClick: () => act({ t: 'cast', iid, faceDown: true }) });
+      items.push({ label: 'Reveal', onClick: () => act({ t: 'reveal', iid }) });
+      items.push({ label: 'Discard', onClick: () => act({ t: 'move', iid, to: 'graveyard' }) });
+      const cyc = /cycling \{/i.test(face.oracle);
+      if (cyc) items.push({ label: 'Cycle (discard, draw)', onClick: async () => { await act({ t: 'move', iid, to: 'graveyard' }); act({ t: 'draw', n: 1 }); } });
+    }
+    items.push({ label: 'Move', sub: moveItems(base, iid, c) });
+    return items;
+  }
+
+  if (c.zone === 'stack') {
+    items.push({ label: 'Resolve now', onClick: () => act({ t: 'resolve' }) });
+    items.push({ label: 'Counter (to graveyard)', onClick: () => act({ t: 'move', iid, to: 'graveyard' }) });
+    items.push({ label: 'Move', sub: moveItems(base, iid, c) });
+  }
+  return items;
+}

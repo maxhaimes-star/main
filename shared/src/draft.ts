@@ -390,15 +390,16 @@ export function auctionTick(room: RoomState, now: number, lookup: CardLookup, rn
     }
     const high = highBid(a)!;
     // Bots consider bidding at most once a second, after a short think.
-    if (now - high.at < 1200) return false;
+    if (now - high.at < 900) return false;
     const bidders = players.filter((p) => p.isBot && p.id !== high.pid && !isCapped(room, p.id));
     for (const bot of shuffle(bidders, rng)) {
-      const value = botValuation(room, bot.id, a.lot.cardId, lookup);
-      const next = high.amount + 1;
-      if (next <= value && next <= a.budgets[bot.id] && rng() < 0.7) {
-        placeBid(room, bot.id, next, now);
-        return true;
-      }
+      const value = Math.min(botValuation(room, bot.id, a.lot.cardId, lookup), a.budgets[bot.id]);
+      if (high.amount + 1 > value || rng() > 0.75) continue;
+      // Jump-bid toward the valuation so bot bidding wars don't crawl up one point at a time.
+      const gap = value - high.amount;
+      const next = high.amount + (gap > 3 ? Math.ceil(gap / 2) : 1);
+      placeBid(room, bot.id, next, now);
+      return true;
     }
     return false;
   }

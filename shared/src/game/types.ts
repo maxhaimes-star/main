@@ -142,7 +142,7 @@ export type GameAction =
   | { t: 'peek'; mode: 'scry' | 'surveil' | 'look' | 'search'; n?: number }
   | { t: 'resolvePeek'; top: string[]; bottom: string[]; graveyard: string[]; hand: string[]; battlefield: string[]; exile: string[]; shuffle: boolean }
   | { t: 'revealTop'; n: number }
-  | { t: 'move'; iid: string; to: Zone; toOwner?: boolean; position?: 'top' | 'bottom'; faceDown?: boolean; tapped?: boolean }
+  | { t: 'move'; iid: string; to: Zone; toOwner?: boolean; position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean }
   | { t: 'playLand'; iid: string }
   | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean }
   | { t: 'activate'; iid: string; text: string; loyalty?: number }

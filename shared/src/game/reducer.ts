@@ -11,7 +11,7 @@ export interface Ctx { rng: Rng; lookup: Lookup; now: number }
 
 export interface GameSeat { pid: string; name: string; deck: string[]; side: string[] }
 
-const HISTORY_LIMIT = 40;
+const HISTORY_LIMIT = 25;
 const DEFAULT_STOPS: GamePlayer['stops'] = {
   own: ['main1', 'main2'],
   opp: ['end'],
@@ -576,8 +576,11 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
     case 'resolvePeek': {
       if (!me.peek) return 'Nothing to resolve';
-      const allowed = new Set(me.peek.iids);
-      const lists = [a.top, a.bottom, a.graveyard, a.hand, a.battlefield, a.exile];
+      // Cards cast/moved out of the library while peeking are simply skipped.
+      const allowed = new Set(me.peek.iids.filter((i) => state.cards[i]?.zone === 'library'));
+      const keep = (l: string[]) => l.filter((i) => allowed.has(i) || !me.peek!.iids.includes(i));
+      const r = { top: keep(a.top), bottom: keep(a.bottom), graveyard: keep(a.graveyard), hand: keep(a.hand), battlefield: keep(a.battlefield), exile: keep(a.exile), shuffle: a.shuffle };
+      const lists = [r.top, r.bottom, r.graveyard, r.hand, r.battlefield, r.exile];
       const all = lists.flat();
       if (!all.every((i) => allowed.has(i))) return 'Those cards are not available';
       if (new Set(all).size !== all.length) return 'A card was chosen twice';
@@ -589,21 +592,21 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         state.cards[iid].zone = 'library';
         moveCard(state, ctx, iid, to, { position });
       };
-      [...a.top].reverse().forEach((iid) => place(iid, 'library', 'top'));
-      a.bottom.forEach((iid) => place(iid, 'library', 'bottom'));
-      a.graveyard.forEach((iid) => place(iid, 'graveyard'));
-      a.hand.forEach((iid) => place(iid, 'hand'));
-      a.battlefield.forEach((iid) => place(iid, 'battlefield'));
-      a.exile.forEach((iid) => place(iid, 'exile'));
+      [...r.top].reverse().forEach((iid) => place(iid, 'library', 'top'));
+      r.bottom.forEach((iid) => place(iid, 'library', 'bottom'));
+      r.graveyard.forEach((iid) => place(iid, 'graveyard'));
+      r.hand.forEach((iid) => place(iid, 'hand'));
+      r.battlefield.forEach((iid) => place(iid, 'battlefield'));
+      r.exile.forEach((iid) => place(iid, 'exile'));
       const parts: string[] = [];
-      if (a.top.length) parts.push(`${a.top.length} on top`);
-      if (a.bottom.length) parts.push(`${a.bottom.length} on the bottom`);
-      if (a.graveyard.length) parts.push(`${a.graveyard.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')} to graveyard`);
-      if (a.hand.length) parts.push(`${a.hand.length} to hand`);
-      if (a.battlefield.length) parts.push(`${a.battlefield.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')} onto the battlefield`);
-      if (a.exile.length) parts.push(`${a.exile.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')} to exile`);
-      if (a.shuffle || mode === 'search') shuffleLibrary(state, me, ctx.rng);
-      log(state, ctx, pid, `${name} puts ${parts.join(', ') || 'everything back'}${a.shuffle || mode === 'search' ? ' and shuffles' : ''}.`);
+      if (r.top.length) parts.push(`${r.top.length} on top`);
+      if (r.bottom.length) parts.push(`${r.bottom.length} on the bottom`);
+      if (r.graveyard.length) parts.push(`${r.graveyard.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')} to graveyard`);
+      if (r.hand.length) parts.push(`${r.hand.length} to hand`);
+      if (r.battlefield.length) parts.push(`${r.battlefield.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')} onto the battlefield`);
+      if (r.exile.length) parts.push(`${r.exile.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')} to exile`);
+      if (r.shuffle || mode === 'search') shuffleLibrary(state, me, ctx.rng);
+      log(state, ctx, pid, `${name} puts ${parts.join(', ') || 'everything back'}${r.shuffle || mode === 'search' ? ' and shuffles' : ''}.`);
       return null;
     }
     case 'revealTop': {
@@ -623,7 +626,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       const owner = player(state, c.owner);
       moveCard(state, ctx, a.iid, a.to, { position: a.position, faceDown: a.faceDown, tapped: a.tapped, controller: a.to === 'battlefield' && !a.toOwner ? (from === 'battlefield' ? c.controller : pid) : undefined });
       const whose = c.owner === pid ? 'their' : `${owner.name}'s`;
-      const where = a.to === 'library' ? `the ${a.position === 'bottom' ? 'bottom' : 'top'} of ${whose} library` : ['graveyard', 'hand', 'exile', 'sideboard'].includes(a.to) ? `${whose} ${ZONE_LABEL[a.to]}` : ZONE_LABEL[a.to];
+      const where = a.to === 'library' ? (typeof a.position === 'number' ? `position ${a.position + 1} from the top of ${whose} library` : `the ${a.position === 'bottom' ? 'bottom' : 'top'} of ${whose} library`) : ['graveyard', 'hand', 'exile', 'sideboard'].includes(a.to) ? `${whose} ${ZONE_LABEL[a.to]}` : ZONE_LABEL[a.to];
       log(state, ctx, pid, `${name} moves ${label} from ${from === 'battlefield' || from === 'stack' ? ZONE_LABEL[from] : `${c.owner === pid ? 'their' : `${owner.name}'s`} ${ZONE_LABEL[from]}`} to ${where}${a.faceDown ? ' face down' : ''}.`);
       return null;
     }

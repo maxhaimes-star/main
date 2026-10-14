@@ -36,7 +36,8 @@ function save() {
   for (const [rid, rec] of rooms.rooms) if (now - rec.state.updatedAt > ROOM_TTL_MS) rooms.rooms.delete(rid);
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmp = `${storeFile}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify([...rooms.rooms.values()]));
+  // Undo history is large and only useful while a game is live, so it isn't saved.
+  fs.writeFileSync(tmp, JSON.stringify([...rooms.rooms.values()], (k, v) => (k === 'history' ? [] : v)));
   fs.renameSync(tmp, storeFile);
 }
 load();
