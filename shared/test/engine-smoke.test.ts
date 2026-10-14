@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { CUBE, getCard } from '../src/cube.ts';
-import { activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameState, isValidTarget, moveCard, spellAbility, targetSpecs, type TargetRef } from '../src/index.ts';
+import { activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameState, isValidTarget, moveCard, spellAbility, SYNTH_BASE, targetSpecs, type TargetRef } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
 function board(cardId: string, seed: number) {
@@ -39,6 +39,7 @@ function drain(g: GameState, ctx: Ctx) {
 it('smoke: every cube spell and ability resolves without throwing', () => {
   const errors: string[] = [];
   let n = 0;
+  let synth = 0, fromHand = 0;
   for (const card of CUBE.cards) {
     for (let face = 0; face < 2; face++) {
       const sp = spellAbility(card.id, face);
@@ -64,7 +65,9 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
       for (const ab of activatedAbilitiesOf(card.id, face)) {
         const { g, ctx } = board(card.id, 5);
         const iid = g.players[0].zones.library.concat(g.players[0].zones.hand).find((i) => g.cards[i].cardId === card.id)!;
-        moveCard(g, ctx, iid, 'battlefield', { controller: 'a' });
+        // Activation zone: battlefield, or hand / graveyard (cycling, channel ...).
+        moveCard(g, ctx, iid, ab.zone ?? 'battlefield', { controller: 'a' });
+        g.pending = []; // e.g. a shockland's "pay 2 life?" question
         g.cards[iid].transformed = face === 1;
         g.cards[iid].counters.loyalty = 20;
         try {
@@ -72,6 +75,8 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
           const err = applyAction(g, 'a', { t: 'activate', iid, text: '', ability: ab.index, targets, x: 1 }, ctx);
           if (err) continue;
           n++;
+          if (ab.index >= SYNTH_BASE) synth++;
+          if (ab.zone) fromHand++;
           drain(g, ctx);
         } catch (e) { errors.push(`${card.id}/ab${ab.index}: ${(e as Error).stack?.split('\n').slice(0, 3).join(' | ')}`); }
       }
@@ -79,4 +84,6 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
   }
   expect(errors).toEqual([]);
   expect(n).toBeGreaterThan(250);
+  expect(synth).toBeGreaterThan(25); // Equip, Cycling, Level up, Reconfigure, Crew ...
+  expect(fromHand).toBeGreaterThan(15);
 });

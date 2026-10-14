@@ -2,7 +2,8 @@
 import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
-import { abilityAt, getScript, spellAbility, targetSpecs } from './script.ts';
+import { abilityAt, abilityLine, getScript, spellAbility, targetSpecs } from './script.ts';
+import { afterActivation, checkActivation } from './keyword-play.ts';
 import { isValidTarget } from './targets.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 
@@ -93,13 +94,15 @@ function counterKind(forge: string): string {
 export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardInstance, a: ActivateAction): string | null {
   if (!c.cardId) return 'That card has no abilities';
   const face = c.transformed ? 1 : 0;
-  const line = getScript(c.cardId)?.[face]?.abilities[a.ability!];
+  const line = abilityLine(c.cardId, face, a.ability!);
   if (!line || !/^\s*AB\$/.test(line)) return 'No such ability';
   const ab = abilityAt(c.cardId, face, a.ability!);
   if (!ab) return 'No such ability';
   const src = cardName(c, ctx.lookup);
   const res = checkTargets(state, ab, undefined, a.targets ?? [], pid, c.iid, ctx, src);
   if ('error' in res) return res.error;
+  const kwErr = checkActivation(state, ctx, pid, c, ab, a.ability!, res.targets);
+  if (kwErr) return kwErr;
   const x = a.x ?? 0;
   const num = (v: string) => (v === 'X' ? x : parseInt(v, 10) || 0);
 
@@ -107,7 +110,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const cost = ab.params.Cost ?? '';
   const tokens = cost.match(/\S+<[^>]*>|\S+/g) ?? [];
   let mana = '';
-  let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false;
+  let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false, discardSelf = false;
   const counterDelta: Record<string, number> = {};
   const byHand: string[] = [];
   for (const tok of tokens) {
@@ -117,7 +120,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
     else if (tok === 'Q') untap = true;
     else if ((m = /^PayLife<(\d+|X)>$/.exec(tok))) life += num(m[1]);
     else if (/^Sac<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) sacSelf = true;
-    else if (/^Exile<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) exileSelf = true;
+    else if (/^Exile(FromGrave)?<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) exileSelf = true;
+    else if (/^Discard<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) discardSelf = true;
     else if ((m = /^(Add|Sub)Counter<(\d+|X)\/([A-Za-z0-9]+)(\/[^>]*)?>$/.exec(tok)) && !m[4]) {
       const k = counterKind(m[3]);
       counterDelta[k] = (counterDelta[k] ?? 0) + (m[1] === 'Add' ? 1 : -1) * num(m[2]);
@@ -125,6 +129,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   }
   if (tap && c.tapped) return `${src} is already tapped`;
   if (untap && !c.tapped) return `${src} is not tapped`;
+  if (discardSelf && c.zone !== 'hand') return `${src} must be in your hand`;
   for (const [k, d] of Object.entries(counterDelta)) if (d < 0 && (c.counters[k] ?? 0) < -d) return `${src} doesn't have enough ${k} counters`;
 
   // ---- pay
@@ -152,5 +157,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (byHand.length) log(state, ctx, pid, `Pay by hand: ${byHand.join(' ')}.`);
   if (sacSelf && c.zone === 'battlefield') { moveCard(state, ctx, c.iid, 'graveyard'); log(state, ctx, pid, `${me.name} sacrifices ${src}.`); }
   if (exileSelf) { moveCard(state, ctx, c.iid, 'exile'); log(state, ctx, pid, `${me.name} exiles ${src}.`); }
+  if (discardSelf && c.zone === 'hand') { moveCard(state, ctx, c.iid, 'graveyard'); log(state, ctx, pid, `${me.name} discards ${src}.`); }
+  afterActivation(state, ctx, pid, c, ab, item);
   return null;
 }

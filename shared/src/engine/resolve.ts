@@ -8,6 +8,9 @@ import type { CardInstance, GamePlayer, GameState, StackItem, Zone } from '../ga
 import { abilityAt, flatten, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
+import { KEYWORD_APIS } from './keywords.ts';
+import { answerKeywordPending, execKeywordStep } from './keyword-play.ts';
+import { answerReplacementPending, cantBeCountered, counterAmount, damagePrevented, replaceDraws, tokenMultiplier } from './replacements.ts';
 
 // ------------------------------------------------------------------ run context
 
@@ -372,7 +375,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const deathtouch = !!src && hasKeyword(src, ctx.lookup, 'Deathtouch');
       const hit: string[] = [];
       for (const iid of o.cards) { const c = onBattlefield(state, iid); if (c) { damageCard(state, ctx, r, c, n, deathtouch); hit.push(cardName(c, ctx.lookup)); } }
-      for (const pid of o.players) { player(state, pid).life -= n; hit.push(pname(state, pid)); }
+      for (const pid of o.players) {
+        const prev = damagePrevented(state, ctx.lookup, pid);
+        if (prev) { log(state, ctx, pid, `Damage to ${pname(state, pid)} is prevented (${prev}).`); continue; }
+        player(state, pid).life -= n; hit.push(pname(state, pid));
+      }
       log(state, ctx, r.controller, `${srcName} deals ${n} damage to ${hit.join(', ') || 'nothing'}.`);
       if (src && hasKeyword(src, ctx.lookup, 'Lifelink') && hit.length) {
         const gain = n * hit.length;
@@ -391,7 +398,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         if (ms.includes('unknown')) return bad();
         cs.forEach((c, k) => { if (ms[k]) { damageCard(state, ctx, r, c, n, false); hit.push(cardName(c, ctx.lookup)); } });
       }
-      if (p.ValidPlayers) for (const pl of state.players) if (!pl.conceded && matchPlayer(pl.pid, p.ValidPlayers, E) !== false) { pl.life -= n; hit.push(pl.name); }
+      if (p.ValidPlayers) for (const pl of state.players) if (!pl.conceded && matchPlayer(pl.pid, p.ValidPlayers, E) !== false && !damagePrevented(state, ctx.lookup, pl.pid)) { pl.life -= n; hit.push(pl.name); }
       log(state, ctx, r.controller, `${r.sourceName} deals ${n} damage to ${hit.join(', ') || 'nothing'}.`);
       return 'ok';
     }
@@ -400,7 +407,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const o = objects(state, r, i, 'You');
       if (n == null || !o) return bad();
       for (const pid of o.players) {
-        const got = drawCards(state, player(state, pid), n);
+        const got = drawCards(state, player(state, pid), replaceDraws(state, ctx, pid, n));
         log(state, ctx, pid, `${pname(state, pid)} draws ${got} card${got === 1 ? '' : 's'}.`);
       }
       return 'ok';
@@ -534,14 +541,15 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const token = SCRIPTS.tokens[script];
         if (!token) continue;
         for (const owner of owners) {
-          for (let k = 0; k < n; k++) {
+          const count = n * tokenMultiplier(state, ctx, owner);
+          for (let k = 0; k < count; k++) {
             const inst = newInstance(state, ctx.rng, owner, 'battlefield', undefined, token);
             inst.tapped = p.TokenTapped === 'True';
             inst.summoningSick = true;
             state.battlefield.push(inst.iid);
             made.push(inst.iid);
           }
-          log(state, ctx, owner, `${pname(state, owner)} creates ${n} ${token.name}${token.power != null ? ` ${token.power}/${token.toughness}` : ''} token${n === 1 ? '' : 's'}.`);
+          log(state, ctx, owner, `${pname(state, owner)} creates ${count} ${token.name}${token.power != null ? ` ${token.power}/${token.toughness}` : ''} token${count === 1 ? '' : 's'}.`);
         }
       }
       remember(made);
@@ -566,8 +574,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const iid of o.cards) {
         const c = state.cards[iid];
         if (!c) continue;
-        c.counters[kind] = (c.counters[kind] ?? 0) + n;
-        log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gets ${n} ${kind} counter${n === 1 ? '' : 's'} (now ${c.counters[kind]}).`);
+        const m = counterAmount(state, ctx, c, kind, n);
+        c.counters[kind] = (c.counters[kind] ?? 0) + m;
+        log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gets ${m} ${kind} counter${m === 1 ? '' : 's'} (now ${c.counters[kind]}).`);
       }
       for (const pid of o.players) {
         const pl = player(state, pid);
@@ -595,6 +604,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const ref of refs) {
         const item = ref.kind === 'stack' ? state.stack.find((s) => s.id === ref.id) : ref.kind === 'card' ? state.stack.find((s) => s.iid === ref.iid) : undefined;
         if (!item) continue;
+        const uncounterable = cantBeCountered(state, ctx, item);
+        if (uncounterable) { log(state, ctx, r.controller, `${item.text} can't be countered — ${uncounterable}`); continue; }
         if (p.UnlessCost) {
           const x = amount(state, ctx, r, 'X', 0) ?? 0;
           const cost = manaString(p.UnlessCost, x);
@@ -804,6 +815,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       return 'ok';
     }
   }
+  if (KEYWORD_APIS.has(step.api)) { execKeywordStep(state, ctx, step, r); return 'ok'; }
   return bad();
 }
 
@@ -902,6 +914,9 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (pend.pid !== pid) return 'That question is for another player';
   if (!pend.options.some((o) => o.value === value)) return 'Not one of the options';
   state.pending = state.pending.filter((p) => p !== pend);
+  let ext = answerReplacementPending(state, ctx, pend, value);
+  if (ext === undefined) ext = answerKeywordPending(state, ctx, pend, value);
+  if (ext !== undefined) return ext;
   const data = pend.data as unknown as PickData | UnlessData;
   const who = player(state, pid);
   if (data.kind === 'unless') {

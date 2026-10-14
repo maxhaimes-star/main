@@ -103,7 +103,25 @@ export function resetPermanentState(inst: CardInstance) {
   inst.tempKeywords = undefined;
 }
 
-export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: { position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean; controller?: string } = {}) {
+export interface MoveOpts { position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean; controller?: string }
+
+/**
+ * Zone-change replacement hook, installed by engine/replacements.ts (R: lines such as "enters tapped",
+ * "exile it instead"). `before` may change the destination / options and return work to do after the move.
+ */
+export const moveHooks: {
+  before?: (state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts) => { to: Zone; opts: MoveOpts; after?: () => void } | undefined;
+} = {};
+
+/** Move a card between zones, applying replacement effects (see moveHooks). */
+export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts = {}) {
+  const r = state.cards[iid] ? moveHooks.before?.(state, ctx, iid, to, opts) : undefined;
+  moveCardRaw(state, ctx, iid, r?.to ?? to, r?.opts ?? opts);
+  r?.after?.();
+}
+
+/** Move a card between zones without replacement effects. */
+export function moveCardRaw(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts = {}) {
   const inst = state.cards[iid];
   const from = inst.zone;
   detach(state, inst);

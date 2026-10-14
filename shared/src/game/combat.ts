@@ -1,5 +1,6 @@
 import type { CombatProposal, GameState } from './types.ts';
 import { cardName, effectivePT, faceOf, hasKeyword, type Lookup } from './rules.ts';
+import { damagePrevented } from '../engine/replacements.ts';
 
 /**
  * Computes combat damage for the current attackers/blockers, including first strike,
@@ -42,6 +43,8 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
       if (hasKeyword(s, lookup, 'Deathtouch') && !isPW(target)) deathtouched.add(target);
     } else {
       const pl = state.players.find((p) => p.pid === target);
+      const prevented = damagePrevented(state, lookup, target);
+      if (prevented) { lines.push(`${name}'s damage to ${pl?.name ?? 'player'} is prevented (${prevented})`); return; }
       if (infect) {
         poison[target] = (poison[target] ?? 0) + amount;
         lines.push(`${name} gives ${pl?.name ?? 'player'} ${amount} poison`);

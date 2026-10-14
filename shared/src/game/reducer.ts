@@ -4,6 +4,8 @@ import { computeCombat } from './combat.ts';
 import { cardName, effectivePT, faceOf, hasKeyword, isCreature, type Lookup, payFromPool } from './rules.ts';
 import { activateAuto, prepareCast } from '../engine/play.ts';
 import { answerPending, resolveAuto, resumeAuto } from '../engine/resolve.ts';
+import { skipsStep, untapPrevented } from '../engine/replacements.ts';
+import { wardReminders } from '../engine/keyword-play.ts';
 import {
   type Ctx, detach, drawCards, log, moveCard, newInstance, player, randomId, shuffleLibrary,
 } from './state.ts';
@@ -146,7 +148,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       for (const id of state.battlefield) {
         const c = state.cards[id];
         if (c.controller !== state.activePlayer) continue;
-        if (!c.noUntap) c.tapped = false;
+        if (!c.noUntap && !untapPrevented(state, ctx, c)) c.tapped = false;
         c.summoningSick = false;
       }
       // No priority in untap: go straight to upkeep.
@@ -154,8 +156,11 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       return;
     }
     case 'draw': {
+      const skip = skipsStep(state, ctx, active.pid, 'draw');
       if (state.turn === 1 && state.activePlayer === state.startingPlayer && state.players.length === 2) {
         log(state, ctx, active.pid, `${active.name} skips the first draw.`);
+      } else if (skip) {
+        log(state, ctx, active.pid, `${active.name} skips their draw step (${skip}).`);
       } else if (drawCards(state, active, 1) === 0) {
         log(state, ctx, active.pid, `${active.name} can't draw — library is empty!`);
       } else {
@@ -568,6 +573,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       const fromText = from === 'hand' ? '' : ` from ${from === 'library' ? 'the top of their library' : ZONE_LABEL[from]}`;
       const tnames = prep.auto?.targets.flat().map((t) => t.kind === 'player' ? player(state, t.pid).name : t.kind === 'card' ? cardName(state.cards[t.iid], ctx.lookup) : state.stack.find((s) => s.id === t.id)?.text ?? 'a spell') ?? [];
       log(state, ctx, pid, `${name} casts ${a.faceDown ? 'a face-down spell' : face.name}${a.x != null ? ` (X=${a.x})` : ''}${fromText}${tnames.length ? ` targeting ${tnames.join(', ')}` : ''}${paid}.`);
+      if (prep.auto) wardReminders(state, ctx, pid, prep.auto.targets);
       giveResponse(state, pid);
       return null;
     }

@@ -3,7 +3,8 @@
  * and "can the engine run this" checks.
  */
 import data from '../../data/scripts.json' with { type: 'json' };
-import type { ForgeFace, ParsedAbility, ScriptData, TargetSpec } from './types.ts';
+import { type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
+import { KEYWORD_APIS, synthAbilities, synthLine } from './keywords.ts';
 
 export const SCRIPTS = data as unknown as ScriptData;
 
@@ -65,20 +66,22 @@ export function parseAbility(line: string, svars: Record<string, string>, cardNa
 
 const cache = new Map<string, ParsedAbility | null>();
 
-/** Parsed A: line `index` of a face; -1 = synthesized aura spell (from K:Enchant). */
+/** Raw ability line for an index: A: line, -1 = aura spell (K:Enchant), >= SYNTH_BASE = keyword ability (keywords.ts). */
+export function abilityLine(cardId: string, face: number, index: number): string | undefined {
+  const f = getScript(cardId)?.[face];
+  if (!f) return undefined;
+  if (index === -1) return auraLine(f);
+  if (index >= SYNTH_BASE) return synthLine(f, index);
+  return f.abilities[index];
+}
+
+/** Parsed A: line `index` of a face; -1 = synthesized aura spell (from K:Enchant); >= SYNTH_BASE = keyword ability. */
 export function abilityAt(cardId: string, face: number, index: number): ParsedAbility | undefined {
   const key = `${cardId}|${face}|${index}`;
   if (cache.has(key)) return cache.get(key) ?? undefined;
   const f = getScript(cardId)?.[face];
-  let ab: ParsedAbility | undefined;
-  if (f) {
-    if (index === -1) {
-      const line = auraLine(f);
-      ab = line ? parseAbility(line, f.svars, f.name) : undefined;
-    } else if (f.abilities[index] != null) {
-      ab = parseAbility(f.abilities[index], f.svars, f.name);
-    }
-  }
+  const line = abilityLine(cardId, face, index);
+  const ab = f && line != null ? parseAbility(line, f.svars, f.name) : undefined;
   cache.set(key, ab ?? null);
   return ab;
 }
@@ -115,18 +118,36 @@ export function loyaltyOf(cost: string): number | undefined {
   return undefined;
 }
 
-export function activatedAbilitiesOf(cardId: string, face: number): { index: number; ability: ParsedAbility; cost: string; loyalty?: number }[] {
+export interface ActivatedEntry {
+  index: number;
+  ability: ParsedAbility;
+  cost: string;
+  loyalty?: number;
+  /** Zone the source must be in to activate (ActivationZone$); absent = battlefield. */
+  zone?: 'hand' | 'graveyard' | 'exile';
+  /** Keyword this ability was synthesized from (index >= SYNTH_BASE), e.g. "Equip", "Cycling". */
+  keyword?: string;
+}
+
+/** AB$ abilities (no mana abilities), then keyword-granted ones (Equip, Cycling, Crew ... see keywords.ts). */
+export function activatedAbilitiesOf(cardId: string, face: number): ActivatedEntry[] {
   const f = getScript(cardId)?.[face];
   if (!f) return [];
-  const out: { index: number; ability: ParsedAbility; cost: string; loyalty?: number }[] = [];
-  f.abilities.forEach((line, index) => {
-    if (!/^\s*AB\$/.test(line)) return;
+  const out: ActivatedEntry[] = [];
+  const push = (index: number, keyword?: string) => {
     const ability = abilityAt(cardId, face, index);
     if (!ability || MANA_APIS.has(ability.api)) return;
     const cost = ability.params.Cost ?? '';
+    const e: ActivatedEntry = { index, ability, cost };
     const loyalty = loyaltyOf(cost);
-    out.push(loyalty != null ? { index, ability, cost, loyalty } : { index, ability, cost });
-  });
+    if (loyalty != null) e.loyalty = loyalty;
+    const z = ability.params.ActivationZone?.trim().toLowerCase();
+    if (z === 'hand' || z === 'graveyard' || z === 'exile') e.zone = z;
+    if (keyword) e.keyword = keyword;
+    out.push(e);
+  };
+  f.abilities.forEach((line, index) => { if (/^\s*AB\$/.test(line)) push(index); });
+  for (const s of synthAbilities(f)) push(s.index, s.keyword);
   return out;
 }
 
@@ -234,7 +255,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   const p = step.params;
   const api = step.api;
   if (api === 'Effect' && p.AILogic === 'CantRegenerate') return null; // regeneration isn't modelled: no-op
-  if (!SUPPORTED_APIS.has(api)) return api;
+  if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api)) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;
   if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined)) return `${api} (Defined$ ${p.Defined})`;
   if (p.UnlessCost && api !== 'Counter') return `${api} (UnlessCost)`;

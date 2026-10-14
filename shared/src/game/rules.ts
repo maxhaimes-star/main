@@ -85,7 +85,11 @@ function num(v: string | undefined): number {
 
 export function isCreature(inst: CardInstance, lookup: Lookup): boolean {
   if (inst.faceDown) return true; // morph / manifest / disguise
-  return faceOf(inst, lookup).types.includes('Creature') || (inst.counters['animated'] ?? 0) > 0;
+  const f = faceOf(inst, lookup);
+  // Reconfigure: an Equipment creature attached to something isn't a creature.
+  if (inst.attachedTo && f.types.includes('Creature') && /\bEquipment\b/.test(f.typeLine)) return false;
+  // 'Crewed': a Vehicle crewed this turn (engine/keyword-play.ts).
+  return f.types.includes('Creature') || (inst.counters['animated'] ?? 0) > 0 || !!inst.tempKeywords?.includes('Crewed');
 }
 
 /** Power / toughness including counters and manual modifiers. */

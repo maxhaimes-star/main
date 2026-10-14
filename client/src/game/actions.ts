@@ -175,7 +175,7 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     if (mana.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: mana.map((m) => ({ label: m.split('').map((x) => `{${x}}`).join(''), onClick: () => act({ t: 'tapForMana', iid, mana: m }) })) });
     }
-    const scripted = safeActivated(c.cardId, c.transformed ? 1 : 0);
+    const scripted = safeActivated(c.cardId, c.transformed ? 1 : 0).filter((e) => !e.zone);
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({
       label: `[${l.cost > 0 ? '+' : ''}${l.cost}] ${l.text.slice(0, 70)}${l.text.length > 70 ? '…' : ''}`,
       onClick: async () => {
@@ -278,12 +278,18 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
         if (safeSpell(c.cardId, 0)) items.push({ label: 'Cast (resolve by hand)', onClick: () => castWithX(base, iid, undefined, true) });
       }
     }
+    // Abilities activated from this zone (cycling, channel, ninjutsu, graveyard abilities).
+    const fromZone = c.owner === me ? safeActivated(c.cardId, 0).filter((e) => e.zone === c.zone) : [];
+    for (const e of fromZone) {
+      const desc = e.ability.description || e.ability.api;
+      items.push({ label: short(desc, 70), hint: autoStatus(e.ability) === 'auto' ? '⚡' : undefined, onClick: () => activateScripted(base, iid, c, e, desc) });
+    }
     if (c.zone === 'hand' && mine) {
       items.push({ label: 'Cast face down (morph/disguise)', onClick: () => act({ t: 'cast', iid, faceDown: true }) });
       items.push({ label: 'Reveal', onClick: () => act({ t: 'reveal', iid }) });
       items.push({ label: 'Discard', onClick: () => act({ t: 'move', iid, to: 'graveyard' }) });
       const cyc = /cycling \{/i.test(face.oracle);
-      if (cyc) items.push({ label: 'Cycle (discard, draw)', onClick: async () => { await act({ t: 'move', iid, to: 'graveyard' }); act({ t: 'draw', n: 1 }); } });
+      if (cyc && !fromZone.some((e) => /Cycling/.test(e.keyword ?? ''))) items.push({ label: 'Cycle (discard, draw)', onClick: async () => { await act({ t: 'move', iid, to: 'graveyard' }); act({ t: 'draw', n: 1 }); } });
     }
     items.push({ label: 'Move', sub: moveItems(base, iid, c) });
     return items;

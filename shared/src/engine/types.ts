@@ -92,7 +92,17 @@ export interface AutoInfo {
   modes?: string[];
   /** Zone each targeted card was in when chosen, to detect illegal targets on resolution. */
   targetZones?: Record<string, string>;
+  /** Keyword-ability data recorded at activation (e.g. Ninjutsu: `attacking` = what the returned creature attacked). */
+  extra?: Record<string, string>;
 }
+
+/**
+ * Keyword-granted (synthesized) activated abilities — Equip, Reconfigure, Cycling, typecycling, Level up,
+ * Crew, Ninjutsu — get ability indexes that never collide with A: line indexes:
+ *   index = SYNTH_BASE + 10 * (index of the K: line in face.keywords) + variant
+ * (variant 0 = the main ability; Reconfigure's "unattach" is variant 1). See engine/keywords.ts.
+ */
+export const SYNTH_BASE = 1000;
 
 /** A question the engine needs a player to answer (e.g. "Pay {3}?" for Mana Leak). */
 export interface Pending {
