@@ -69,6 +69,8 @@ export function viewFor(state: GameState, viewer: string | null): GameView {
       viewingHandOf: p.viewingHandOf,
     };
   });
-  const { history, cards: _c, players: _p, ...rest } = state;
-  return { ...rest, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
+  const { history, cards: _c, players: _p, pending, ...rest } = state;
+  // Engine questions: only the answering player sees the options (they may name hidden cards); internal data never leaves the server.
+  const pendingView = (pending ?? []).map((q) => ({ ...q, options: q.pid === viewer ? q.options : [], data: {} }));
+  return { ...rest, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
 }

@@ -42,6 +42,13 @@ export interface ParsedAbility {
   sub?: ParsedAbility;
   /** Human text (SpellDescription$ / StackDescription$), CARDNAME replaced. */
   description: string;
+  /** Charm only: the modes (Choices$ SVars), parsed. Pick with `cast.modes` (SVar names). */
+  choices?: { name: string; ability: ParsedAbility }[];
+  /** Charm only: how many modes to choose (CharmNum$ / MinCharmNum$). */
+  charmMin?: number;
+  charmMax?: number;
+  /** The face's SVars (for variables like X). */
+  svars?: Record<string, string>;
 }
 
 /** What a player can pick as a target. */
@@ -65,6 +72,8 @@ export interface TargetSpec {
   players: boolean;
   /** Can target cards/permanents/spells. */
   cards: boolean;
+  /** Raw Forge TargetType$ (e.g. "Spell", "Activated,Triggered") when the targets are on the stack. */
+  targetType?: string;
 }
 
 /** Attached to a stack item that the engine will resolve automatically. */
@@ -94,4 +103,19 @@ export interface Pending {
   options: { value: string; label: string }[];
   /** Engine-internal continuation data. */
   data: Record<string, unknown>;
+}
+
+/** Last-known information about a targeted / remembered card (taken before it moves). */
+export interface Lki { power: number; toughness: number; mv: number; controller: string; owner: string; name: string }
+
+/**
+ * Engine-internal continuation: an automated resolution paused for a player decision
+ * (a Pending answer or a library peek) and resumes from step `next`.
+ */
+export interface AutoCont {
+  item: import('../game/types.ts').StackItem;
+  next: number;
+  targets: TargetRef[][];
+  lki: Record<string, Lki>;
+  remembered: string[];
 }

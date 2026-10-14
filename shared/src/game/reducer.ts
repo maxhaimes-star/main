@@ -2,12 +2,18 @@ import { basicLandCard, type CardData, type Color, type TokenData } from '../car
 import type { Rng } from '../draft.ts';
 import { computeCombat } from './combat.ts';
 import { cardName, effectivePT, faceOf, hasKeyword, isCreature, type Lookup, payFromPool } from './rules.ts';
+import { activateAuto, prepareCast } from '../engine/play.ts';
+import { answerPending, resolveAuto, resumeAuto } from '../engine/resolve.ts';
+import {
+  type Ctx, detach, drawCards, log, moveCard, newInstance, player, randomId, shuffleLibrary,
+} from './state.ts';
 import {
   type CardInstance, type GameAction, type GamePlayer, type GameState, type PlayerZone, type StackItem, type Step,
   type Zone, PLAYER_ZONES, STEPS,
 } from './types.ts';
 
-export interface Ctx { rng: Rng; lookup: Lookup; now: number }
+export type { Ctx } from './state.ts';
+export { moveCard, player } from './state.ts';
 
 export interface GameSeat { pid: string; name: string; deck: string[]; side: string[] }
 
@@ -22,23 +28,6 @@ export function withBasics(lookup: (id: string) => CardData | undefined): Lookup
   const basics: Record<string, CardData> = {};
   for (const c of ['W', 'U', 'B', 'R', 'G'] as Color[]) { const b = basicLandCard(c); basics[b.id] = b; }
   return (id) => basics[id] ?? lookup(id);
-}
-
-function randomId(rng: Rng): string {
-  let s = '';
-  for (let i = 0; i < 10; i++) s += 'abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(rng() * 36)];
-  return s;
-}
-
-function newInstance(state: GameState, rng: Rng, owner: string, zone: Zone, cardId?: string, token?: TokenData): CardInstance {
-  let iid = randomId(rng);
-  while (state.cards[iid]) iid = randomId(rng);
-  const inst: CardInstance = {
-    iid, cardId, token, owner, controller: owner, zone, tapped: false, faceDown: false, transformed: false,
-    counters: {}, damage: 0, tempPT: [0, 0], permPT: [0, 0], summoningSick: false, noUntap: false, revealedTo: [],
-  };
-  state.cards[iid] = inst;
-  return inst;
 }
 
 export function createGame(id: string, seats: GameSeat[], startingPlayer: string, ctx: Ctx): GameState {
@@ -83,12 +72,6 @@ export function createGame(id: string, seats: GameSeat[], startingPlayer: string
 
 // ------------------------------------------------------------------ helpers
 
-export function player(state: GameState, pid: string): GamePlayer {
-  const p = state.players.find((x) => x.pid === pid);
-  if (!p) throw new Error('Unknown player');
-  return p;
-}
-
 function others(state: GameState, pid: string): GamePlayer[] {
   return state.players.filter((p) => p.pid !== pid && !p.conceded);
 }
@@ -99,121 +82,6 @@ function nextPlayer(state: GameState, pid: string): string {
   return live[(i + 1) % live.length].pid;
 }
 
-function log(state: GameState, ctx: Ctx, pid: string | null, text: string) {
-  state.log.push({ at: ctx.now, pid, text });
-  if (state.log.length > 400) state.log.splice(0, state.log.length - 400);
-}
-
-function shuffleLibrary(state: GameState, p: GamePlayer, rng: Rng) {
-  const lib = p.zones.library;
-  for (let i = lib.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [lib[i], lib[j]] = [lib[j], lib[i]];
-  }
-  // Re-key so nobody can follow a card through the shuffle.
-  p.zones.library = lib.map((old) => {
-    const inst = state.cards[old];
-    delete state.cards[old];
-    let iid = randomId(rng);
-    while (state.cards[iid]) iid = randomId(rng);
-    inst.iid = iid;
-    inst.revealedTo = [];
-    state.cards[iid] = inst;
-    return iid;
-  });
-  if (p.peek) p.peek = null;
-}
-
-function drawCards(state: GameState, p: GamePlayer, n: number): number {
-  let drawn = 0;
-  for (let i = 0; i < n; i++) {
-    const iid = p.zones.library.shift();
-    if (!iid) break;
-    const c = state.cards[iid];
-    c.zone = 'hand';
-    c.revealedTo = [];
-    p.zones.hand.push(iid);
-    drawn++;
-  }
-  return drawn;
-}
-
-/** Remove a card from wherever it currently is. */
-function detach(state: GameState, inst: CardInstance) {
-  if (inst.zone === 'battlefield') {
-    state.battlefield = state.battlefield.filter((x) => x !== inst.iid);
-    for (const other of state.battlefield) {
-      const o = state.cards[other];
-      if (o.attachedTo === inst.iid) o.attachedTo = undefined;
-      if (o.blocking === inst.iid) o.blocking = undefined;
-      if (o.attacking === inst.iid) o.attacking = undefined;
-    }
-  } else if (inst.zone === 'stack') {
-    state.stack = state.stack.filter((s) => s.iid !== inst.iid);
-  } else {
-    const owner = player(state, inst.owner);
-    const z = owner.zones[inst.zone as PlayerZone];
-    const i = z.indexOf(inst.iid);
-    if (i >= 0) z.splice(i, 1);
-  }
-}
-
-function resetPermanentState(inst: CardInstance) {
-  inst.tapped = false;
-  inst.counters = {};
-  inst.damage = 0;
-  inst.tempPT = [0, 0];
-  inst.permPT = [0, 0];
-  inst.attachedTo = undefined;
-  inst.attacking = undefined;
-  inst.blocking = undefined;
-  inst.summoningSick = false;
-  inst.noUntap = false;
-  inst.note = undefined;
-}
-
-export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: { position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean; controller?: string } = {}) {
-  const inst = state.cards[iid];
-  const from = inst.zone;
-  detach(state, inst);
-  // Tokens and copies cease to exist outside the battlefield/stack.
-  if (inst.token && to !== 'battlefield' && to !== 'stack') {
-    delete state.cards[iid];
-    return;
-  }
-  if (from === 'battlefield' || to !== 'battlefield') {
-    if (from === 'battlefield') resetPermanentState(inst);
-  }
-  if (to !== 'battlefield') {
-    inst.controller = inst.owner;
-    inst.transformed = false;
-    inst.castAs = to === 'exile' ? inst.castAs : undefined;
-    inst.faceDown = !!opts.faceDown;
-  }
-  inst.revealedTo = [];
-  inst.zone = to;
-  if (to === 'battlefield') {
-    if (from !== 'battlefield') {
-      inst.summoningSick = true;
-      inst.faceDown = !!opts.faceDown;
-      inst.castAs = undefined;
-      if (opts.controller) inst.controller = opts.controller;
-      const face = faceOf(inst, ctx.lookup);
-      if (face.loyalty && !inst.faceDown) inst.counters.loyalty = parseInt(face.loyalty, 10) || 0;
-    }
-    inst.tapped = !!opts.tapped;
-    state.battlefield.push(iid);
-  } else if (to === 'stack') {
-    // caller pushes the stack item
-  } else {
-    const owner = player(state, inst.owner);
-    const z = owner.zones[to as PlayerZone];
-    if (opts.position === 'bottom') z.push(iid);
-    else if (typeof opts.position === 'number') z.splice(opts.position, 0, iid);
-    else if (to === 'library' || opts.position === 'top') z.unshift(iid);
-    else z.push(iid);
-  }
-}
 
 function isPublicZone(z: Zone) {
   return z === 'battlefield' || z === 'graveyard' || z === 'exile' || z === 'stack' || z === 'command';
@@ -324,7 +192,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       break;
     }
     case 'cleanup': {
-      for (const id of state.battlefield) { const c = state.cards[id]; c.damage = 0; c.tempPT = [0, 0]; }
+      for (const id of state.battlefield) { const c = state.cards[id]; c.damage = 0; c.tempPT = [0, 0]; c.tempKeywords = undefined; }
       for (const p of state.players) for (const id of p.zones.hand) state.cards[id].revealedTo = [];
       for (const p of state.players) p.viewingHandOf = null;
       if (active.zones.hand.length > 7) log(state, ctx, active.pid, `${active.name} has ${active.zones.hand.length} cards — discard down to 7.`);
@@ -349,7 +217,7 @@ function advanceStep(state: GameState, ctx: Ctx) {
 
 /** Auto-pass for players without a stop, so the game flows like MTGO. */
 function settle(state: GameState, ctx: Ctx) {
-  for (let guard = 0; guard < 60 && state.phase === 'playing'; guard++) {
+  for (let guard = 0; guard < 60 && state.phase === 'playing' && !state.pending.length; guard++) {
     const pid = state.priority;
     const p = player(state, pid);
     if (p.conceded) { passPriority(state, ctx, pid); continue; }
@@ -364,6 +232,7 @@ function settle(state: GameState, ctx: Ctx) {
 }
 
 function passPriority(state: GameState, ctx: Ctx, pid: string) {
+  if (state.pending.length) return; // waiting on an engine question
   if (!state.passed.includes(pid)) state.passed.push(pid);
   const live = state.players.filter((p) => !p.conceded);
   if (live.every((p) => state.passed.includes(p.pid))) {
@@ -385,34 +254,47 @@ function giveResponse(state: GameState, actor: string) {
   if (state.priority === actor) state.passed = [];
 }
 
+function isPermanentSpell(inst: CardInstance, ctx: Ctx): boolean {
+  const face = faceOf(inst, ctx.lookup);
+  return face.types.some((t) => ['Artifact', 'Creature', 'Enchantment', 'Land', 'Planeswalker', 'Battle'].includes(t)) || inst.faceDown;
+}
+
+/** Put a resolving spell card where it goes: battlefield (permanents), exile (adventures) or graveyard. */
+function finishSpell(state: GameState, ctx: Ctx, item: StackItem, quiet: boolean) {
+  const inst = state.cards[item.iid!];
+  const face = faceOf(inst, ctx.lookup);
+  const permanent = isPermanentSpell(inst, ctx);
+  const card = inst.cardId ? ctx.lookup(inst.cardId) : undefined;
+  const onAdventure = !!inst.castAs && card?.layout === 'adventure' && inst.castAs !== card.faces?.[0].name;
+  if (onAdventure) {
+    moveCard(state, ctx, item.iid!, 'exile');
+    if (!quiet) log(state, ctx, item.controller, `${face.name} resolves (card goes on an adventure in exile).`);
+    else log(state, ctx, item.controller, `${face.name} goes on an adventure in exile.`);
+  } else if (permanent) {
+    const transformed = inst.transformed;
+    moveCard(state, ctx, item.iid!, 'battlefield', { controller: item.controller, faceDown: inst.faceDown });
+    inst.transformed = transformed;
+    if (transformed) { const f = faceOf(inst, ctx.lookup); if (f.loyalty) inst.counters.loyalty = parseInt(f.loyalty, 10) || 0; }
+    if (item.x && /\{X\}/.test(face.manaCost) && face.types.includes('Creature') && /ravenous|enters with X/i.test(face.oracle)) {
+      inst.counters['+1/+1'] = item.x;
+    }
+    if (!quiet) log(state, ctx, item.controller, `${face.name} resolves.`);
+  } else {
+    moveCard(state, ctx, item.iid!, 'graveyard');
+    if (!quiet) log(state, ctx, item.controller, `${face.name} resolves.`);
+  }
+}
+
 function resolveTop(state: GameState, ctx: Ctx) {
   const item = state.stack[state.stack.length - 1];
   if (!item) return;
-  if (!item.iid || !state.cards[item.iid]) state.stack.pop();
-  if (item.iid && state.cards[item.iid]) {
-    const inst = state.cards[item.iid];
-    const face = faceOf(inst, ctx.lookup);
-    const permanent = face.types.some((t) => ['Artifact', 'Creature', 'Enchantment', 'Land', 'Planeswalker', 'Battle'].includes(t)) || inst.faceDown;
-    const card = inst.cardId ? ctx.lookup(inst.cardId) : undefined;
-    const onAdventure = !!inst.castAs && card?.layout === 'adventure' && inst.castAs !== card.faces?.[0].name;
-    if (onAdventure) {
-      moveCard(state, ctx, item.iid, 'exile');
-      log(state, ctx, item.controller, `${face.name} resolves (card goes on an adventure in exile).`);
-    } else if (permanent) {
-      const transformed = inst.transformed;
-      moveCard(state, ctx, item.iid, 'battlefield', { controller: item.controller, faceDown: inst.faceDown });
-      inst.transformed = transformed;
-      if (transformed) { const f = faceOf(inst, ctx.lookup); if (f.loyalty) inst.counters.loyalty = parseInt(f.loyalty, 10) || 0; }
-      if (item.x && /\{X\}/.test(face.manaCost) && face.types.includes('Creature') && /ravenous|enters with X/i.test(face.oracle)) {
-        inst.counters['+1/+1'] = item.x;
-      }
-      log(state, ctx, item.controller, `${face.name} resolves.`);
-    } else {
-      moveCard(state, ctx, item.iid, 'graveyard');
-      log(state, ctx, item.controller, `${face.name} resolves.`);
-    }
+  if (item.auto) {
+    const inst = item.iid ? state.cards[item.iid] : undefined;
+    resolveAuto(state, ctx, item, !!inst && isPermanentSpell(inst, ctx), () => finishSpell(state, ctx, item, true));
   } else {
-    log(state, ctx, item.controller, `Resolved: ${item.text}`);
+    if (!item.iid || !state.cards[item.iid]) state.stack.pop();
+    if (item.iid && state.cards[item.iid]) finishSpell(state, ctx, item, false);
+    else log(state, ctx, item.controller, `Resolved: ${item.text}`);
   }
   state.passed = [];
   state.priority = state.activePlayer;
@@ -510,6 +392,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     case 'pass': {
       if (state.phase !== 'playing') return 'Game has not started';
       if (state.priority !== pid) return "You don't have priority";
+      if (state.pending.length) return `Waiting for ${player(state, state.pending[0].pid).name}: ${state.pending[0].prompt}`;
       if (state.step === 'attackers' && state.activePlayer === pid && !state.combat.attackersDeclared) confirmAttackers(state, ctx);
       if (state.step === 'blockers' && state.activePlayer !== pid && !state.combat.blockersDeclared) confirmBlockers(state, ctx, pid);
       if (state.step === 'damage' && state.combat.proposal && !state.combat.proposal.confirmed.includes(pid)) state.combat.proposal.confirmed.push(pid);
@@ -586,6 +469,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!all.every((i) => allowed.has(i))) return 'Those cards are not available';
       if (new Set(all).size !== all.length) return 'A card was chosen twice';
       const mode = me.peek.mode;
+      const then = me.peek.then;
       me.peek = null;
       for (const iid of all) detach(state, state.cards[iid]);
       const place = (iid: string, to: Zone, position?: 'top' | 'bottom') => {
@@ -608,6 +492,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (r.exile.length) parts.push(`${r.exile.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')} to exile`);
       if (r.shuffle || mode === 'search') shuffleLibrary(state, me, ctx.rng);
       log(state, ctx, pid, `${name} puts ${parts.join(', ') || 'everything back'}${r.shuffle || mode === 'search' ? ' and shuffles' : ''}.`);
+      if (then) resumeAuto(state, ctx, then);
       return null;
     }
     case 'revealTop': {
@@ -645,6 +530,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!c) return 'No such card';
       if (!canTouch(state, pid, c)) return "You can't cast that card";
       if (c.zone === 'battlefield' || c.zone === 'stack') return 'That card is already in play';
+      const prep = prepareCast(state, c, pid, a, ctx);
+      if (prep.error) return prep.error;
       const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
       const from = c.zone;
       detach(state, c);
@@ -676,15 +563,24 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         if (res) me.manaPool = res.pool;
       }
       const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid: c.iid, controller: pid, text: a.faceDown ? 'Face-down spell' : face.name, x: a.x };
+      if (prep.auto) item.auto = prep.auto;
       state.stack.push(item);
       const fromText = from === 'hand' ? '' : ` from ${from === 'library' ? 'the top of their library' : ZONE_LABEL[from]}`;
-      log(state, ctx, pid, `${name} casts ${a.faceDown ? 'a face-down spell' : face.name}${a.x != null ? ` (X=${a.x})` : ''}${fromText}${paid}.`);
+      const tnames = prep.auto?.targets.flat().map((t) => t.kind === 'player' ? player(state, t.pid).name : t.kind === 'card' ? cardName(state.cards[t.iid], ctx.lookup) : state.stack.find((s) => s.id === t.id)?.text ?? 'a spell') ?? [];
+      log(state, ctx, pid, `${name} casts ${a.faceDown ? 'a face-down spell' : face.name}${a.x != null ? ` (X=${a.x})` : ''}${fromText}${tnames.length ? ` targeting ${tnames.join(', ')}` : ''}${paid}.`);
       giveResponse(state, pid);
       return null;
     }
     case 'activate': {
       const c = card(state, a.iid);
       if (!c) return 'No such card';
+      if (a.ability != null) {
+        if (!canTouch(state, pid, c) || (c.zone === 'battlefield' && c.controller !== pid)) return "You don't control that card";
+        const err = activateAuto(state, ctx, pid, c, a);
+        if (err) return err;
+        giveResponse(state, pid);
+        return null;
+      }
       if (a.loyalty != null) {
         c.counters.loyalty = (c.counters.loyalty ?? 0) + a.loyalty;
       }
@@ -694,6 +590,9 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (a.loyalty != null && (c.counters.loyalty ?? 0) <= 0) log(state, ctx, null, `${src} has 0 loyalty.`);
       giveResponse(state, pid);
       return null;
+    }
+    case 'choose': {
+      return answerPending(state, ctx, pid, a.id, a.value);
     }
     case 'trigger': {
       const src = a.sourceIid && state.cards[a.sourceIid] ? cardName(state.cards[a.sourceIid], ctx.lookup) : '';
@@ -705,6 +604,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
     case 'resolve': {
       if (!state.stack.length) return 'The stack is empty';
+      if (state.pending.length) return `Waiting for ${player(state, state.pending[0].pid).name}: ${state.pending[0].prompt}`;
       resolveTop(state, ctx);
       return null;
     }

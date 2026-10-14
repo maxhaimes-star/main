@@ -70,6 +70,7 @@ export function faceOf(inst: CardInstance, lookup: Lookup): Face {
 }
 
 export function hasKeyword(inst: CardInstance, lookup: Lookup, kw: string): boolean {
+  if (inst.tempKeywords?.some((k) => k.toLowerCase() === kw.toLowerCase())) return true;
   if (inst.faceDown) return false;
   const f = faceOf(inst, lookup);
   if (f.keywords.some((k) => k.toLowerCase() === kw.toLowerCase())) return true;

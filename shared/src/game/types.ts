@@ -1,5 +1,5 @@
 import type { TokenData } from '../cards.ts';
-import type { AutoInfo, Pending, TargetRef } from '../engine/types.ts';
+import type { AutoCont, AutoInfo, Pending, TargetRef } from '../engine/types.ts';
 
 export const STEPS = [
   'untap', 'upkeep', 'draw', 'main1',
@@ -88,7 +88,7 @@ export interface GamePlayer {
   /** Skip all stops until end of turn (F6). */
   passUntilEOT: boolean;
   /** Private window: top N of library or full library search. */
-  peek: null | { mode: 'scry' | 'surveil' | 'look' | 'search'; iids: string[]; label?: string };
+  peek: null | { mode: 'scry' | 'surveil' | 'look' | 'search'; iids: string[]; label?: string; then?: AutoCont };
   /** Temporary view of an opponent's hand. */
   viewingHandOf: string | null;
   conceded: boolean;
