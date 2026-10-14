@@ -319,3 +319,11 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .mode-opt.sel { border-color: var(--accent); }
 .trigger-badge { font-size: 10px; text-transform: uppercase; background: var(--accent); color: #000; border-radius: 3px; padding: 0 4px; margin-right: 4px; }
 .pending-skip { top: 44px; }
+
+/* Active effects panel */
+.active-effects { border: 1px solid var(--border, #444); border-radius: 6px; margin-bottom: 6px; font-size: 12px; }
+.ae-head { cursor: pointer; padding: 4px 8px; font-weight: 600; user-select: none; }
+.ae-list { max-height: 180px; overflow-y: auto; padding: 0 8px 6px; }
+.ae-item { padding: 3px 0; border-top: 1px solid rgba(128,128,128,.25); }
+.ae-badge { background: #8a6d1d; color: #fff; border-radius: 3px; padding: 0 4px; font-size: 10px; }
+.force-ask { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
