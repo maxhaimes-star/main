@@ -344,6 +344,7 @@ function MyTools({ p }: { p: ViewPlayer }) {
       <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
         { label: 'Untap all my permanents', onClick: () => act({ t: 'untapAll' }) },
         { label: 'Reveal my hand', onClick: () => act({ t: 'revealHand' }) },
+        { label: `Automatic triggers: ${(p as { autoTriggers?: boolean }).autoTriggers === false ? 'off (click to turn on)' : 'on (click to turn off)'}`, onClick: () => act({ t: 'setAutoTriggers', on: (p as { autoTriggers?: boolean }).autoTriggers === false } as never) },
         ...['Monarch', 'Initiative', "City's blessing", 'Day', 'Night'].map((d) => ({ label: `${p.designations.includes(d) ? 'Lose' : 'Take'} ${d}`, onClick: () => act({ t: 'designation', name: d, on: !p.designations.includes(d) }) })),
         { label: 'Put a free trigger/effect on the stack…', onClick: async () => { const t = await ctx.askText('Text'); if (t) act({ t: 'trigger', text: t }); } },
         { label: 'Concede game', onClick: () => { if (confirm('Concede this game?')) act({ t: 'concede' }); } },
@@ -484,8 +485,8 @@ function Stack() {
             onContextMenu={(e) => { if (s.iid) { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(s.iid), face?.name); } }}>
             {face ? <CardImage face={face} className="stack-img" /> : <div className="stack-ability">⚡</div>}
             <div className="stack-text">
-              <b>{s.auto && <span className="auto-badge" title="Resolved automatically">⚡ </span>}{s.text}</b>
-              <small>{g.players.find((p) => p.pid === s.controller)?.name}{s.x != null ? ` · X=${s.x}` : ''}</small>
+              <b>{s.auto && <span className="auto-badge" title="Resolved automatically">⚡ </span>}{s.kind === 'trigger' && <span className="trigger-badge">trigger</span>}{s.text}</b>
+              <small>{s.kind === 'trigger' && face ? `${face.name} · ` : ''}{g.players.find((p) => p.pid === s.controller)?.name}{s.x != null ? ` · X=${s.x}` : ''}</small>
               {refs.length > 0 && <small className="stack-targets">→ {refs.map((r) => targetName(g, r)).join(', ')}</small>}
             </div>
             {i === 0 && !targeting && (
@@ -542,19 +543,64 @@ function GraveyardPicker({ spec }: { spec: TargetSpec }) {
 }
 
 function PendingChoices() {
-  const { g, me, act } = useGame();
+  const { g, me, act, mode, setMode } = useGame();
   const mine = g.pending?.find((p) => p.pid === me);
   const others = (g.pending ?? []).filter((p) => p.pid !== me);
+  const handling = useRef<string | null>(null); // pending id currently in targeting mode
+  const [dismissed, setDismissed] = useState<string | null>(null); // pending id whose targeting was cancelled
+  const tg = mine?.targets;
+  const mineId = mine?.id;
+  const startTargeting = useCallback((p: NonNullable<typeof mine>) => {
+    const t = p.targets;
+    if (!t) return;
+    handling.current = p.id;
+    setDismissed(null);
+    setMode({
+      kind: 'target', label: t.label, specs: t.specs, specIndex: 0, chosen: t.specs.map(() => []),
+      controller: t.controller, sourceIid: t.sourceIid,
+      onDone: (res) => {
+        if (res) act({ t: 'chooseTargets', id: p.id, targets: res });
+        else { handling.current = null; setDismissed(p.id); }
+      },
+    });
+  }, [act, setMode]);
+  useEffect(() => {
+    if (!mine || !tg) return;
+    if (handling.current === mine.id || dismissed === mine.id) return;
+    if (mode) return; // wait until the current mode ends
+    startTargeting(mine);
+  }, [mine, tg, mode, dismissed, startTargeting]);
+  // Pending answered/removed: forget it and leave targeting mode if it was ours.
+  useEffect(() => {
+    if (handling.current && !g.pending?.some((p) => p.id === handling.current)) {
+      handling.current = null;
+      if (mode?.kind === 'target') setMode(null);
+    }
+  }, [g.pending, mode, setMode]);
+  const targetingThis = !!tg && mode?.kind === 'target' && handling.current === mineId;
+  const showModal = mine && (!tg || (dismissed === mineId && mine.options.length > 0));
   return (
     <>
-      {mine && (
+      {mine && tg && dismissed === mineId && (
+        <div className="mode-hint target-hint" onClick={(e) => e.stopPropagation()}>
+          <span>{mine.prompt}</span>
+          <button className="tiny" onClick={() => startTargeting(mine)}>Choose targets for {tg.label}</button>
+        </div>
+      )}
+      {showModal && (
         <div className="modal-bg pending-bg" onMouseDown={(e) => e.stopPropagation()}>
           <div className="modal pending" onMouseDown={(e) => e.stopPropagation()}>
             <p>{mine.prompt}</p>
             <div className="row">
+              {tg && <button className="primary" onClick={() => startTargeting(mine)}>Choose targets for {tg.label}</button>}
               {mine.options.map((o) => <button key={o.value} className="primary" onClick={() => act({ t: 'choose', id: mine.id, value: o.value })}>{o.label}</button>)}
             </div>
           </div>
+        </div>
+      )}
+      {targetingThis && mine.options.length > 0 && (
+        <div className="mode-hint target-hint pending-skip" onClick={(e) => e.stopPropagation()}>
+          {mine.options.map((o) => <button key={o.value} className="tiny" onClick={() => act({ t: 'choose', id: mine.id, value: o.value })}>{o.label}</button>)}
         </div>
       )}
       {others.map((p) => (
