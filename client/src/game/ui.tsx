@@ -1,12 +1,25 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { effectivePT, type GameAction, type GameView, isHidden, type ViewCard, faceOf } from '@ojb/shared';
+import { effectivePT, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 
 // ---------------------------------------------------------------- context
 
 export interface MenuItem { label: string; onClick?: () => void; disabled?: boolean; hint?: string; sub?: MenuItem[] }
 
-export type Mode = null | { kind: 'attach'; iid: string } | { kind: 'block'; iid: string } | { kind: 'attackPW'; iid: string };
+export interface TargetMode {
+  kind: 'target';
+  label: string;
+  specs: TargetSpec[];
+  specIndex: number;
+  /** Chosen targets, one list per spec. */
+  chosen: TargetRef[][];
+  controller: string;
+  sourceIid?: string;
+  /** Called with the targets, or null when cancelled. */
+  onDone: (targets: TargetRef[][] | null) => void;
+}
+
+export type Mode = null | { kind: 'attach'; iid: string } | { kind: 'block'; iid: string } | { kind: 'attackPW'; iid: string } | TargetMode;
 
 export interface GameCtx {
   g: GameView;
@@ -24,6 +37,18 @@ export interface GameCtx {
   openTokens: () => void;
   menuFor: (iid: string) => MenuItem[];
   defaultAction: (iid: string) => void;
+  /** Enter targeting mode; resolves with one list per spec, or null if cancelled. */
+  target: (label: string, specs: TargetSpec[], sourceIid?: string) => Promise<TargetRef[][] | null>;
+  /** Click on a potential target while in targeting mode. */
+  pickTarget: (ref: TargetRef) => void;
+  /** null when not targeting; otherwise whether `ref` is a legal choice for the current spec. */
+  isLegal: (ref: TargetRef) => boolean | null;
+  /** Cast a card (handles X, targeting and the automatic/manual choice). */
+  cast: (iid: string, face?: number) => void;
+  toast: (msg: string) => void;
+  /** Battlefield cards to outline (stack item hover). */
+  hoverTargets: string[];
+  setHoverTargets: (iids: string[]) => void;
 }
 
 export const Ctx = createContext<GameCtx>(null as unknown as GameCtx);
@@ -32,7 +57,7 @@ export const useGame = () => useContext(Ctx);
 // ---------------------------------------------------------------- card on the table
 
 export function TableCard({ iid, small, attachments }: { iid: string; small?: boolean; attachments?: string[] }) {
-  const { g, openMenu, menuFor, defaultAction, mode } = useGame();
+  const { g, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets } = useGame();
   const c = g.cards[iid];
   if (!c) return null;
   const hidden = isHidden(c);
@@ -44,16 +69,20 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
   const counters = Object.entries(c.counters);
   const damage = isHidden(c) ? 0 : c.damage;
   const lethal = pt && damage > 0 && damage >= pt[1];
-  const selectable = mode && mode.kind !== 'attackPW';
+  const targeting = mode?.kind === 'target';
+  const selectable = mode && mode.kind !== 'attackPW' && !targeting;
+  const legal = targeting ? isLegal({ kind: 'card', iid }) : null;
+  const chosen = mode?.kind === 'target' && mode.chosen.some((l) => l.some((r) => r.kind === 'card' && r.iid === iid));
+  const kws = !hidden && c.tempKeywords?.length ? c.tempKeywords : [];
 
   return (
     <div
-      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''}`}
+      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || hoverTargets.includes(iid) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''}`}
       data-iid={iid}
       draggable={!hidden || c.faceDown}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); e.dataTransfer.effectAllowed = 'move'; }}
       onMouseEnter={() => face && !c.faceDown ? setPreview({ face, extra: describe(c) }) : face ? setPreview({ face, extra: 'Face down (only you can see this). ' + describe(c) }) : undefined}
-      onClick={(e) => { e.stopPropagation(); defaultAction(iid); }}
+      onClick={(e) => { e.stopPropagation(); if (targeting) pickTarget({ kind: 'card', iid }); else defaultAction(iid); }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openMenu(e.clientX, e.clientY, menuFor(iid), face?.name); }}
     >
       {attachments?.map((a, i) => (
@@ -71,6 +100,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
         {c.blocking && <div className="combat-badge">🛡</div>}
         {!hidden && c.note && <div className="note" title={c.note}>{c.note}</div>}
         {!hidden && c.noUntap && <div className="nountap" title="Doesn't untap">⛓</div>}
+        {kws.length > 0 && <div className="kw-badge" title={`Until end of turn: ${kws.join(', ')}`}>{kws.map((k) => k.slice(0, 3)).join(' ')}</div>}
         {!hidden && c.token && <div className="token-badge">token</div>}
       </div>
       <button className="dots" onClick={(e) => { e.stopPropagation(); openMenu(e.clientX, e.clientY, menuFor(iid), face?.name); }}>⋯</button>
@@ -87,6 +117,7 @@ function describe(c: ViewCard): string {
   if (c.tempPT[0] || c.tempPT[1]) parts.push(`Until EOT: ${c.tempPT[0] >= 0 ? '+' : ''}${c.tempPT[0]}/${c.tempPT[1] >= 0 ? '+' : ''}${c.tempPT[1]}`);
   if (c.permPT[0] || c.permPT[1]) parts.push(`Modifier: ${c.permPT[0] >= 0 ? '+' : ''}${c.permPT[0]}/${c.permPT[1] >= 0 ? '+' : ''}${c.permPT[1]}`);
   if (c.note) parts.push(`Note: ${c.note}`);
+  if (c.tempKeywords?.length) parts.push(`Gains until EOT: ${c.tempKeywords.join(', ')}`);
   if (c.summoningSick) parts.push('Summoning sick');
   return parts.join(' · ');
 }

@@ -7,7 +7,8 @@ import { PoolSummary } from '../Draft.tsx';
 // ---------------------------------------------------------------- zone viewer
 
 export function ZoneViewer({ pid, zone, onClose }: { pid: string; zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand'; onClose: () => void }) {
-  const { g, openMenu, menuFor } = useGame();
+  const { g, openMenu, menuFor, mode, pickTarget, isLegal } = useGame();
+  const targeting = mode?.kind === 'target';
   const p = g.players.find((x) => x.pid === pid)!;
   const ids = p.zones[zone];
   const title = `${p.name}'s ${zone} (${ids.length})`;
@@ -21,8 +22,8 @@ export function ZoneViewer({ pid, zone, onClose }: { pid: string; zone: 'graveya
           if (isHidden(c)) return <div key={iid} className="zcard"><CardBack /></div>;
           const face = faceOf(c, getCard);
           return (
-            <div key={iid} className="zcard" onMouseEnter={() => setPreview({ face })}
-              onClick={(e) => openMenu(e.clientX, e.clientY, menuFor(iid), face.name)}
+            <div key={iid} className={`zcard ${targeting ? (isLegal({ kind: 'card', iid }) ? 'legal-target' : 'dim') : ''}`} onMouseEnter={() => setPreview({ face })}
+              onClick={(e) => targeting ? pickTarget({ kind: 'card', iid }) : openMenu(e.clientX, e.clientY, menuFor(iid), face.name)}
               onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
               {c.faceDown && <div className="fd-label">face down</div>}
               <CardImage face={face} />

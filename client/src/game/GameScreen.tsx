@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  type GameAction, type GameView, isHidden, faceOf, type MatchView, STEP_LABELS, STEPS, type Step, type ViewPlayer, type Zone,
+  type GameAction, type GameView, isHidden, faceOf, type MatchView, STEP_LABELS, STEPS, type Step, type TargetRef, type TargetSpec, type ViewPlayer, type Zone,
 } from '@ojb/shared';
 import type { RoomProps } from '../Room.tsx';
 import { CardBack, CardImage, getCard, PreviewPanel, setPreview } from '../cards.tsx';
 import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame } from './ui.tsx';
-import { defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
+import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
+import { castStatus, AUTO_LABEL, legalTarget } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
@@ -49,6 +50,10 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const [prompt, setPrompt] = useState<PromptState>(null);
   const [zone, setZone] = useState<{ pid: string; zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand' } | null>(null);
   const [tokens, setTokens] = useState(false);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [hoverTargets, setHoverTargets] = useState<string[]>([]);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const toast = useCallback((msg: string) => { setToastMsg(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToastMsg(null), 2200); }, []);
 
   const act = useCallback((action: GameAction) => send({ t: 'game', matchId: match.id, action }), [send, match.id]);
   const askText = useCallback((label: string, dflt = '') => new Promise<string | null>((resolve) => setPrompt({ label, initial: dflt, numeric: false, resolve })), []);
@@ -57,7 +62,37 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   })), []);
   const openMenu = useCallback((x: number, y: number, items: MenuItem[], title?: string) => setMenu({ x, y, items, title }), []);
 
-  const base = { g, me, act, ask, askText, setMode, opp, mode };
+  const target = useCallback((label: string, specs: TargetSpec[], sourceIid?: string) => new Promise<TargetRef[][] | null>((resolve) => {
+    if (!me) return resolve(null);
+    setMode({ kind: 'target', label, specs, specIndex: 0, chosen: specs.map(() => []), controller: me, sourceIid, onDone: resolve });
+  }), [me]);
+
+  const isLegal = (ref: TargetRef): boolean | null => {
+    if (mode?.kind !== 'target') return null;
+    return legalTarget(g, mode.specs[mode.specIndex], ref, mode.controller, mode.sourceIid);
+  };
+  const advance = (m: Extract<NonNullable<Mode>, { kind: 'target' }>, chosen: TargetRef[][]) => {
+    if (m.specIndex + 1 < m.specs.length) setMode({ ...m, chosen, specIndex: m.specIndex + 1 });
+    else { setMode(null); m.onDone(chosen); }
+  };
+  const cancelTarget = () => { if (mode?.kind === 'target') { setMode(null); mode.onDone(null); } };
+  const pickTarget = (ref: TargetRef) => {
+    if (mode?.kind !== 'target') return;
+    const spec = mode.specs[mode.specIndex];
+    const cur = mode.chosen[mode.specIndex];
+    const same = (r: TargetRef) => JSON.stringify(r) === JSON.stringify(ref);
+    if (cur.some(same)) { // click again to deselect
+      const chosen = mode.chosen.map((l, i) => (i === mode.specIndex ? l.filter((r) => !same(r)) : l));
+      setMode({ ...mode, chosen });
+      return;
+    }
+    if (!legalTarget(g, spec, ref, mode.controller, mode.sourceIid)) { toast('Not a legal target'); return; }
+    const chosen = mode.chosen.map((l, i) => (i === mode.specIndex ? [...l, ref] : l));
+    if (chosen[mode.specIndex].length >= spec.max) advance(mode, chosen);
+    else setMode({ ...mode, chosen });
+  };
+
+  const base = { g, me, act, ask, askText, setMode, opp, mode, target };
   const menuFor = (iid: string) => menuForImpl(base, iid);
   const defaultAction = (iid: string) => defaultActionImpl(base, iid, menuFor, (items, title) => {
     const el = document.querySelector(`[data-iid="${iid}"]`)?.getBoundingClientRect();
@@ -67,10 +102,13 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const ctx: GameCtx = {
     g, me, self, opp, act, openMenu, mode, setMode, ask, askText,
     openZone: (pid, z) => setZone({ pid, zone: z }), openTokens: () => setTokens(true), menuFor, defaultAction,
+    target, pickTarget, isLegal, cast: (iid, face) => { castWithX(base, iid, face); }, toast, hoverTargets, setHoverTargets,
   };
 
   // Keyboard shortcuts
   const okRef = useRef<() => void>(() => {});
+  const modeRef = useRef<Mode>(null);
+  modeRef.current = mode;
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -78,7 +116,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
       if (e.key === 'F2' || (e.key === ' ' && !e.repeat && t.tagName !== 'BUTTON')) { e.preventDefault(); okRef.current(); }
       if (e.key === 'F6') { e.preventDefault(); act({ t: 'passUntilEOT' }); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); act({ t: 'requestUndo' }); }
-      if (e.key === 'Escape') setMode(null);
+      if (e.key === 'Escape') { if (modeRef.current?.kind === 'target') modeRef.current.onDone(null); setMode(null); }
     };
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
@@ -88,7 +126,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
 
   return (
     <Ctx.Provider value={ctx}>
-      <div className={`table ${mode ? `mode-${mode.kind}` : ''}`} onClick={() => mode && setMode(null)}>
+      <div className={`table ${mode ? `mode-${mode.kind}` : ''}`} onClick={() => mode && mode.kind !== 'target' && setMode(null)}>
         <div className="table-main">
           <PlayerArea pid={opp} top />
           <CenterBar okRef={okRef} match={match} onLeave={onLeave} />
@@ -111,12 +149,16 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
         {tokens && <TokenModal onClose={() => setTokens(false)} />}
         {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
         {prompt && <Prompt label={prompt.label} initial={prompt.initial} numeric={prompt.numeric} onDone={(v) => { prompt.resolve(v); setPrompt(null); }} />}
-        {mode && (
+        {mode && mode.kind !== 'target' && mode.kind !== 'attackPW' && (
           <div className="mode-hint">
             {mode.kind === 'attach' && 'Click the card to attach to (Esc to cancel)'}
             {mode.kind === 'block' && 'Click an attacking creature to block it (Esc to cancel)'}
           </div>
         )}
+        {mode?.kind === 'target' && <TargetBanner mode={mode} advance={advance} cancel={cancelTarget} />}
+        {mode?.kind === 'target' && mode.specs[mode.specIndex].zone === 'graveyard' && <GraveyardPicker spec={mode.specs[mode.specIndex]} />}
+        {toastMsg && <div className="toast">{toastMsg}</div>}
+        <PendingChoices />
         {g.undoRequest && g.undoRequest !== me && me && (
           <div className="undo-req">
             {g.players.find((p) => p.pid === g.undoRequest)?.name} wants to undo the last action.
@@ -150,7 +192,7 @@ function dropTo(ctx: GameCtx, iid: string, to: Zone, position?: 'top' | 'bottom'
     if (!isHidden(c)) {
       const f = faceOf(c, getCard);
       if (c.zone === 'hand' && f.types.includes('Land')) return ctx.act({ t: 'playLand', iid });
-      if (c.zone === 'hand') return ctx.act({ t: 'cast', iid });
+      if (c.zone === 'hand') return ctx.cast(iid);
     }
   }
   if (c.zone === to && to !== 'library') return;
@@ -192,13 +234,17 @@ function PlayerArea({ pid, top }: { pid: string; top?: boolean }) {
 }
 
 function PlayerPanel({ p }: { p: ViewPlayer }) {
-  const { g, me, act, ask, askText, openZone } = useGame();
+  const { g, me, act, ask, askText, openZone, mode, pickTarget, isLegal } = useGame();
   const isMe = p.pid === me;
+  const targeting = mode?.kind === 'target';
+  const legal = targeting ? isLegal({ kind: 'player', pid: p.pid }) : null;
+  const chosen = mode?.kind === 'target' && mode.chosen.some((l) => l.some((r) => r.kind === 'player' && r.pid === p.pid));
   const life = (d: number) => act({ t: 'life', pid: p.pid, delta: d });
   const pool = Object.entries(p.manaPool).filter(([, n]) => n > 0);
   const viewing = g.players.find((x) => x.pid === me)?.viewingHandOf === p.pid;
   return (
-    <div className={`player-panel ${g.priority === p.pid && g.phase === 'playing' ? 'has-priority' : ''}`}>
+    <div className={`player-panel ${g.priority === p.pid && g.phase === 'playing' ? 'has-priority' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen ? 'targeted' : ''}`}
+      onClick={targeting ? (e) => { e.stopPropagation(); pickTarget({ kind: 'player', pid: p.pid }); } : undefined}>
       <div className="pp-name">
         <span className={`dot ${p.conceded ? '' : 'on'}`} />{p.name}
         {g.activePlayer === p.pid && <span className="turn-badge">turn</span>}
@@ -324,10 +370,11 @@ function HandCard({ iid }: { iid: string }) {
   const c = g.cards[iid];
   if (!c || isHidden(c)) return <div className="hcard"><CardBack /></div>;
   const face = faceOf(c, getCard);
+  const st = castStatus(c.cardId, 0);
   return (
     <div className={`hcard ${c.revealedTo.length ? 'revealed' : ''}`} data-iid={iid} draggable
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); }}
-      onMouseEnter={() => setPreview({ face, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined })}
+      onMouseEnter={() => setPreview({ face, extra: st ? AUTO_LABEL[st] : undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined })}
       onClick={() => defaultAction(iid)}
       onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
       <CardImage face={face} />
@@ -406,25 +453,39 @@ function CenterBar({ okRef, match, onLeave }: { okRef: React.MutableRefObject<()
   );
 }
 
+function targetName(g: GameView, r: TargetRef): string {
+  if (r.kind === 'player') return g.players.find((p) => p.pid === r.pid)?.name ?? '?';
+  if (r.kind === 'stack') { const it = g.stack.find((x) => x.id === r.id); return it ? it.text : 'stack item'; }
+  const c = g.cards[r.iid];
+  return c && !isHidden(c) ? faceOf(c, getCard).name : 'a card';
+}
+
 function Stack() {
-  const { g, act, openMenu, menuFor } = useGame();
+  const { g, act, openMenu, menuFor, mode, pickTarget, isLegal, setHoverTargets } = useGame();
   if (!g.stack.length) return null;
+  const targeting = mode?.kind === 'target';
   return (
     <div className="stack">
       <div className="stack-title">Stack</div>
       {g.stack.slice().reverse().map((s, i) => {
         const c = s.iid ? g.cards[s.iid] : undefined;
         const face = c && !isHidden(c) ? faceOf(c, getCard) : undefined;
+        const refs = s.auto?.targets?.flat() ?? [];
+        const legal = targeting ? isLegal({ kind: 'stack', id: s.id }) : null;
         return (
-          <div key={s.id} className={`stack-item ${i === 0 ? 'top' : ''}`}
-            onMouseEnter={() => face && setPreview({ face })}
+          <div key={s.id} className={`stack-item ${i === 0 ? 'top' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''}`}
+            data-stack-id={s.id}
+            onMouseEnter={() => { if (face) setPreview({ face }); if (refs.length) setHoverTargets(refs.flatMap((r) => (r.kind === 'card' ? [r.iid] : []))); }}
+            onMouseLeave={() => refs.length && setHoverTargets([])}
+            onClick={targeting ? (e) => { e.stopPropagation(); pickTarget({ kind: 'stack', id: s.id }); } : undefined}
             onContextMenu={(e) => { if (s.iid) { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(s.iid), face?.name); } }}>
             {face ? <CardImage face={face} className="stack-img" /> : <div className="stack-ability">⚡</div>}
             <div className="stack-text">
-              <b>{s.text}</b>
+              <b>{s.auto && <span className="auto-badge" title="Resolved automatically">⚡ </span>}{s.text}</b>
               <small>{g.players.find((p) => p.pid === s.controller)?.name}{s.x != null ? ` · X=${s.x}` : ''}</small>
+              {refs.length > 0 && <small className="stack-targets">→ {refs.map((r) => targetName(g, r)).join(', ')}</small>}
             </div>
-            {i === 0 && (
+            {i === 0 && !targeting && (
               <div className="stack-btns">
                 <button className="tiny" onClick={() => act({ t: 'resolve' })} title="Force-resolve now">Resolve</button>
                 <button className="tiny" onClick={() => act({ t: 'counterTop' })}>Counter</button>
@@ -434,6 +495,69 @@ function Stack() {
         );
       })}
     </div>
+  );
+}
+
+function TargetBanner({ mode, advance, cancel }: { mode: Extract<NonNullable<Mode>, { kind: 'target' }>; advance: (m: typeof mode, chosen: TargetRef[][]) => void; cancel: () => void }) {
+  const spec = mode.specs[mode.specIndex];
+  const n = mode.chosen[mode.specIndex].length;
+  const range = spec.min === spec.max ? `${spec.max}` : `${spec.min}–${spec.max}`;
+  return (
+    <div className="mode-hint target-hint" onClick={(e) => e.stopPropagation()}>
+      <span>{mode.label}: choose target: {spec.prompt || spec.valid} ({mode.specIndex + 1} of {mode.specs.length}; {n}/{range} chosen)</span>
+      <button className="tiny" disabled={n < spec.min} onClick={() => advance(mode, mode.chosen)}>Done</button>
+      {spec.min === 0 && n > 0 && <button className="tiny" onClick={() => advance(mode, mode.chosen.map((l, i) => (i === mode.specIndex ? [] : l)))}>Skip</button>}
+      {spec.min === 0 && n === 0 && <button className="tiny" onClick={() => advance(mode, mode.chosen)}>Skip</button>}
+      <button className="tiny" onClick={cancel}>Cancel (Esc)</button>
+    </div>
+  );
+}
+
+/** Lists legal graveyard cards of every player while choosing a graveyard target. */
+function GraveyardPicker({ spec }: { spec: TargetSpec }) {
+  const { g, mode, pickTarget, isLegal } = useGame();
+  const ids = g.players.flatMap((p) => p.zones.graveyard).filter((iid) => isLegal({ kind: 'card', iid }));
+  const chosen = mode?.kind === 'target' ? mode.chosen[mode.specIndex] : [];
+  return (
+    <div className="target-picker" onClick={(e) => e.stopPropagation()}>
+      <div className="muted small">Graveyards — {spec.prompt || spec.valid}</div>
+      <div className="zone-grid">
+        {ids.map((iid) => {
+          const c = g.cards[iid];
+          if (!c || isHidden(c)) return null;
+          const face = faceOf(c, getCard);
+          return (
+            <div key={iid} className={`zcard legal-target ${chosen.some((r) => r.kind === 'card' && r.iid === iid) ? 'targeted' : ''}`} onMouseEnter={() => setPreview({ face })} onClick={() => pickTarget({ kind: 'card', iid })}>
+              <CardImage face={face} />
+            </div>
+          );
+        })}
+        {ids.length === 0 && <span className="muted">No legal cards in graveyards.</span>}
+      </div>
+    </div>
+  );
+}
+
+function PendingChoices() {
+  const { g, me, act } = useGame();
+  const mine = g.pending?.find((p) => p.pid === me);
+  const others = (g.pending ?? []).filter((p) => p.pid !== me);
+  return (
+    <>
+      {mine && (
+        <div className="modal-bg pending-bg" onMouseDown={(e) => e.stopPropagation()}>
+          <div className="modal pending" onMouseDown={(e) => e.stopPropagation()}>
+            <p>{mine.prompt}</p>
+            <div className="row">
+              {mine.options.map((o) => <button key={o.value} className="primary" onClick={() => act({ t: 'choose', id: mine.id, value: o.value })}>{o.label}</button>)}
+            </div>
+          </div>
+        </div>
+      )}
+      {others.map((p) => (
+        <div key={p.id} className="undo-req pending-wait">Waiting for {g.players.find((x) => x.pid === p.pid)?.name ?? '?'} to decide: {p.prompt}</div>
+      ))}
+    </>
   );
 }
 

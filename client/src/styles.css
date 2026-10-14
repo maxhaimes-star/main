@@ -300,3 +300,17 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .basic-sym { flex: 1; display: flex; align-items: center; justify-content: center; }
 .basic-sym .pip { transform: scale(2.2); border: 1px solid #0004; }
 .my-tools { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+
+/* ---- targeting / engine ---- */
+.tcard.legal-target .card-img, .player-panel.legal-target, .stack-item.legal-target, .zcard.legal-target { box-shadow: 0 0 0 3px var(--accent2), 0 0 14px var(--accent2); border-radius: 6px; cursor: crosshair; }
+.tcard.dim, .player-panel.dim, .stack-item.dim, .zcard.dim { opacity: .4; }
+.tcard.targeted .card-img, .player-panel.targeted, .zcard.targeted { box-shadow: 0 0 0 3px var(--bad), 0 0 14px var(--bad); }
+.mode-hint.target-hint { display: flex; gap: 8px; align-items: center; z-index: 160; }
+.target-picker { position: fixed; bottom: 0; left: 0; right: 0; max-height: 40vh; overflow: auto; background: var(--bg2); border-top: 2px solid var(--accent2); padding: 8px 12px; z-index: 135; }
+.kw-badge { position: absolute; bottom: 2px; left: 2px; background: #000c; color: var(--accent2); font-size: 9px; padding: 0 3px; border-radius: 3px; text-transform: uppercase; }
+.stack-targets { display: block; color: var(--accent2); }
+.auto-badge { color: var(--accent); }
+.modal.pending { max-width: 420px; }
+.modal.pending .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.pending-wait { top: 90px; border-color: var(--line); }
+.pending-bg { z-index: 160; }
