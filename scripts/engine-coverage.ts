@@ -4,6 +4,7 @@
  */
 import { CUBE } from '../shared/src/cube.ts';
 import { activatedAbilitiesOf, flatten, getScript, isAutomatable, spellAbility, type ParsedAbility } from '../shared/src/engine/index.ts';
+import { reportStatics } from './static-coverage.ts';
 
 const count = (ab: ParsedAbility) => {
   let n = 0;
@@ -48,3 +49,4 @@ console.log(`  not automatable:       ${none} (${Math.round((100 * none) / withC
 console.log(`Abilities (spells + activated): ${abFull}/${abTotal} fully automatable`);
 console.log('Top unsupported APIs (abilities affected):');
 for (const [api, n] of [...apis].sort((a, b) => b[1] - a[1]).slice(0, 20)) console.log(`  ${api.padEnd(22)} ${n}`);
+reportStatics();

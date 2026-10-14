@@ -15,6 +15,10 @@ export interface MatchEnv {
   lookup: Lookup;
   /** Resolve a variable like "X" to a number (undefined = unknown). */
   num?: (name: string) => number | undefined;
+  /** Current P/T of a battlefield card (e.g. including static effects); default: printed + counters + modifiers. */
+  pt?: (c: CardInstance) => [number, number];
+  /** Keyword check (e.g. including static effects); default: hasKeyword without statics. */
+  kw?: (c: CardInstance, kw: string) => boolean;
 }
 
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -30,7 +34,7 @@ function not(a: Tri): Tri { return a === 'unknown' ? 'unknown' : !a; }
 
 interface CardFacts { types: string[]; typeLine: string; name: string; colors: string[]; cmc: number; power: number; toughness: number }
 
-function facts(c: CardInstance, lookup: Lookup): CardFacts {
+function facts(c: CardInstance, lookup: Lookup, pt?: MatchEnv['pt']): CardFacts {
   if (c.faceDown) return { types: ['Creature'], typeLine: 'Creature', name: '', colors: [], cmc: 0, power: 2, toughness: 2 };
   const f = faceOf(c, lookup);
   const data = c.cardId ? lookup(c.cardId) : undefined;
@@ -38,6 +42,10 @@ function facts(c: CardInstance, lookup: Lookup): CardFacts {
   const plus = (c.counters['+1/+1'] ?? 0) - (c.counters['-1/-1'] ?? 0);
   const n = (v?: string) => { const x = parseInt(v ?? '', 10); return Number.isNaN(x) ? 0 : x; };
   const onBf = c.zone === 'battlefield';
+  if (onBf && pt) {
+    const [power, toughness] = pt(c);
+    return { types: f.types, typeLine: f.typeLine, name: f.name, colors, cmc: c.token && !c.cardId ? 0 : data?.cmc ?? 0, power, toughness };
+  }
   return {
     types: f.types, typeLine: f.typeLine, name: f.name, colors, cmc: c.token && !c.cardId ? 0 : data?.cmc ?? 0,
     power: n(f.power) + (onBf ? plus + c.tempPT[0] + c.permPT[0] : 0),
@@ -104,8 +112,15 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     return cmp(left, m[2], right);
   }
   if ((m = /^inZone(\w+)$/.exec(prop))) return c.zone === m[1].toLowerCase();
-  if ((m = /^without(\w+)$/.exec(prop))) return !hasKeyword(c, env.lookup, m[1]);
-  if ((m = /^with(\w+)$/.exec(prop))) return hasKeyword(c, env.lookup, m[1]);
+  if ((m = /^counters_(LT|LE|EQ|NE|GE|GT)(\w+?)_(\w+)$/.exec(prop))) {
+    const right = /^-?\d+$/.test(m[2]) ? parseInt(m[2], 10) : env.num?.(m[2]);
+    if (right == null) return 'unknown';
+    const t = m[3].toUpperCase();
+    const kind = t === 'P1P1' ? '+1/+1' : t === 'M1M1' ? '-1/-1' : t.toLowerCase();
+    return cmp(c.counters[kind] ?? 0, m[1], right);
+  }
+  if ((m = /^without(\w+)$/.exec(prop))) return !(env.kw ? env.kw(c, m[1]) : hasKeyword(c, env.lookup, m[1]));
+  if ((m = /^with(\w+)$/.exec(prop))) return env.kw ? env.kw(c, m[1]) : hasKeyword(c, env.lookup, m[1]);
   if ((m = /^named(.+)$/.exec(prop))) return fx.name === m[1];
   if ((m = /^non(\w+)$/.exec(prop))) {
     const w = m[1].charAt(0).toUpperCase() + m[1].slice(1);
@@ -125,7 +140,7 @@ function altParts(alt: string): [string, string[]] {
 
 /** Does a card match a Valid expression? */
 export function matchCard(c: CardInstance, valid: string, env: MatchEnv): Tri {
-  const fx = facts(c, env.lookup);
+  const fx = facts(c, env.lookup, env.pt);
   let result: Tri = false;
   for (const alt of valid.split(',')) {
     const [type, props] = altParts(alt);
@@ -202,8 +217,8 @@ export function isValidTarget(state: TargetState, spec: TargetSpec, ref: TargetR
   if (c.zone === 'library' || c.zone === 'sideboard') return false;
   if (c.iid === sourceIid && c.zone === 'stack') return false;
   if (c.zone === 'battlefield') {
-    if (hasKeyword(c, lookup, 'Shroud')) return false;
-    if (c.controller !== controller && hasKeyword(c, lookup, 'Hexproof')) return false;
+    if (hasKeyword(c, lookup, 'Shroud', state)) return false;
+    if (c.controller !== controller && hasKeyword(c, lookup, 'Hexproof', state)) return false;
   }
   return matchCard(c, spec.valid, env) !== false;
 }

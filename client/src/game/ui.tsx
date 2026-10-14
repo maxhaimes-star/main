@@ -65,7 +65,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
   const hidden = isHidden(c);
   const face = !hidden ? faceOf(c, getCard) : null;
   const isCreature = face && (face.types.includes('Creature') || c.faceDown);
-  const pt = !hidden && isCreature ? effectivePT(c, getCard) : null;
+  const pt = !hidden && isCreature ? effectivePT(c, getCard, g) : null;
   const basePT = face && face.power != null ? `${face.power}/${face.toughness}` : null;
   const ptChanged = pt && basePT !== `${pt[0]}/${pt[1]}`;
   const counters = Object.entries(c.counters);

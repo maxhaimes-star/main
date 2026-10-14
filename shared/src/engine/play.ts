@@ -4,6 +4,7 @@ import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
 import { abilityAt, getScript, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget } from './targets.ts';
+import { adjustCost } from './statics.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
@@ -133,6 +134,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (tap) c.tapped = true;
   if (untap) c.tapped = false;
   if (mana) {
+    const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
+    if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
     const paid = payFromPool(mana, me.manaPool, x);
     if (paid) { me.manaPool = paid.pool; if (paid.lifePaid) { me.life -= paid.lifePaid; notes.push(`paid ${paid.lifePaid} life`); } }
     else notes.push('mana not deducted');

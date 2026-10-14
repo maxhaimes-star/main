@@ -8,6 +8,9 @@
  * - isAutomatable(ability)                  { ok, unsupported[] }
  * - targetSpecs(ability, modes?)            targets needed, in order (pass Charm modes to get their targets)
  * - isValidTarget(state, spec, ref, ...)    legality of one choice (works on GameView too)
+ * - activeStatics(state, lookup)            static abilities in effect, for an "Active effects" panel
+ * - effectiveCost(state, iid, face, lookup) mana cost after cost increases / reductions (Thalia ...)
+ * - attackRestriction / blockRestriction / castRestriction   why a static forbids an action (or null)
  */
 import type { Rng } from '../draft.ts';
 import type { Lookup } from '../game/rules.ts';
@@ -15,5 +18,9 @@ import type { Lookup } from '../game/rules.ts';
 export * from './types.ts';
 export { getScript, spellAbility, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility } from './script.ts';
 export { isValidTarget, matchCard, matchPlayer } from './targets.ts';
+export {
+  activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,
+  parseStatic, staticGaps, staticMods, staticSupport, type ActiveStatic, type CardMods, type StaticSupport, type StaticsState,
+} from './statics.ts';
 
 export interface EngineCtx { rng: Rng; lookup: Lookup; now: number }
