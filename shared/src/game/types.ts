@@ -1,5 +1,5 @@
 import type { TokenData } from '../cards.ts';
-import type { AutoCont, AutoInfo, Pending, TargetRef } from '../engine/types.ts';
+import type { AutoCont, AutoInfo, CastInfo, Pending, TargetRef, TimedEffect, TurnInfo } from '../engine/types.ts';
 
 export const STEPS = [
   'untap', 'upkeep', 'draw', 'main1',
@@ -54,6 +54,8 @@ export interface CardInstance {
   copyOf?: string;
   /** Keywords granted until end of turn (Pump KW$ etc.). Cleared at cleanup. */
   tempKeywords?: string[];
+  /** How it was cast (kicked, evoked, flashback...). Kept while on the stack and when it resolves onto the battlefield. */
+  castInfo?: CastInfo;
 }
 
 export interface StackItem {
@@ -69,6 +71,8 @@ export interface StackItem {
   x?: number;
   /** Present when the engine resolves this automatically. */
   auto?: AutoInfo;
+  /** Spells: how it was cast (alternative / additional costs). */
+  castInfo?: CastInfo;
 }
 
 export interface GamePlayer {
@@ -131,6 +135,10 @@ export interface GameState {
   /** Questions the engine is waiting on (answered with the 'choose' action). */
   pending: Pending[];
   seq: number;
+  /** Per-turn bookkeeping (Revolt, loyalty / activation limits). */
+  turnInfo?: TurnInfo;
+  /** Effects with a duration that the engine reverts (until your next turn, until end of turn, until X leaves). */
+  effects?: TimedEffect[];
 }
 
 /** Actions a player can send. All are validated in the reducer. */
@@ -152,9 +160,15 @@ export type GameAction =
   | { t: 'move'; iid: string; to: Zone; toOwner?: boolean; position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean }
   | { t: 'playLand'; iid: string }
   /** targets: one list per TargetSpec of the spell. manual: skip the engine (resolve by hand). */
-  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[] }
-  /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. */
-  | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number }
+  /**
+   * costOption: id from castOptions() (default 'normal'). kicked: pay kicker. force: ignore timing restrictions.
+   * division: DividedAsYouChoose$ damage, target key (iid / pid) -> amount.
+   */
+  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[]; costOption?: string; kicked?: boolean; force?: boolean; division?: Record<string, number> }
+  /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. force: ignore timing / limits. */
+  | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number; force?: boolean; division?: Record<string, number> }
+  /** Activate a mana ability: option = id from manaOptionsFor(). */
+  | { t: 'activateMana'; iid: string; option: string }
   | { t: 'choose'; id: string; value: string }
   /** Answer a Pending that has `targets`: one list per spec. */
   | { t: 'chooseTargets'; id: string; targets: TargetRef[][] }

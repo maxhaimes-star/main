@@ -2,7 +2,11 @@ import { basicLandCard, type CardData, type Color, type TokenData } from '../car
 import type { Rng } from '../draft.ts';
 import { computeCombat } from './combat.ts';
 import { cardName, effectivePT, faceOf, hasKeyword, isCreature, type Lookup, payFromPool } from './rules.ts';
-import { activateAuto, prepareCast } from '../engine/play.ts';
+import { activateAuto } from '../engine/play.ts';
+import { afterSpellResolved, finishCast, payCastMana, planCast } from '../engine/costs.ts';
+import { durationsAtCleanup, durationsAtTurnStart } from '../engine/durations.ts';
+import { activateMana } from '../engine/mana.ts';
+import { loyaltyError, recordActivation } from '../engine/timing.ts';
 import { answerPending, resolveAuto, resumeAuto } from '../engine/resolve.ts';
 import {
   type Ctx, detach, drawCards, log, moveCard, newInstance, player, randomId, shuffleLibrary,
@@ -195,6 +199,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       for (const id of state.battlefield) { const c = state.cards[id]; c.damage = 0; c.tempPT = [0, 0]; c.tempKeywords = undefined; }
       for (const p of state.players) for (const id of p.zones.hand) state.cards[id].revealedTo = [];
       for (const p of state.players) p.viewingHandOf = null;
+      durationsAtCleanup(state, ctx);
       if (active.zones.hand.length > 7) log(state, ctx, active.pid, `${active.name} has ${active.zones.hand.length} cards — discard down to 7.`);
       startTurn(state, ctx, nextPlayer(state, state.activePlayer));
       return;
@@ -207,6 +212,7 @@ function startTurn(state: GameState, ctx: Ctx, pid: string) {
   state.activePlayer = pid;
   for (const p of state.players) { p.landsPlayed = 0; p.passUntilEOT = false; }
   log(state, ctx, null, `— Turn ${state.turn}: ${player(state, pid).name} —`);
+  durationsAtTurnStart(state, ctx, pid);
   enterStep(state, ctx, 'untap');
 }
 
@@ -288,14 +294,16 @@ function finishSpell(state: GameState, ctx: Ctx, item: StackItem, quiet: boolean
 function resolveTop(state: GameState, ctx: Ctx) {
   const item = state.stack[state.stack.length - 1];
   if (!item) return;
+  let resolved = true;
   if (item.auto) {
     const inst = item.iid ? state.cards[item.iid] : undefined;
-    resolveAuto(state, ctx, item, !!inst && isPermanentSpell(inst, ctx), () => finishSpell(state, ctx, item, true));
+    resolved = resolveAuto(state, ctx, item, !!inst && isPermanentSpell(inst, ctx), () => finishSpell(state, ctx, item, true));
   } else {
     if (!item.iid || !state.cards[item.iid]) state.stack.pop();
     if (item.iid && state.cards[item.iid]) finishSpell(state, ctx, item, false);
     else log(state, ctx, item.controller, `Resolved: ${item.text}`);
   }
+  afterSpellResolved(state, ctx, item, resolved);
   state.passed = [];
   state.priority = state.activePlayer;
 }
@@ -530,8 +538,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!c) return 'No such card';
       if (!canTouch(state, pid, c)) return "You can't cast that card";
       if (c.zone === 'battlefield' || c.zone === 'stack') return 'That card is already in play';
-      const prep = prepareCast(state, c, pid, a, ctx);
-      if (prep.error) return prep.error;
+      const prep = planCast(state, c, pid, a, ctx); // timing, cost option, targets
+      if ('error' in prep) return prep.error;
       const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
       const from = c.zone;
       detach(state, c);
@@ -548,26 +556,15 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         c.castAs = undefined;
       }
       const face = faceOf(c, ctx.lookup);
-      const cost = data?.layout === 'split' && data.faces && a.face != null ? data.faces[a.face].manaCost : face.manaCost;
-      let paid = '';
-      if (!a.faceDown && cost) {
-        const res = payFromPool(cost, me.manaPool, a.x ?? 0);
-        if (res) {
-          me.manaPool = res.pool;
-          if (res.lifePaid) { me.life -= res.lifePaid; paid = ` (paid ${res.lifePaid} life)`; }
-        } else if (Object.values(me.manaPool).some((v) => v > 0)) {
-          paid = ' (mana pool did not cover the cost — not deducted)';
-        }
-      } else if (a.faceDown) {
-        const res = payFromPool('{3}', me.manaPool);
-        if (res) me.manaPool = res.pool;
-      }
+      const payment = payCastMana(state, me, c, prep.plan);
+      const paid = payment.note;
       const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid: c.iid, controller: pid, text: a.faceDown ? 'Face-down spell' : face.name, x: a.x };
       if (prep.auto) item.auto = prep.auto;
       state.stack.push(item);
       const fromText = from === 'hand' ? '' : ` from ${from === 'library' ? 'the top of their library' : ZONE_LABEL[from]}`;
       const tnames = prep.auto?.targets.flat().map((t) => t.kind === 'player' ? player(state, t.pid).name : t.kind === 'card' ? cardName(state.cards[t.iid], ctx.lookup) : state.stack.find((s) => s.id === t.id)?.text ?? 'a spell') ?? [];
       log(state, ctx, pid, `${name} casts ${a.faceDown ? 'a face-down spell' : face.name}${a.x != null ? ` (X=${a.x})` : ''}${fromText}${tnames.length ? ` targeting ${tnames.join(', ')}` : ''}${paid}.`);
+      finishCast(state, ctx, pid, c, item, prep.plan, payment, a); // cast info, life / sacrifice / exile costs (may ask)
       giveResponse(state, pid);
       return null;
     }
@@ -582,7 +579,10 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         return null;
       }
       if (a.loyalty != null) {
+        const lerr = a.force ? null : loyaltyError(state, c, pid, cardName(c, ctx.lookup));
+        if (lerr) return lerr;
         c.counters.loyalty = (c.counters.loyalty ?? 0) + a.loyalty;
+        recordActivation(state, c, undefined, undefined, true);
       }
       const src = cardName(c, ctx.lookup);
       state.stack.push({ id: randomId(ctx.rng), kind: 'ability', sourceIid: c.iid, controller: pid, text: `${src}: ${a.text}` });
@@ -644,6 +644,9 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       for (const s of symbols) me.manaPool[s] = (me.manaPool[s] ?? 0) + 1;
       log(state, ctx, pid, `${name} taps ${cardName(c, ctx.lookup)} for ${symbols.map((s) => `{${s}}`).join('')}.`);
       return null;
+    }
+    case 'activateMana': {
+      return activateMana(state, ctx, pid, a);
     }
     case 'addMana': {
       if (!/^[WUBRGC]$/.test(a.mana)) return 'Bad mana';

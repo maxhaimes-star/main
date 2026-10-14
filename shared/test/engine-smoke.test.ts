@@ -54,7 +54,7 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
         applyAction(g, 'a', { t: 'pass' }, ctx);
         const specs = targetSpecs(sp.ability, modes);
         const targets = pickTargets(g, specs, hand);
-        const err = applyAction(g, 'a', { t: 'cast', iid: hand, face, targets, x: 2, modes }, ctx);
+        const err = applyAction(g, 'a', { t: 'cast', iid: hand, face, targets, x: 2, modes, force: true }, ctx);
         if (err) continue; // e.g. no legal target on this board
         n++;
         drain(g, ctx);
@@ -69,7 +69,7 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
         g.cards[iid].counters.loyalty = 20;
         try {
           const targets = pickTargets(g, targetSpecs(ab.ability), iid);
-          const err = applyAction(g, 'a', { t: 'activate', iid, text: '', ability: ab.index, targets, x: 1 }, ctx);
+          const err = applyAction(g, 'a', { t: 'activate', iid, text: '', ability: ab.index, targets, x: 1, force: true }, ctx);
           if (err) continue;
           n++;
           drain(g, ctx);

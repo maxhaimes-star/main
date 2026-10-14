@@ -1,5 +1,6 @@
 import {
-  activatedAbilities, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, triggeredAbilities, type CardInstance, type TargetRef,
+  activatedAbilities, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
+  type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
 import { AUTO_LABEL, autoStatus, castStatus, safeActivated, safeSpecs, safeSpell } from './engine.ts';
@@ -23,6 +24,13 @@ export function manaOptions(c: CardInstance): string[] {
   if (doubles && produced.length === 1) return [doubles[0].match(/\{[WUBRGC]\}/g)!.join('').replace(/[{}]/g, '')];
   return produced;
 }
+
+/** Scripted mana abilities (engine), or [] to fall back to manaOptions(). */
+function scriptedMana(g: GameView, iid: string): ManaOption[] {
+  try { return manaOptionsFor(g as never, iid, getCard); } catch { return []; }
+}
+
+const manaLabel = (o: ManaOption) => `${o.label}${o.sideEffects.length ? ` — ${o.sideEffects.join('; ')}` : ''}`;
 
 /** Default click behaviour for a card. */
 export function defaultAction(base: Base, iid: string, menu: (iid: string) => MenuItem[], open: (items: MenuItem[], title?: string) => void) {
@@ -55,8 +63,11 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     }
     if (c.controller !== me) return;
     if (vis && !c.tapped) {
-      const opts = manaOptions(vis);
       const isLand = faceOf(vis, getCard).types.includes('Land');
+      const scripted = scriptedMana(g, iid);
+      if (scripted.length === 1 && (isLand || !faceOf(vis, getCard).types.includes('Creature'))) { act({ t: 'activateMana', iid, option: scripted[0].id }); return; }
+      if (scripted.length > 1) { open(scripted.map((o) => ({ label: manaLabel(o), onClick: () => act({ t: 'activateMana', iid, option: o.id }) })), 'Tap for mana'); return; }
+      const opts = scripted.length ? [] : manaOptions(vis);
       if (opts.length === 1 && (isLand || !faceOf(vis, getCard).types.includes('Creature'))) { act({ t: 'tapForMana', iid, mana: opts[0] }); return; }
       if (opts.length > 1) { open(opts.map((m) => ({ label: `Add ${m.split('').map((x) => `{${x}}`).join('')} (${MANA_NAMES[m[0]]})`, onClick: () => act({ t: 'tapForMana', iid, mana: m }) })), 'Tap for mana'); return; }
     }
@@ -171,7 +182,11 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
 
   if (c.zone === 'battlefield') {
     items.push({ label: c.tapped ? 'Untap' : 'Tap', onClick: () => act({ t: 'tap', iid }) });
-    const mana = manaOptions(c);
+    const scriptedM = scriptedMana(g, iid);
+    const mana = scriptedM.length ? [] : manaOptions(c);
+    if (scriptedM.length && !c.tapped && c.controller === me) {
+      items.push({ label: 'Tap for mana', sub: scriptedM.map((o) => ({ label: manaLabel(o), onClick: () => act({ t: 'activateMana', iid, option: o.id }) })) });
+    }
     if (mana.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: mana.map((m) => ({ label: m.split('').map((x) => `{${x}}`).join(''), onClick: () => act({ t: 'tapForMana', iid, mana: m }) })) });
     }

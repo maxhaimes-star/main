@@ -1,5 +1,6 @@
 import type { TokenData } from '../cards.ts';
 import type { Rng } from '../draft.ts';
+import { afterMove, beforeMove } from '../engine/durations.ts';
 import { faceOf, type Lookup } from './rules.ts';
 import type { CardInstance, GamePlayer, GameState, PlayerZone, Zone } from './types.ts';
 
@@ -106,10 +107,12 @@ export function resetPermanentState(inst: CardInstance) {
 export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: { position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean; controller?: string } = {}) {
   const inst = state.cards[iid];
   const from = inst.zone;
+  to = beforeMove(state, inst, to); // engine bookkeeping (Revolt) and flashback -> exile
   detach(state, inst);
   // Tokens and copies cease to exist outside the battlefield/stack.
   if (inst.token && to !== 'battlefield' && to !== 'stack') {
     delete state.cards[iid];
+    afterMove(state, ctx, inst, from, to);
     return;
   }
   if (from === 'battlefield' || to !== 'battlefield') {
@@ -144,4 +147,5 @@ export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts
     else if (to === 'library' || opts.position === 'top') z.unshift(iid);
     else z.push(iid);
   }
+  afterMove(state, ctx, inst, from, to);
 }

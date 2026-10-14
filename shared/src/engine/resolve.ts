@@ -7,6 +7,9 @@ import { type Ctx, drawCards, log, moveCard, newInstance, player, randomId, shuf
 import type { CardInstance, GamePlayer, GameState, StackItem, Zone } from '../game/types.ts';
 import { abilityAt, flatten, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
+import { answerCostPending, type CostData } from './costs.ts';
+import { conditionTrue, type CountEnv, evalCount } from './counts.ts';
+import { addEffect } from './durations.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
 
 // ------------------------------------------------------------------ run context
@@ -137,9 +140,21 @@ function firstCardTarget(r: Run): string | undefined {
   return undefined;
 }
 
+function countEnv(state: GameState, ctx: Ctx, r: Run): CountEnv {
+  const src = r.sourceIid ? state.cards[r.sourceIid] : undefined;
+  const auto = r.item.auto;
+  return {
+    state, lookup: ctx.lookup, controller: r.controller, sourceIid: r.sourceIid, x: auto?.x ?? r.item.x,
+    kicked: auto?.kicked ?? r.item.castInfo?.kicked ?? src?.castInfo?.kicked,
+    colorsSpent: auto?.colorsSpent ?? r.item.castInfo?.colorsSpent ?? src?.castInfo?.colorsSpent,
+  };
+}
+
 function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefined {
   if (!supportedVar(v)) return undefined;
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
+  const counted = evalCount(v, countEnv(state, ctx, r));
+  if (counted !== undefined) return counted;
   let m = /^Number\$(-?\d+)$/.exec(v);
   if (m) return parseInt(m[1], 10);
   m = /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.exec(v);
@@ -195,6 +210,11 @@ function compare(state: GameState, ctx: Ctx, r: Run, left: number, expr: string)
 function condition(state: GameState, ctx: Ctx, r: Run, i: number): Tri {
   const p = r.steps[i].params;
   let result: Tri = true;
+  if (p.Condition) {
+    const t = conditionTrue(p.Condition, countEnv(state, ctx, r));
+    if (t === false) return false;
+    if (t === undefined) result = 'unknown';
+  }
   if (p.ConditionDefined || p.ConditionPresent) {
     let cards: string[];
     if (p.ConditionDefined) {
@@ -210,7 +230,9 @@ function condition(state: GameState, ctx: Ctx, r: Run, i: number): Tri {
       else if (m === 'unknown') unknown = true;
     }
     const c = compare(state, ctx, r, count, p.ConditionCompare ?? 'GE1');
-    result = unknown && c === false ? 'unknown' : unknown && c === true ? 'unknown' : c;
+    const c2: Tri = unknown && c !== 'unknown' ? 'unknown' : c;
+    if (c2 === false) return false;
+    if (c2 === 'unknown') result = 'unknown';
   }
   if (p.ConditionCheckSVar) {
     const v = amount(state, ctx, r, p.ConditionCheckSVar, 0);
@@ -264,6 +286,12 @@ function moveTo(state: GameState, ctx: Ctx, r: Run, iid: string, dest: Zone, p: 
   else moveCard(state, ctx, iid, dest);
 }
 
+/** Duration$ UntilHostLeavesPlay on an exile: the host iid, 'gone' if the host already left, else undefined. */
+function untilHostLeaves(state: GameState, r: Run, p: Record<string, string>, dest: Zone): string | undefined {
+  if (p.Duration !== 'UntilHostLeavesPlay' || dest !== 'exile' || !r.sourceIid) return undefined;
+  return state.cards[r.sourceIid]?.zone === 'battlefield' ? r.sourceIid : 'gone';
+}
+
 function manaString(cost: string, x: number): string | undefined {
   const parts = cost.trim().split(/\s+/);
   let out = '';
@@ -294,6 +322,8 @@ interface PickData {
   label: string;
   queue: Omit<PickData, 'queue' | 'cont'>[];
   cont?: AutoCont;
+  /** Exiled "until <this permanent> leaves the battlefield". */
+  untilHost?: string;
 }
 
 interface UnlessData {
@@ -335,9 +365,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const p = step.params;
   const me = player(state, r.controller);
   const reason = unsupportedReason(step);
-  const supportedAnyway = step.api === 'DealDamage' && reason === 'DealDamage (divided)';
   if (step.api === 'Effect' && !reason) return 'ok'; // e.g. "can't be regenerated": nothing to do
-  if (reason && !supportedAnyway) {
+  if (reason) {
     if (step.api !== 'Cleanup') manual(state, ctx, r, step);
     return 'ok';
   }
@@ -365,17 +394,35 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const n = amount(state, ctx, r, p.NumDmg, 0);
       const o = objects(state, r, i, 'You');
       if (n == null || !o || (!ownTargets(r, i) && !p.Defined)) return bad();
-      if (p.DividedAsYouChoose && o.cards.length + o.players.length > 1) return bad();
+      const division = p.DividedAsYouChoose ? r.item.auto?.division : undefined;
+      const many = o.cards.length + o.players.length > 1;
+      if (p.DividedAsYouChoose && many && !division) return bad();
+      // Divided damage: each object gets its share (a single target gets it all).
+      const dmgOf = (key: string) => (division && many ? division[key] ?? 0 : n);
       const srcObj = p.DamageSource ? defined(state, r, i, p.DamageSource)?.cards[0] : r.sourceIid;
       const src = srcObj ? state.cards[srcObj] : undefined;
       const srcName = src ? cardName(src, ctx.lookup) : r.sourceName;
       const deathtouch = !!src && hasKeyword(src, ctx.lookup, 'Deathtouch');
       const hit: string[] = [];
-      for (const iid of o.cards) { const c = onBattlefield(state, iid); if (c) { damageCard(state, ctx, r, c, n, deathtouch); hit.push(cardName(c, ctx.lookup)); } }
-      for (const pid of o.players) { player(state, pid).life -= n; hit.push(pname(state, pid)); }
-      log(state, ctx, r.controller, `${srcName} deals ${n} damage to ${hit.join(', ') || 'nothing'}.`);
+      let dealt = 0;
+      for (const iid of o.cards) {
+        const c = onBattlefield(state, iid);
+        const k = dmgOf(iid);
+        if (!c || k <= 0) continue;
+        damageCard(state, ctx, r, c, k, deathtouch);
+        hit.push(division && many ? `${cardName(c, ctx.lookup)} (${k})` : cardName(c, ctx.lookup));
+        dealt += k;
+      }
+      for (const pid of o.players) {
+        const k = dmgOf(pid);
+        if (k <= 0) continue;
+        player(state, pid).life -= k;
+        hit.push(division && many ? `${pname(state, pid)} (${k})` : pname(state, pid));
+        dealt += k;
+      }
+      log(state, ctx, r.controller, `${srcName} deals ${division && many ? '' : `${n} `}damage to ${hit.join(', ') || 'nothing'}.`);
       if (src && hasKeyword(src, ctx.lookup, 'Lifelink') && hit.length) {
-        const gain = n * hit.length;
+        const gain = dealt;
         player(state, src.controller).life += gain;
         log(state, ctx, src.controller, `${pname(state, src.controller)} gains ${gain} life (lifelink).`);
       }
@@ -478,14 +525,19 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const n = p.ChangeNum === 'All' ? cands.length : amount(state, ctx, r, p.ChangeNum, 1);
         if (n == null) return bad();
         if (!cands.length) { log(state, ctx, chooserPid, `${r.sourceName}: no card to choose.`); return 'ok'; }
+        const host = untilHostLeaves(state, r, p, dest);
+        if (host === 'gone') { log(state, ctx, r.controller, `${r.sourceName} already left the battlefield — nothing is exiled.`); return 'ok'; }
         const where = dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of your library' : 'on top of your library') : `to ${dest === 'battlefield' ? 'the battlefield' : `your ${dest}`}`;
         const created = startPicks(state, ctx, [{
           kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && origin !== 'hand',
-          dest, params: p, label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
+          dest, params: p, ...(host ? { untilHost: host } : {}), label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
         return created ? 'wait' : 'ok';
       }
       const moved: string[] = [];
+      const untilHost = untilHostLeaves(state, r, p, dest);
+      if (untilHost === 'gone') { log(state, ctx, r.controller, `${r.sourceName} already left the battlefield — nothing is exiled.`); return 'ok'; }
+      const exiled: { iid: string; from: string; owner: string }[] = [];
       for (const iid of cards) {
         const c = state.cards[iid];
         if (!c) continue;
@@ -493,9 +545,12 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         if (!self && origins.length && !origins.includes(c.zone) && !p.Origin?.includes('Any')) continue;
         r.lki[iid] ??= lkiOf(c, ctx);
         const nm = cardName(c, ctx.lookup);
+        const from = c.zone;
         moveTo(state, ctx, r, iid, dest, p);
         moved.push(nm);
+        if (untilHost && state.cards[iid]?.zone === 'exile') exiled.push({ iid, from, owner: c.owner });
       }
+      if (untilHost && exiled.length) addEffect(state, ctx, { kind: 'exiled', controller: r.controller, until: 'hostLeaves', hostIid: untilHost, cards: exiled });
       remember(cards.filter((x) => state.cards[x]));
       if (p.Shuffle === 'True') for (const pid of new Set(cards.map((x) => state.cards[x]?.owner).filter(Boolean) as string[])) shuffleLibrary(state, player(state, pid), ctx.rng);
       const destLabel = dest === 'library' ? 'its owner\'s library' : dest === 'battlefield' ? 'the battlefield' : `${dest}`;
@@ -639,7 +694,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const bits = [(a || d) ? `get${hit.length === 1 ? 's' : ''} ${a >= 0 ? '+' : ''}${a}/${d >= 0 ? '+' : ''}${d}` : '', kws.length ? `gain${hit.length === 1 ? 's' : ''} ${kws.join(', ')}` : ''].filter(Boolean).join(' and ');
       if (hit.length) log(state, ctx, r.controller, `${hit.join(', ')} ${bits || 'is pumped'} until end of turn.`);
       else log(state, ctx, r.controller, `${r.sourceName}: nothing to pump.`);
-      if (p.Duration && p.Duration !== 'UntilEndOfTurn') log(state, ctx, r.controller, `Reminder: this lasts ${p.Duration.replace(/([A-Z])/g, ' $1').trim().toLowerCase()} — the engine removes it at end of turn; re-apply by hand.`);
+      if (p.Duration === 'UntilYourNextTurn') {
+        const live = cards.filter((x) => onBattlefield(state, x));
+        if (live.length) addEffect(state, ctx, { kind: 'pump', controller: r.controller, until: 'yourNextTurn', cards: live, pt: [a, d], keywords: kws });
+      } else if (p.Duration && p.Duration !== 'UntilEndOfTurn') log(state, ctx, r.controller, `Reminder: this lasts ${p.Duration.replace(/([A-Z])/g, ' $1').trim().toLowerCase()} — the engine removes it at end of turn; re-apply by hand.`);
       return 'ok';
     }
     case 'Tap': case 'Untap': case 'TapAll': case 'UntapAll': {
@@ -728,13 +786,17 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const iid of o.cards) {
         const c = onBattlefield(state, iid);
         if (!c) continue;
+        const previous = c.controller;
+        const eot = /EOT|EndOfTurn/.test(p.LoseControl ?? '') || p.Duration === 'UntilEndOfTurn';
+        if (eot) addEffect(state, ctx, { kind: 'control', controller: to, until: 'eot', iid: c.iid, previous });
+        else if ((/LeavesPlay/.test(p.LoseControl ?? '') || p.Duration === 'UntilHostLeavesPlay') && r.sourceIid) addEffect(state, ctx, { kind: 'control', controller: to, until: 'hostLeaves', iid: c.iid, previous, hostIid: r.sourceIid });
         c.controller = to;
         c.summoningSick = true;
         c.attacking = undefined;
         c.blocking = undefined;
         if (p.Untap === 'True') c.tapped = false;
         if (kws.length) c.tempKeywords = [...new Set([...(c.tempKeywords ?? []), ...kws])];
-        log(state, ctx, to, `${pname(state, to)} gains control of ${cardName(c, ctx.lookup)}${p.LoseControl ? ' (give it back at end of turn by hand)' : ''}.`);
+        log(state, ctx, to, `${pname(state, to)} gains control of ${cardName(c, ctx.lookup)}${eot ? ' until end of turn' : ''}.`);
       }
       return 'ok';
     }
@@ -853,7 +915,7 @@ function stillLegal(state: GameState, ctx: Ctx, item: StackItem, spec: TargetSpe
  * Resolve an automated stack item. `finish` puts a spell card where it goes after resolving
  * (battlefield / graveyard / exile) without logging.
  */
-export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPermanentSpell: boolean, finish: () => void) {
+export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPermanentSpell: boolean, finish: () => void): boolean {
   const auto = item.auto!;
   state.stack = state.stack.filter((s) => s !== item);
   const ab = abilityFor(auto);
@@ -862,7 +924,7 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
   if (!ab) {
     log(state, ctx, item.controller, `${name} resolves (not automated — resolve it by hand).`);
     if (item.iid && state.cards[item.iid]?.zone === 'stack') finish();
-    return;
+    return true;
   }
   const specs = targetSpecs(ab, auto.modes);
   const legal = auto.targets.map((list, k) => list.filter((ref) => stillLegal(state, ctx, item, specs[k], ref)));
@@ -871,7 +933,7 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
   if (total > 0 && left === 0) {
     if (item.iid && state.cards[item.iid]?.zone === 'stack') moveCard(state, ctx, item.iid, 'graveyard');
     log(state, ctx, item.controller, `${name} fizzles — its target${total === 1 ? ' is' : 's are'} no longer legal.`);
-    return;
+    return false;
   }
   if (left < total) log(state, ctx, item.controller, `${name}: ${total - left} target${total - left === 1 ? ' is' : 's are'} no longer legal.`);
   const lki: Record<string, Lki> = {};
@@ -893,6 +955,7 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
   }
   if (isSpellCard && !isPermanentSpell && state.cards[item.iid!]?.zone === 'stack') finish();
   stateBasedActions(state, ctx, r.deathtouched);
+  return true;
 }
 
 /** Answer a Pending question. Returns an error string or null. */
@@ -902,6 +965,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (pend.pid !== pid) return 'That question is for another player';
   if (!pend.options.some((o) => o.value === value)) return 'Not one of the options';
   state.pending = state.pending.filter((p) => p !== pend);
+  if ((pend.data as { kind?: string }).kind === 'cost') return answerCostPending(state, ctx, pid, pend.data as unknown as CostData, value);
   const data = pend.data as unknown as PickData | UnlessData;
   const who = player(state, pid);
   if (data.kind === 'unless') {
@@ -938,6 +1002,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
         if (data.dest === 'library') moveCard(state, ctx, value, 'library', { position: p.LibraryPosition === '-1' ? 'bottom' : 'top' });
         else if (data.dest === 'battlefield') moveCard(state, ctx, value, 'battlefield', { tapped: p.Tapped === 'True', controller: pid });
         else moveCard(state, ctx, value, data.dest ?? 'hand');
+        if (data.untilHost && state.cards[value]?.zone === 'exile') addEffect(state, ctx, { kind: 'exiled', controller: pid, until: 'hostLeaves', hostIid: data.untilHost, cards: [{ iid: value, from, owner: c.owner }] });
         const hidden = (z: Zone) => z === 'hand' || z === 'library';
         log(state, ctx, pid, `${who.name} puts ${hidden(from) && hidden(data.dest ?? 'hand') ? 'a card' : nm} ${data.dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of their library' : 'on top of their library') : `into ${data.dest === 'battlefield' ? 'play' : `their ${data.dest}`}`}.`);
       }

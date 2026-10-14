@@ -3,6 +3,7 @@
  * and "can the engine run this" checks.
  */
 import data from '../../data/scripts.json' with { type: 'json' };
+import { KNOWN_CONDITIONS, supportedCount } from './counts.ts';
 import type { ForgeFace, ParsedAbility, ScriptData, TargetSpec } from './types.ts';
 
 export const SCRIPTS = data as unknown as ScriptData;
@@ -219,7 +220,8 @@ export function supportedVar(v: string | undefined): boolean {
   if (!v) return false;
   return /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v)
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
-    || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v);
+    || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
+    || supportedCount(v);
 }
 
 export function amountSupported(raw: string | undefined, svars: Record<string, string> | undefined): boolean {
@@ -238,7 +240,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   if (api === 'Charm') return step.choices?.length ? null : api;
   if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined)) return `${api} (Defined$ ${p.Defined})`;
   if (p.UnlessCost && api !== 'Counter') return `${api} (UnlessCost)`;
-  if (p.Condition) return `${api} (Condition$ ${p.Condition})`;
+  if (p.Condition && !KNOWN_CONDITIONS.has(p.Condition)) return `${api} (Condition$ ${p.Condition})`;
   for (const k of AMOUNT_PARAMS) {
     if (k === 'Amount' && !['Surveil', 'Mana', 'Sacrifice'].includes(api)) continue;
     if (!amountSupported(p[k], step.svars)) return `${api} (${k}$ ${p[k]})`;
@@ -255,7 +257,6 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     }
     case 'ChangeZoneAll': if (!p.Destination || !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination) || !p.Origin || /Stack|Any/.test(p.Origin)) return 'ChangeZoneAll'; break;
     case 'PutCounter': if (!p.CounterType && !p.Adapt) return 'PutCounter'; break;
-    case 'DealDamage': if (p.DividedAsYouChoose) return 'DealDamage (divided)'; break;
     case 'Pump': case 'PumpAll':
       if (p.PumpZone || (p.KW && /HIDDEN|Protection|:/.test(p.KW))) return `${api} (special keyword)`;
       if (p.Defined && ['You', 'Player', 'Opponent', 'TargetedPlayer'].includes(p.Defined)) return `${api} (player)`;

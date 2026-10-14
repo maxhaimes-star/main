@@ -3,7 +3,9 @@ import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
 import { abilityAt, getScript, spellAbility, targetSpecs } from './script.ts';
+import { divisionError } from './divide.ts';
 import { isValidTarget } from './targets.ts';
+import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
@@ -98,8 +100,14 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const ab = abilityAt(c.cardId, face, a.ability!);
   if (!ab) return 'No such ability';
   const src = cardName(c, ctx.lookup);
+  if (!a.force) {
+    const timing = activationError(state, c, pid, ab, a.ability!, src);
+    if (timing) return timing;
+  }
   const res = checkTargets(state, ab, undefined, a.targets ?? [], pid, c.iid, ctx, src);
   if ('error' in res) return res.error;
+  const divErr = divisionError(ab, undefined, res.targets, a.division, a.x ?? 0);
+  if (divErr) return `${src}: ${divErr}`;
   const x = a.x ?? 0;
   const num = (v: string) => (v === 'X' ? x : parseInt(v, 10) || 0);
 
@@ -144,6 +152,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   }
   const auto: AutoInfo = { cardId: c.cardId, face, source: 'ability', index: a.ability!, targets: res.targets, targetZones: res.targetZones };
   if (a.x != null) auto.x = a.x;
+  if (a.division) auto.division = { ...a.division };
+  recordActivation(state, c, ab, a.ability!, counterDelta.loyalty != null);
   const item: StackItem = { id: randomId(ctx.rng), kind: 'ability', sourceIid: c.iid, controller: pid, text: `${src}: ${ab.description}`, auto };
   if (a.x != null) item.x = a.x;
   state.stack.push(item);

@@ -92,7 +92,70 @@ export interface AutoInfo {
   modes?: string[];
   /** Zone each targeted card was in when chosen, to detect illegal targets on resolution. */
   targetZones?: Record<string, string>;
+  /** Cast with kicker (Count$Kicked / Condition$ Kicked). */
+  kicked?: boolean;
+  /** Colors of mana spent to cast it (Count$Converge). */
+  colorsSpent?: string[];
+  /** Divided damage (DividedAsYouChoose$): target key (card iid or player pid) -> amount. */
+  division?: Record<string, number>;
+  /** Id of the cast option used (see castOptions), e.g. 'normal', 'flashback', 'evoke'. */
+  costOption?: string;
 }
+
+/** How a spell was cast (alternative / additional costs). Kept on the stack item and on the card while it's on the stack/battlefield. */
+export interface CastInfo {
+  /** castOptions id: 'normal', 'kicked', 'alt0', 'evoke', 'flashback', 'escape', 'dash', 'buyback', 'overload', ... */
+  option: string;
+  kicked?: boolean;
+  evoked?: boolean;
+  dashed?: boolean;
+  escaped?: boolean;
+  buyback?: boolean;
+  overloaded?: boolean;
+  /** Flashback / escape (non-permanent): exiled instead of going anywhere else when it leaves the stack. */
+  exileOnLeave?: boolean;
+  colorsSpent?: string[];
+}
+
+/** One way to cast a card (normal cost, alternative cost, kicker ...). */
+export interface CastOption {
+  id: string;
+  label: string;
+  /** Mana part, e.g. "{1}{U}{U}" ('' = free). */
+  cost: string;
+  /** Non-mana parts in human text ("Pay 1 life", "Exile a blue card from your hand"). */
+  extra: string[];
+  /** Set when the option exists but can't be used right now (wrong zone, condition unmet, not enough cards...). */
+  unavailable?: string;
+}
+
+/** One way to activate a mana ability. */
+export interface ManaOption {
+  id: string;
+  label: string;
+  /** Mana added, e.g. "CC", "GGG" ('' = nothing). */
+  produces: string;
+  /** What else happens (human text): "Ancient Tomb deals 2 damage to you", "Sacrifice Lotus Petal". */
+  sideEffects: string[];
+}
+
+/** Per-turn bookkeeping (reset lazily when `turn` changes). */
+export interface TurnInfo {
+  turn: number;
+  /** Players who controlled a permanent that left the battlefield this turn (Revolt). */
+  leftBattlefield: string[];
+  /** Planeswalkers (iids) that activated a loyalty ability this turn. */
+  loyaltyUsed: string[];
+  /** "iid|abilityIndex" -> activations this turn (ActivationLimit$). */
+  activations: Record<string, number>;
+}
+
+/** An effect with a duration the engine reverts later. */
+export type TimedEffect =
+  | { kind: 'pump'; id: string; controller: string; until: 'yourNextTurn'; cards: string[]; pt: [number, number]; keywords: string[] }
+  | { kind: 'control'; id: string; controller: string; until: 'eot' | 'hostLeaves'; iid: string; previous: string; hostIid?: string }
+  | { kind: 'exiled'; id: string; controller: string; until: 'hostLeaves'; hostIid: string; cards: { iid: string; from: string; owner: string }[] }
+  | { kind: 'dash'; id: string; controller: string; until: 'eot'; iid: string };
 
 /** A question the engine needs a player to answer (e.g. "Pay {3}?" for Mana Leak). */
 export interface Pending {
