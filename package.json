@@ -1,0 +1,22 @@
+{
+  "name": "ojb-cube",
+  "private": true,
+  "type": "module",
+  "workspaces": ["shared", "server", "client"],
+  "scripts": {
+    "dev": "concurrently -n server,client \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w client",
+    "start": "npm run start -w server",
+    "test": "vitest run",
+    "typecheck": "tsc -p shared && tsc -p server && tsc -p client",
+    "build-cube": "tsx scripts/build-cube.ts",
+    "crop-pdf": "tsx scripts/crop-pdf.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5",
+    "@types/node": "^22.10.7"
+  }
+}
