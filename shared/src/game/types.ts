@@ -1,4 +1,5 @@
 import type { TokenData } from '../cards.ts';
+import type { AutoInfo, Pending, TargetRef } from '../engine/types.ts';
 
 export const STEPS = [
   'untap', 'upkeep', 'draw', 'main1',
@@ -51,6 +52,8 @@ export interface CardInstance {
   blocking?: string; // attacker iid
   /** Copy of another card (Clone effects). */
   copyOf?: string;
+  /** Keywords granted until end of turn (Pump KW$ etc.). Cleared at cleanup. */
+  tempKeywords?: string[];
 }
 
 export interface StackItem {
@@ -64,6 +67,8 @@ export interface StackItem {
   text: string;
   /** Mana value of X etc. */
   x?: number;
+  /** Present when the engine resolves this automatically. */
+  auto?: AutoInfo;
 }
 
 export interface GamePlayer {
@@ -123,6 +128,8 @@ export interface GameState {
   /** Undo history (previous states, without logs). */
   history: string[];
   undoRequest: string | null;
+  /** Questions the engine is waiting on (answered with the 'choose' action). */
+  pending: Pending[];
   seq: number;
 }
 
@@ -144,8 +151,11 @@ export type GameAction =
   | { t: 'revealTop'; n: number }
   | { t: 'move'; iid: string; to: Zone; toOwner?: boolean; position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean }
   | { t: 'playLand'; iid: string }
-  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean }
-  | { t: 'activate'; iid: string; text: string; loyalty?: number }
+  /** targets: one list per TargetSpec of the spell. manual: skip the engine (resolve by hand). */
+  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[] }
+  /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. */
+  | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number }
+  | { t: 'choose'; id: string; value: string }
   | { t: 'trigger'; text: string; sourceIid?: string }
   | { t: 'resolve' }
   | { t: 'counterTop' }

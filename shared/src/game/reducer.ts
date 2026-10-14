@@ -60,6 +60,7 @@ export function createGame(id: string, seats: GameSeat[], startingPlayer: string
     log: [],
     history: [],
     undoRequest: null,
+    pending: [],
     seq: 0,
   };
   for (const seat of seats) {

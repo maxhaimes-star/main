@@ -8,3 +8,4 @@ export * from './game/combat.ts';
 export * from './game/reducer.ts';
 export * from './game/view.ts';
 export * from './protocol.ts';
+export * from './engine/index.ts';
