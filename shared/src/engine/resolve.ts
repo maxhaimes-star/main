@@ -62,7 +62,8 @@ function pname(state: GameState, pid: string): string {
 }
 
 function manual(state: GameState, ctx: Ctx, r: Run, step: ParsedAbility) {
-  log(state, ctx, r.controller, `Not automated: ${step.description} — resolve it by hand.`);
+  const what = step.description === step.api ? `${r.sourceName} (${step.api})` : step.description;
+  log(state, ctx, r.controller, `Not automated: ${what} — resolve it by hand.`);
 }
 
 // ------------------------------------------------------------------ targets & defined objects
@@ -335,6 +336,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const me = player(state, r.controller);
   const reason = unsupportedReason(step);
   const supportedAnyway = step.api === 'DealDamage' && reason === 'DealDamage (divided)';
+  if (step.api === 'Effect' && !reason) return 'ok'; // e.g. "can't be regenerated": nothing to do
   if (reason && !supportedAnyway) {
     if (step.api !== 'Cleanup') manual(state, ctx, r, step);
     return 'ok';
@@ -502,17 +504,16 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     }
     case 'ChangeZoneAll': {
       const dest = zoneOf(p.Destination);
-      const origin = zoneOf(p.Origin);
-      if (!dest || !origin) return bad();
+      const origins = (p.Origin ?? '').split(',').map((z) => zoneOf(z));
+      if (!dest || !origins.length || origins.some((z) => !z || z === 'stack')) return bad();
       const valid = p.ChangeType ?? p.ValidCards ?? 'Card';
-      let pool: string[];
-      if (origin === 'battlefield') pool = [...state.battlefield];
-      else if (origin === 'stack') return bad();
-      else {
+      const pool: string[] = [];
+      for (const origin of origins as Zone[]) {
+        if (origin === 'battlefield') { pool.push(...state.battlefield); continue; }
         const own = ownTargets(r, i);
         const ps = own ? split(state, own).players : p.Defined ? defined(state, r, i, p.Defined)?.players : state.players.filter((x) => !x.conceded).map((x) => x.pid);
         if (!ps) return bad();
-        pool = ps.flatMap((pid) => [...player(state, pid).zones[origin as 'hand']]);
+        pool.push(...ps.flatMap((pid) => [...player(state, pid).zones[origin as 'hand']]));
       }
       const ms = pool.map((x) => [x, matchCard(state.cards[x], valid, E)] as const);
       if (ms.some(([, m]) => m === 'unknown')) return bad();
@@ -548,9 +549,13 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       return 'ok';
     }
     case 'PutCounter': case 'PutCounterAll': {
-      const n = amount(state, ctx, r, p.CounterNum, 1);
-      if (n == null || !p.CounterType) return bad();
-      const kind = counterKind(p.CounterType);
+      const n = amount(state, ctx, r, p.Adapt ?? p.CounterNum, 1);
+      if (n == null || !(p.CounterType || p.Adapt)) return bad();
+      const kind = counterKind(p.CounterType ?? 'P1P1');
+      if (p.Adapt) {
+        const self = r.sourceIid ? onBattlefield(state, r.sourceIid) : undefined;
+        if (self && (self.counters['+1/+1'] ?? 0) > 0) { log(state, ctx, r.controller, `${r.sourceName} already has +1/+1 counters — adapt does nothing.`); return 'ok'; }
+      }
       let o: Objs | undefined;
       if (step.api === 'PutCounterAll') {
         const ms = state.battlefield.map((x) => [x, matchCard(state.cards[x], p.ValidCards ?? 'Card', E)] as const);
@@ -631,8 +636,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         if (kws.length) c.tempKeywords = [...new Set([...(c.tempKeywords ?? []), ...kws])];
         hit.push(cardName(c, ctx.lookup));
       }
-      const bits = [(a || d) ? `${a >= 0 ? '+' : ''}${a}/${d >= 0 ? '+' : ''}${d}` : '', kws.length ? `gains ${kws.join(', ')}` : ''].filter(Boolean).join(' and ');
-      log(state, ctx, r.controller, `${hit.join(', ') || 'Nothing'} ${bits ? `gets ${bits}` : 'is pumped'} until end of turn.`);
+      const bits = [(a || d) ? `get${hit.length === 1 ? 's' : ''} ${a >= 0 ? '+' : ''}${a}/${d >= 0 ? '+' : ''}${d}` : '', kws.length ? `gain${hit.length === 1 ? 's' : ''} ${kws.join(', ')}` : ''].filter(Boolean).join(' and ');
+      if (hit.length) log(state, ctx, r.controller, `${hit.join(', ')} ${bits || 'is pumped'} until end of turn.`);
+      else log(state, ctx, r.controller, `${r.sourceName}: nothing to pump.`);
+      if (p.Duration && p.Duration !== 'UntilEndOfTurn') log(state, ctx, r.controller, `Reminder: this lasts ${p.Duration.replace(/([A-Z])/g, ' $1').trim().toLowerCase()} — the engine removes it at end of turn; re-apply by hand.`);
       return 'ok';
     }
     case 'Tap': case 'Untap': case 'TapAll': case 'UntapAll': {
@@ -764,6 +771,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     case 'Mana': {
       const n = amount(state, ctx, r, p.Amount, 1);
       if (n == null) return bad();
+      if (n <= 0) return 'ok';
       const syms = (p.Produced ?? '').split(' ');
       for (let k = 0; k < n; k++) for (const s of syms) me.manaPool[s] = (me.manaPool[s] ?? 0) + 1;
       log(state, ctx, r.controller, `${me.name} adds ${Array(n).fill(syms.map((s) => `{${s}}`).join('')).join('')}.`);
@@ -953,8 +961,9 @@ export function stateBasedActions(state: GameState, ctx: Ctx, deathtouched: stri
       const f = faceOf(c, ctx.lookup);
       if (isCreature(c, ctx.lookup)) {
         const [, t] = effectivePT(c, ctx.lookup);
-        const fixed = c.faceDown || /^-?\d+$/.test(f.toughness ?? '');
-        if (fixed && t <= 0) { dead.push([iid, 'has 0 toughness']); continue; }
+        // Only when a printed positive toughness was reduced (0/0 bodies usually get their size from statics we don't model).
+        const base = c.faceDown ? 2 : /^-?\d+$/.test(f.toughness ?? '') ? parseInt(f.toughness!, 10) : 0;
+        if (base > 0 && t <= 0) { dead.push([iid, 'has 0 toughness']); continue; }
         if (hasKeyword(c, ctx.lookup, 'Indestructible')) continue;
         if ((t > 0 && c.damage >= t) || (c.damage > 0 && deathtouched.includes(iid))) dead.push([iid, 'dies (lethal damage)']);
       } else if (f.types.includes('Planeswalker') && !c.faceDown && (c.counters.loyalty ?? 0) <= 0) {

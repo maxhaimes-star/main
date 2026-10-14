@@ -33,6 +33,8 @@ export interface GameCtx {
   setMode: (m: Mode) => void;
   ask: (label: string, dflt?: number) => Promise<number | null>;
   askText: (label: string, dflt?: string) => Promise<string | null>;
+  /** Charm-style mode picker: resolves to the chosen option values, or null if cancelled. */
+  pickModes: (label: string, options: { value: string; label: string }[], min: number, max: number) => Promise<string[] | null>;
   openZone: (pid: string, zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand') => void;
   openTokens: () => void;
   menuFor: (iid: string) => MenuItem[];
@@ -189,5 +191,23 @@ export function Modal({ title, onClose, children, wide }: { title: ReactNode; on
         {children}
       </div>
     </div>
+  );
+}
+
+export function ModesModal({ label, options, min, max, onDone }: { label: string; options: { value: string; label: string }[]; min: number; max: number; onDone: (v: string[] | null) => void }) {
+  const [sel, setSel] = useState<string[]>([]);
+  const toggle = (v: string) => setSel((s) => s.includes(v) ? s.filter((x) => x !== v) : max === 1 ? [v] : s.length < max ? [...s, v] : s);
+  return (
+    <Modal title={label} onClose={() => onDone(null)}>
+      <p className="muted">Choose {min === max ? min : `${min}–${max}`} mode{max === 1 ? '' : 's'}.</p>
+      <div className="modes-list">
+        {options.map((o) => (
+          <label key={o.value} className={`mode-opt ${sel.includes(o.value) ? 'sel' : ''}`}>
+            <input type={max === 1 ? 'radio' : 'checkbox'} checked={sel.includes(o.value)} onChange={() => toggle(o.value)} /> {o.label}
+          </label>
+        ))}
+      </div>
+      <div className="row"><button className="primary" disabled={sel.length < min || sel.length > max} onClick={() => onDone(sel)}>OK</button><button onClick={() => onDone(null)}>Cancel</button></div>
+    </Modal>
   );
 }

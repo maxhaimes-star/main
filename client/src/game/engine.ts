@@ -11,7 +11,7 @@ function safe<T>(f: () => T): T | undefined {
 
 export const safeSpell = (cardId: string | undefined, face: number) => cardId ? safe(() => spellAbility(cardId, face)) : undefined;
 export const safeActivated = (cardId: string | undefined, face: number) => (cardId ? safe(() => activatedAbilitiesOf(cardId, face)) : undefined) ?? [];
-export const safeSpecs = (ab: ParsedAbility): TargetSpec[] => safe(() => targetSpecs(ab)) ?? [];
+export const safeSpecs = (ab: ParsedAbility, modes?: string[]): TargetSpec[] => safe(() => targetSpecs(ab, modes)) ?? [];
 
 export function chainLength(ab: ParsedAbility): number {
   let n = 0;

@@ -41,7 +41,7 @@ export function parseAbility(line: string, svars: Record<string, string>, cardNa
   const { kind, api, params } = parseParams(line);
   if (kind !== 'SP' && kind !== 'AB' && kind !== 'DB') return undefined;
   let description = params.SpellDescription ?? '';
-  if (!description && params.StackDescription && params.StackDescription !== 'SpellDescription') description = params.StackDescription;
+  if (!description && params.StackDescription && !['SpellDescription', 'None'].includes(params.StackDescription)) description = params.StackDescription;
   if (!description) description = api;
   const ab: ParsedAbility = { kind, api, params, description: nameText(description, cardName), svars };
   if (depth < 20 && params.SubAbility) {
@@ -233,6 +233,7 @@ export function amountSupported(raw: string | undefined, svars: Record<string, s
 export function unsupportedReason(step: ParsedAbility): string | null {
   const p = step.params;
   const api = step.api;
+  if (api === 'Effect' && p.AILogic === 'CantRegenerate') return null; // regeneration isn't modelled: no-op
   if (!SUPPORTED_APIS.has(api)) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;
   if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined)) return `${api} (Defined$ ${p.Defined})`;
@@ -252,8 +253,13 @@ export function unsupportedReason(step: ParsedAbility): string | null {
       if (p.Destination && !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination)) return `ChangeZone (to ${p.Destination})`;
       break;
     }
-    case 'ChangeZoneAll': if (!p.Destination || !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination)) return 'ChangeZoneAll'; break;
+    case 'ChangeZoneAll': if (!p.Destination || !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination) || !p.Origin || /Stack|Any/.test(p.Origin)) return 'ChangeZoneAll'; break;
+    case 'PutCounter': if (!p.CounterType && !p.Adapt) return 'PutCounter'; break;
     case 'DealDamage': if (p.DividedAsYouChoose) return 'DealDamage (divided)'; break;
+    case 'Pump': case 'PumpAll':
+      if (p.PumpZone || (p.KW && /HIDDEN|Protection|:/.test(p.KW))) return `${api} (special keyword)`;
+      if (p.Defined && ['You', 'Player', 'Opponent', 'TargetedPlayer'].includes(p.Defined)) return `${api} (player)`;
+      break;
   }
   return null;
 }

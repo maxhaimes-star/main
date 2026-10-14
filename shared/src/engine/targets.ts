@@ -81,7 +81,7 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'OppCtrl': case 'YouDontCtrl': return c.controller !== env.controller;
     case 'YouOwn': return c.owner === env.controller;
     case 'OppOwn': case 'YouDontOwn': return c.owner !== env.controller;
-    case 'Other': return c.iid !== env.sourceIid;
+    case 'Other': case 'StrictlyOther': return c.iid !== env.sourceIid;
     case 'Self': return c.iid === env.sourceIid;
     case 'tapped': return c.tapped;
     case 'untapped': return !c.tapped;

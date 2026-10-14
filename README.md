@@ -8,6 +8,24 @@ A private, MTGO/Arena-style website for drafting and playing the **Orangejuicebo
 - **Deckbuilder**: CMC columns, mana curve, "suggest lands", and export to **XMage (.dck)**, MTGA/MTGO text, or Cockatrice (.cod).
 - **Play**: best-of-1/3/5 matches with sideboarding between games, on a synced tabletop.
 
+## Automatic card effects (Stage 1)
+
+Spells and activated abilities run themselves, driven by the open-source Forge card scripts in `shared/data/scripts.json`:
+
+- **Targets:** casting a targeted spell enters targeting mode, and only legal targets light up (hexproof and shroud are respected). Charm cards ask which modes you want.
+- **Resolving:** on resolution the engine deals damage, draws, destroys, exiles, bounces, reanimates, makes tokens, adds counters, pumps, gains or loses life, discards, mills, sacrifices and counters spells. Mana Leak-style spells ask the opponent "Pay {3}?".
+- **Choices:** scry, surveil and library searches open the right window, and the rest of the spell finishes after you choose.
+- **Activated abilities**, including planeswalker loyalty abilities, pay their own costs (tap, sacrifice, loyalty, mana from pool, life).
+- **Fizzling:** spells whose targets are all gone fizzle.
+- **Dying:** after an automatic effect, creatures with lethal damage and planeswalkers at 0 loyalty go to the graveyard.
+- **Coverage:** 203 of the 300 cube cards with spells or activated abilities are fully automatic, and 61 more are partly automatic. Anything not automated is logged ("Not automated: … resolve it by hand"). "Cast (resolve by hand)" turns the engine off for one spell.
+
+Not yet automated:
+- Triggered abilities like "When this enters…" (Stage 2).
+- Static effects like Thalia's tax or anthems (Stage 3).
+
+`npx tsx scripts/engine-coverage.ts` prints the current coverage. To refresh the scripts: `npx tsx scripts/build-scripts.ts --forge <forge>/forge-gui/res`.
+
 ## What's automated and what's manual
 
 | Automated (the site does it) | Manual (you do it, like paper Magic) |

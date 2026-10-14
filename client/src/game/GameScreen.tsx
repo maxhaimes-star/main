@@ -4,7 +4,7 @@ import {
 } from '@ojb/shared';
 import type { RoomProps } from '../Room.tsx';
 import { CardBack, CardImage, getCard, PreviewPanel, setPreview } from '../cards.tsx';
-import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame } from './ui.tsx';
+import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { castStatus, AUTO_LABEL, legalTarget } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
@@ -48,6 +48,8 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; title?: string } | null>(null);
   const [mode, setMode] = useState<Mode>(null);
   const [prompt, setPrompt] = useState<PromptState>(null);
+  const [modes, setModes] = useState<{ label: string; options: { value: string; label: string }[]; min: number; max: number; resolve: (v: string[] | null) => void } | null>(null);
+  const pickModes = useCallback((label: string, options: { value: string; label: string }[], min: number, max: number) => new Promise<string[] | null>((resolve) => setModes({ label, options, min, max, resolve })), []);
   const [zone, setZone] = useState<{ pid: string; zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand' } | null>(null);
   const [tokens, setTokens] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -92,7 +94,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     else setMode({ ...mode, chosen });
   };
 
-  const base = { g, me, act, ask, askText, setMode, opp, mode, target };
+  const base = { g, me, act, ask, askText, pickModes, setMode, opp, mode, target };
   const menuFor = (iid: string) => menuForImpl(base, iid);
   const defaultAction = (iid: string) => defaultActionImpl(base, iid, menuFor, (items, title) => {
     const el = document.querySelector(`[data-iid="${iid}"]`)?.getBoundingClientRect();
@@ -100,7 +102,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   });
 
   const ctx: GameCtx = {
-    g, me, self, opp, act, openMenu, mode, setMode, ask, askText,
+    g, me, self, opp, act, openMenu, mode, setMode, ask, askText, pickModes,
     openZone: (pid, z) => setZone({ pid, zone: z }), openTokens: () => setTokens(true), menuFor, defaultAction,
     target, pickTarget, isLegal, cast: (iid, face) => { castWithX(base, iid, face); }, toast, hoverTargets, setHoverTargets,
   };
@@ -148,6 +150,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
         {zone && <ZoneViewer pid={zone.pid} zone={zone.zone} onClose={() => setZone(null)} />}
         {tokens && <TokenModal onClose={() => setTokens(false)} />}
         {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+        {modes && <ModesModal {...modes} onDone={(v) => { modes.resolve(v); setModes(null); }} />}
         {prompt && <Prompt label={prompt.label} initial={prompt.initial} numeric={prompt.numeric} onDone={(v) => { prompt.resolve(v); setPrompt(null); }} />}
         {mode && mode.kind !== 'target' && mode.kind !== 'attackPW' && (
           <div className="mode-hint">

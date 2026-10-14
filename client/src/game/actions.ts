@@ -5,7 +5,7 @@ import { getCard } from '../cards.tsx';
 import { AUTO_LABEL, autoStatus, castStatus, safeActivated, safeSpecs, safeSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
-type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'setMode' | 'opp' | 'target'> & { mode: Mode };
+type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'setMode' | 'opp' | 'target'> & { mode: Mode };
 
 const MANA_NAMES: Record<string, string> = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', C: 'Colorless' };
 
@@ -85,16 +85,23 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
     x = v;
   }
   let targets: TargetRef[][] | undefined;
+  let modes: string[] | undefined;
   const sa = manual ? undefined : safeSpell(c?.cardId, face ?? 0);
+  if (sa?.ability.choices?.length) {
+    const ch = sa.ability.choices;
+    const picked = await base.pickModes(card?.name ?? 'Choose modes', ch.map((m) => ({ value: m.name, label: m.ability.description || m.ability.api })), sa.ability.charmMin ?? 1, sa.ability.charmMax ?? 1);
+    if (!picked) return;
+    modes = picked;
+  }
   if (sa) {
-    const specs = safeSpecs(sa.ability);
+    const specs = safeSpecs(sa.ability, modes);
     if (specs.length) {
       const t = await base.target(`Cast ${card ? (face != null && card.faces ? card.faces[face].name : card.name) : 'spell'}`, specs, iid);
       if (!t) return;
       targets = t;
     }
   }
-  base.act({ t: 'cast', iid, face, x, ...(targets ? { targets } : {}), ...(manual ? { manual: true } : {}) });
+  base.act({ t: 'cast', iid, face, x, ...(targets ? { targets } : {}), ...(modes ? { modes } : {}), ...(manual ? { manual: true } : {}) });
 }
 
 async function activateScripted(base: Base, iid: string, c: CardInstance, entry: ReturnType<typeof safeActivated>[number], label: string) {

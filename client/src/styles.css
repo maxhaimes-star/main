@@ -314,3 +314,6 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .modal.pending .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .pending-wait { top: 90px; border-color: var(--line); }
 .pending-bg { z-index: 160; }
+.modes-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.mode-opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.mode-opt.sel { border-color: var(--accent); }

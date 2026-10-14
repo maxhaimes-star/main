@@ -32,7 +32,7 @@ const set = async (label, v) => { await A.locator('.setting', { hasText: label }
 await set('Seats at the table', 2);
 await set('Packs per player', 1);
 await set('Cards per pack', 20);
-await A.locator('.setting.check', { hasText: 'bots' }).locator('input').uncheck();
+await A.locator('.setting.check', { hasText: 'bots' }).locator('input').click();
 await A.waitForTimeout(300);
 await A.getByRole('button', { name: /Start sealed/ }).click();
 
