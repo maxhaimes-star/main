@@ -4,7 +4,8 @@
  */
 import data from '../../data/scripts.json' with { type: 'json' };
 import { KNOWN_CONDITIONS, supportedCount } from './counts.ts';
-import type { ForgeFace, ParsedAbility, ScriptData, TargetSpec } from './types.ts';
+import { type AutoInfo, type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
+import { KEYWORD_APIS, synthAbilities, synthLine } from './keywords.ts';
 
 export const SCRIPTS = data as unknown as ScriptData;
 
@@ -66,22 +67,59 @@ export function parseAbility(line: string, svars: Record<string, string>, cardNa
 
 const cache = new Map<string, ParsedAbility | null>();
 
-/** Parsed A: line `index` of a face; -1 = synthesized aura spell (from K:Enchant). */
+/** Raw ability line for an index: A: line, -1 = aura spell (K:Enchant), >= SYNTH_BASE = keyword ability (keywords.ts). */
+export function abilityLine(cardId: string, face: number, index: number): string | undefined {
+  const f = getScript(cardId)?.[face];
+  if (!f) return undefined;
+  if (index === -1) return auraLine(f);
+  if (index >= SYNTH_BASE) return synthLine(f, index);
+  return f.abilities[index];
+}
+
+/** Parsed A: line `index` of a face; -1 = synthesized aura spell (from K:Enchant); >= SYNTH_BASE = keyword ability. */
 export function abilityAt(cardId: string, face: number, index: number): ParsedAbility | undefined {
   const key = `${cardId}|${face}|${index}`;
   if (cache.has(key)) return cache.get(key) ?? undefined;
   const f = getScript(cardId)?.[face];
-  let ab: ParsedAbility | undefined;
-  if (f) {
-    if (index === -1) {
-      const line = auraLine(f);
-      ab = line ? parseAbility(line, f.svars, f.name) : undefined;
-    } else if (f.abilities[index] != null) {
-      ab = parseAbility(f.abilities[index], f.svars, f.name);
-    }
-  }
+  const line = abilityLine(cardId, face, index);
+  const ab = f && line != null ? parseAbility(line, f.svars, f.name) : undefined;
   cache.set(key, ab ?? null);
   return ab;
+}
+
+/** Stage 2: the chain of a triggered ability (Execute$ SVar of a T: line, or a synthesized line). */
+export function triggerChain(cardId: string, face: number, svar: string | undefined, line: string | undefined): ParsedAbility | undefined {
+  const key = `${cardId}|${face}|t|${svar ?? ''}|${line ?? ''}`;
+  if (cache.has(key)) return cache.get(key) ?? undefined;
+  const f = getScript(cardId)?.[face];
+  const svars = f?.svars ?? {};
+  const src = line ?? (svar ? svars[svar] : undefined);
+  const ab = src ? parseAbility(src, svars, f?.name ?? 'It') : undefined;
+  cache.set(key, ab ?? null);
+  return ab;
+}
+
+/** The ability chain an AutoInfo refers to (spell / activated / triggered). */
+export function chainOf(auto: AutoInfo): ParsedAbility | undefined {
+  if (auto.source === 'trigger') return triggerChain(auto.cardId, auto.face, auto.svar, auto.line);
+  return abilityAt(auto.cardId, auto.face, auto.index);
+}
+
+/** Stage 2: the T: lines of a face, parsed into params. */
+export function triggersOf(cardId: string, face: number): { index: number; params: Record<string, string> }[] {
+  const key = `${cardId}|${face}`;
+  let out = trigCache.get(key);
+  if (!out) {
+    out = (getScript(cardId)?.[face]?.triggers ?? []).map((line, index) => ({ index, params: parseParams(line).params }));
+    trigCache.set(key, out);
+  }
+  return out;
+}
+const trigCache = new Map<string, { index: number; params: Record<string, string> }[]>();
+
+/** Human text with CARDNAME replaced. */
+export function describe(text: string, cardName: string): string {
+  return nameText(text, cardName);
 }
 
 /** Auras: "K:Enchant:<valid>[:<description>]" -> an equivalent "SP$ Attach" line. */
@@ -116,18 +154,36 @@ export function loyaltyOf(cost: string): number | undefined {
   return undefined;
 }
 
-export function activatedAbilitiesOf(cardId: string, face: number): { index: number; ability: ParsedAbility; cost: string; loyalty?: number }[] {
+export interface ActivatedEntry {
+  index: number;
+  ability: ParsedAbility;
+  cost: string;
+  loyalty?: number;
+  /** Zone the source must be in to activate (ActivationZone$); absent = battlefield. */
+  zone?: 'hand' | 'graveyard' | 'exile';
+  /** Keyword this ability was synthesized from (index >= SYNTH_BASE), e.g. "Equip", "Cycling". */
+  keyword?: string;
+}
+
+/** AB$ abilities (no mana abilities), then keyword-granted ones (Equip, Cycling, Crew ... see keywords.ts). */
+export function activatedAbilitiesOf(cardId: string, face: number): ActivatedEntry[] {
   const f = getScript(cardId)?.[face];
   if (!f) return [];
-  const out: { index: number; ability: ParsedAbility; cost: string; loyalty?: number }[] = [];
-  f.abilities.forEach((line, index) => {
-    if (!/^\s*AB\$/.test(line)) return;
+  const out: ActivatedEntry[] = [];
+  const push = (index: number, keyword?: string) => {
     const ability = abilityAt(cardId, face, index);
     if (!ability || MANA_APIS.has(ability.api)) return;
     const cost = ability.params.Cost ?? '';
+    const e: ActivatedEntry = { index, ability, cost };
     const loyalty = loyaltyOf(cost);
-    out.push(loyalty != null ? { index, ability, cost, loyalty } : { index, ability, cost });
-  });
+    if (loyalty != null) e.loyalty = loyalty;
+    const z = ability.params.ActivationZone?.trim().toLowerCase();
+    if (z === 'hand' || z === 'graveyard' || z === 'exile') e.zone = z;
+    if (keyword) e.keyword = keyword;
+    out.push(e);
+  };
+  f.abilities.forEach((line, index) => { if (/^\s*AB\$/.test(line)) push(index); });
+  for (const s of synthAbilities(f)) push(s.index, s.keyword);
   return out;
 }
 
@@ -187,6 +243,13 @@ function specFor(step: ParsedAbility, index: number): TargetSpec {
   return spec;
 }
 
+/** Forge Phase$ names -> steps. */
+export const PHASES: Record<string, import('../game/types.ts').Step> = {
+  Upkeep: 'upkeep', Draw: 'draw', Main1: 'main1', 'Main 1': 'main1', BeginCombat: 'beginCombat', 'Beginning of Combat': 'beginCombat',
+  'Declare Attackers': 'attackers', 'Declare Blockers': 'blockers', 'Combat Damage': 'damage', EndCombat: 'endCombat', 'End Combat': 'endCombat',
+  Main2: 'main2', 'Main 2': 'main2', 'End of Turn': 'end', End: 'end', Cleanup: 'cleanup',
+};
+
 export function targetSpecs(ab: ParsedAbility, modes?: string[]): TargetSpec[] {
   const out: TargetSpec[] = [];
   flatten(ab, modes).forEach((step, i) => { if (step.params.ValidTgts) out.push(specFor(step, i)); });
@@ -206,11 +269,17 @@ export const SUPPORTED_APIS = new Set([
   'GainLife', 'LoseLife', 'SetLife', 'Counter', 'Pump', 'PumpAll', 'Tap', 'Untap', 'TapAll', 'UntapAll', 'Discard', 'Mill',
   'Scry', 'Surveil', 'Dig', 'RearrangeTopOfLibrary', 'GainControl', 'Sacrifice', 'SacrificeAll', 'Attach', 'Mana', 'Charm',
   'Cleanup', 'Shuffle', 'BecomeMonarch', 'TakeInitiative', 'RevealHand',
+  // Stage 2
+  'Investigate', 'DelayedTrigger', 'ImmediateTrigger', 'CopyPermanent',
 ]);
 
 export const SUPPORTED_DEFINED = new Set([
   'You', 'Self', 'Parent', 'Targeted', 'TargetedCard', 'TargetedController', 'TargetedOwner', 'TargetedPlayer', 'Player', 'Opponent',
   'ParentTarget', 'Remembered', 'RememberedLKI', 'Enchanted', 'Equipped', 'TargetedAndYou', 'Player.Opponent',
+  // Stage 2: objects a trigger saw
+  'TriggeredCard', 'TriggeredCardLKICopy', 'TriggeredNewCardLKICopy', 'TriggeredCardController', 'TriggeredCardOwner',
+  'TriggeredPlayer', 'TriggeredActivator', 'TriggeredTarget', 'TriggeredDefendingPlayer', 'TriggeredSourceController',
+  'TriggeredAttackingPlayer', 'TriggeredSource', 'DelayTriggerRemembered', 'DelayTriggerRememberedLKI',
 ]);
 
 const AMOUNT_PARAMS = ['NumDmg', 'NumCards', 'LifeAmount', 'TokenAmount', 'CounterNum', 'NumAtt', 'NumDef', 'ScryNum', 'DigNum', 'Amount'];
@@ -221,7 +290,8 @@ export function supportedVar(v: string | undefined): boolean {
   return /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v)
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
-    || supportedCount(v);
+    || supportedCount(v)
+    || /^Count\$Valid [A-Za-z.+,!]+$/.test(v);
 }
 
 export function amountSupported(raw: string | undefined, svars: Record<string, string> | undefined): boolean {
@@ -236,7 +306,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   const p = step.params;
   const api = step.api;
   if (api === 'Effect' && p.AILogic === 'CantRegenerate') return null; // regeneration isn't modelled: no-op
-  if (!SUPPORTED_APIS.has(api)) return api;
+  if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api)) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;
   if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined)) return `${api} (Defined$ ${p.Defined})`;
   if (p.UnlessCost && api !== 'Counter') return `${api} (UnlessCost)`;
@@ -247,10 +317,23 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   }
   switch (api) {
     case 'Discard': if (p.Mode && !['Random', 'TgtChoose', 'RevealYouChoose', 'Hand'].includes(p.Mode)) return `Discard (Mode$ ${p.Mode})`; break;
-    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
+    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any') return 'Mana (choice)'; break;
+    case 'DelayedTrigger':
+      if (step.kind !== 'DB' || p.Mode !== 'Phase' || !PHASES[p.Phase ?? ''] || !p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
+      if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
+      break;
+    case 'ImmediateTrigger': if (step.kind !== 'DB' || !p.Execute || !step.svars?.[p.Execute] || p.TriggerAmount) return 'ImmediateTrigger'; break;
+    case 'CopyPermanent': {
+      const extra = Object.keys(p).filter((k) => !['Defined', 'ValidTgts', 'TgtPrompt', 'AddKeywords', 'AtEOT', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'TargetMin', 'TargetMax', 'AILogic'].includes(k));
+      if (extra.length) return `CopyPermanent (${extra[0]})`;
+      if (p.AtEOT && !['Sacrifice', 'Exile'].includes(p.AtEOT)) return 'CopyPermanent (AtEOT)';
+      break;
+    }
+    case 'Investigate': if (p.Num && !amountSupported(p.Num, step.svars)) return 'Investigate'; break;
     case 'Tap': case 'Untap': if (p.UntapType || p.TapType) return `${api} (choice)`; break;
     case 'Counter': if (p.UnlessCost && !/^[\dWUBRGCX ]+$/.test(p.UnlessCost)) return 'Counter (UnlessCost)'; break;
-    case 'Token': if (!p.TokenScript || p.TokenScript.split(',').some((t) => !SCRIPTS.tokens[t.trim()])) return 'Token (unknown token)'; break;
+    case 'Token': if (p.AtEOT && !['Sacrifice', 'Exile', 'ExileCombat'].includes(p.AtEOT)) return 'Token (AtEOT)';
+      if (!p.TokenScript || p.TokenScript.split(',').some((t) => !SCRIPTS.tokens[t.trim()])) return 'Token (unknown token)'; break;
     case 'ChangeZone': {
       if (p.Destination && !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination)) return `ChangeZone (to ${p.Destination})`;
       break;

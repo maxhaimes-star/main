@@ -6,7 +6,7 @@ import type { RoomProps } from '../Room.tsx';
 import { CardBack, CardImage, getCard, PreviewPanel, setPreview } from '../cards.tsx';
 import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
-import { castStatus, AUTO_LABEL, legalTarget } from './engine.ts';
+import { castStatus, AUTO_LABEL, costNote, legalTarget, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
@@ -57,7 +57,19 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toast = useCallback((msg: string) => { setToastMsg(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToastMsg(null), 2200); }, []);
 
-  const act = useCallback((action: GameAction) => send({ t: 'game', matchId: match.id, action }), [send, match.id]);
+  const [forceAsk, setForceAsk] = useState<{ error: string; resolve: (yes: boolean) => void } | null>(null);
+  const rawAct = useCallback((action: GameAction) => send({ t: 'game', matchId: match.id, action }) as Promise<string | null>, [send, match.id]);
+  // Static restrictions (Teferi, Ensnaring Bridge ...) come back as errors mentioning "force": offer to override.
+  const act = useCallback(async (action: GameAction): Promise<string | null> => {
+    const err = await rawAct(action);
+    if (err && /force/i.test(err) && (action.t === 'cast' || action.t === 'declareAttacker' || action.t === 'declareBlocker') && !(action as { force?: boolean }).force) {
+      const msg = err.replace(/\s*\((?:cast with|use) force to override\)\.?/i, '').replace(/[.\s]+$/, '');
+      const yes = await new Promise<boolean>((resolve) => setForceAsk({ error: msg, resolve }));
+      if (!yes) return err;
+      return rawAct({ ...action, force: true } as GameAction);
+    }
+    return err;
+  }, [rawAct]);
   const askText = useCallback((label: string, dflt = '') => new Promise<string | null>((resolve) => setPrompt({ label, initial: dflt, numeric: false, resolve })), []);
   const ask = useCallback((label: string, dflt = 1) => new Promise<number | null>((resolve) => setPrompt({
     label, initial: String(dflt), numeric: true, resolve: (v) => resolve(v == null || v === '' || Number.isNaN(Number(v)) ? null : Math.trunc(Number(v))),
@@ -137,6 +149,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
         </div>
         <div className="table-side">
           <PreviewPanel />
+          <ActiveEffects />
           <GameLog />
         </div>
         {g.phase === 'mulligan' && <div className="overlay"><MulliganOverlay /></div>}
@@ -160,6 +173,13 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
         )}
         {mode?.kind === 'target' && <TargetBanner mode={mode} advance={advance} cancel={cancelTarget} />}
         {mode?.kind === 'target' && mode.specs[mode.specIndex].zone === 'graveyard' && <GraveyardPicker spec={mode.specs[mode.specIndex]} />}
+        {forceAsk && (
+          <div className="overlay"><div className="overlay-msg force-ask">
+            <p>{forceAsk.error}. Do it anyway?</p>
+            <button className="primary" onClick={() => { forceAsk.resolve(true); setForceAsk(null); }}>Yes, do it</button>
+            <button onClick={() => { forceAsk.resolve(false); setForceAsk(null); }}>Cancel</button>
+          </div></div>
+        )}
         {toastMsg && <div className="toast">{toastMsg}</div>}
         <PendingChoices />
         {g.undoRequest && g.undoRequest !== me && me && (
@@ -370,7 +390,7 @@ function Hand({ pid }: { pid: string }) {
 }
 
 function HandCard({ iid }: { iid: string }) {
-  const { g, menuFor, defaultAction, openMenu } = useGame();
+  const { g, me, menuFor, defaultAction, openMenu } = useGame();
   const c = g.cards[iid];
   if (!c || isHidden(c)) return <div className="hcard"><CardBack /></div>;
   const face = faceOf(c, getCard);
@@ -378,7 +398,7 @@ function HandCard({ iid }: { iid: string }) {
   return (
     <div className={`hcard ${c.revealedTo.length ? 'revealed' : ''}`} data-iid={iid} draggable
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); }}
-      onMouseEnter={() => setPreview({ face, extra: st ? AUTO_LABEL[st] : undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined })}
+      onMouseEnter={() => setPreview({ face, extra: [costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined })}
       onClick={() => defaultAction(iid)}
       onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
       <CardImage face={face} />
@@ -624,6 +644,36 @@ function CombatPanel() {
         <button className="tiny" onClick={() => act({ t: 'proposeDamage' })}>Recalculate</button>
         <button className="tiny" onClick={() => act({ t: 'clearCombat' })} title="Skip the automatic result and handle damage by hand">Handle manually</button>
       </div>
+    </div>
+  );
+}
+
+function ActiveEffects() {
+  const { g, setHoverTargets } = useGame();
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem('ojb:effects') !== '0'; } catch { return true; } });
+  const list = safeStatics(g);
+  if (!list.length) return null;
+  const toggle = () => { const n = !open; setOpen(n); try { localStorage.setItem('ojb:effects', n ? '1' : '0'); } catch { /* ignore */ } };
+  return (
+    <div className="active-effects">
+      <div className="ae-head" onClick={toggle}>{open ? '▾' : '▸'} Active effects ({list.length})</div>
+      {open && (
+        <div className="ae-list">
+          {list.map((s, i) => {
+            const c = g.cards[s.sourceIid];
+            const f = c && !isHidden(c) ? faceOf(c, getCard) : null;
+            return (
+              <div key={i} className="ae-item"
+                onMouseEnter={() => { if (f) setPreview({ face: f }); setHoverTargets([s.sourceIid]); }}
+                onMouseLeave={() => setHoverTargets([])}>
+                <b>{f?.name ?? 'Unknown'}</b>{' '}
+                {s.support !== 'full' && <span className="ae-badge" title="The engine does not fully apply this effect">reminder — apply by hand</span>}
+                <div className="muted small">{s.description || s.mode}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

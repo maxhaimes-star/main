@@ -134,16 +134,51 @@ describe('alternative costs', () => {
     expect(P(g, 'b').life).toBe(16);
   });
 
-  it('Evoke: Fury exiles a red card, enters, and is sacrificed', () => {
-    const { g, ctx } = setup(['fury', 'lightning_bolt']);
+  it('Evoke: Fury exiles a red card; its ETB trigger resolves, then the evoke sacrifice trigger', () => {
+    const { g, ctx } = setup(['fury', 'lightning_bolt'], ['questing_beast']);
+    const qb = put(g, ctx, 'b', 'questing_beast');
     const fury = tutor(g, ctx, 'a', 'fury');
     const bolt = tutor(g, ctx, 'a', 'lightning_bolt');
     expect(castOptions(g, fury).map((o) => o.id)).toContain('evoke');
     act(g, ctx, 'a', { t: 'cast', iid: fury, costOption: 'evoke' });
     expect(g.cards[bolt].zone).toBe('exile');
     act(g, ctx, 'b', { t: 'pass' });
+    expect(g.cards[fury].zone).toBe('battlefield');
+    expect(g.cards[fury].castInfo?.evoked).toBe(true); // visible to ETB triggers
+    // Fury's own ETB trigger asks for targets; the evoke trigger is already queued underneath it.
+    const q = g.pending[0];
+    expect(q.targets).toBeDefined();
+    act(g, ctx, 'a', { t: 'chooseTargets', id: q.id, targets: [[cardRef(qb)]] });
+    expect(g.stack.map((s) => s.text)).toEqual([expect.stringMatching(/Evoke/), expect.stringMatching(/4 damage/)]);
+    act(g, ctx, 'b', { t: 'pass' }); // Fury's damage
+    expect(g.cards[qb].zone).toBe('graveyard');
+    expect(g.cards[fury].zone).toBe('battlefield');
+    act(g, ctx, g.priority, { t: 'pass' }); // evoke sacrifice
+    if (g.stack.length) act(g, ctx, g.priority, { t: 'pass' });
     expect(g.cards[fury].zone).toBe('graveyard');
-    expect(log(g)).toMatch(/sacrificed \(evoke\)/);
+    expect(g.stack).toHaveLength(0);
+  });
+
+  it('Kicker is visible to ETB triggers: kicked Goblin Bushwhacker pumps the team', () => {
+    const { g, ctx } = setup(['goblin_bushwhacker', 'goblin_guide']);
+    const gg = put(g, ctx, 'a', 'goblin_guide');
+    const gb = tutor(g, ctx, 'a', 'goblin_bushwhacker');
+    act(g, ctx, 'a', { t: 'addMana', mana: 'R', n: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid: gb, kicked: true });
+    act(g, ctx, 'b', { t: 'pass' });
+    expect(g.stack.map((s) => s.kind)).toEqual(['trigger']);
+    act(g, ctx, 'b', { t: 'pass' });
+    expect(hasKeyword(g.cards[gg], getCard, 'Haste')).toBe(true);
+    expect(g.cards[gg].tempPT).toEqual([1, 0]);
+  });
+
+  it('unkicked Goblin Bushwhacker does not trigger', () => {
+    const { g, ctx } = setup(['goblin_bushwhacker']);
+    const gb = tutor(g, ctx, 'a', 'goblin_bushwhacker');
+    act(g, ctx, 'a', { t: 'cast', iid: gb });
+    act(g, ctx, 'b', { t: 'pass' });
+    expect(g.cards[gb].zone).toBe('battlefield');
+    expect(g.stack).toHaveLength(0);
   });
 
   it('Flashback: Lingering Souls from the graveyard, then exiled', () => {
@@ -232,15 +267,16 @@ describe('conditions', () => {
     const { g, ctx } = setup(['prismatic_ending'], ['questing_beast', 'thalia_guardian_of_thraben']);
     const thalia = put(g, ctx, 'b', 'thalia_guardian_of_thraben'); // MV 2
     const pe = tutor(g, ctx, 'a', 'prismatic_ending');
-    act(g, ctx, 'a', { t: 'addMana', mana: 'W', n: 2 });
-    act(g, ctx, 'a', { t: 'cast', iid: pe, x: 1, targets: [[cardRef(thalia)]] }); // WW: one color
+    act(g, ctx, 'a', { t: 'addMana', mana: 'W', n: 3 }); // {X=1}{W} + Thalia's {1} tax
+    act(g, ctx, 'a', { t: 'cast', iid: pe, x: 1, targets: [[cardRef(thalia)]] }); // WWW: one color
     act(g, ctx, 'b', { t: 'pass' });
     expect(g.cards[thalia].zone).toBe('battlefield');
     moveCard(g, ctx, pe, 'hand');
     act(g, ctx, 'a', { t: 'addMana', mana: 'W', n: 1 });
-    act(g, ctx, 'a', { t: 'addMana', mana: 'B', n: 1 });
-    act(g, ctx, 'a', { t: 'cast', iid: pe, x: 1, targets: [[cardRef(thalia)]] }); // W + B: two colors
+    act(g, ctx, 'a', { t: 'addMana', mana: 'B', n: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid: pe, x: 1, targets: [[cardRef(thalia)]] }); // W + BB: two colors
     expect(g.stack[0].auto?.colorsSpent?.sort()).toEqual(['B', 'W']);
+    expect(P(g, 'a').manaPool).toMatchObject({ W: 0, B: 0 }); // tax paid too
     act(g, ctx, 'b', { t: 'pass' });
     expect(g.cards[thalia].zone).toBe('exile');
   });
@@ -310,8 +346,10 @@ describe('timing and limits', () => {
     const sol = tutor(g, ctx, 'b', 'solitude');
     act(g, ctx, 'b', { t: 'cast', iid: sol }); // flash
     act(g, ctx, 'a', { t: 'pass' });
+    expect(g.cards[sol].zone).toBe('battlefield');
     act(g, ctx, 'b', { t: 'cast', iid: gg, force: true });
-    expect(g.stack).toHaveLength(1);
+    expect(g.stack.at(-1)?.iid).toBe(gg);
+    expect(g.cards[gg].zone).toBe('stack');
   });
 });
 
@@ -391,5 +429,90 @@ describe('durations: control and until-host-leaves', () => {
     act(g, ctx, 'a', { t: 'move', iid: hole, to: 'graveyard' });
     expect(g.cards[gg].zone).toBe('battlefield');
     expect(g.cards[gg].controller).toBe('b');
+  });
+});
+
+/** Pass priority (whoever holds it) until the stack is empty. */
+function drain(g: GameState, ctx: Ctx) {
+  for (let k = 0; k < 20 && g.stack.length && !g.pending.length; k++) act(g, ctx, g.priority, { t: 'pass' });
+}
+
+describe('durations and costs through real triggers', () => {
+  it('Zealous Conscripts: gain control until end of turn (ETB trigger), reverts at cleanup', () => {
+    const { g, ctx } = setup(['zealous_conscripts'], ['questing_beast']);
+    const qb = put(g, ctx, 'b', 'questing_beast');
+    g.cards[qb].tapped = true;
+    const zc = tutor(g, ctx, 'a', 'zealous_conscripts');
+    act(g, ctx, 'a', { t: 'addMana', mana: 'R', n: 5 });
+    act(g, ctx, 'a', { t: 'cast', iid: zc });
+    act(g, ctx, 'b', { t: 'pass' });
+    expect(g.cards[zc].zone).toBe('battlefield');
+    act(g, ctx, 'a', { t: 'chooseTargets', id: g.pending[0].id, targets: [[cardRef(qb)]] });
+    drain(g, ctx);
+    expect(g.cards[qb].controller).toBe('a');
+    expect(g.cards[qb].tapped).toBe(false);
+    expect(hasKeyword(g.cards[qb], getCard, 'Haste')).toBe(true);
+    act(g, ctx, 'a', { t: 'nextTurn' });
+    expect(g.cards[qb].controller).toBe('b');
+  });
+
+  it('Portable Hole: ETB exiles until it leaves; the card returns when Hole leaves', () => {
+    const { g, ctx } = setup(['portable_hole'], ['goblin_guide']);
+    const gg = put(g, ctx, 'b', 'goblin_guide');
+    const hole = tutor(g, ctx, 'a', 'portable_hole');
+    act(g, ctx, 'a', { t: 'addMana', mana: 'W', n: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid: hole });
+    act(g, ctx, 'b', { t: 'pass' });
+    act(g, ctx, 'a', { t: 'chooseTargets', id: g.pending[0].id, targets: [[cardRef(gg)]] });
+    drain(g, ctx);
+    expect(g.cards[gg].zone).toBe('exile');
+    expect(g.effects?.map((e) => e.kind)).toEqual(['exiled']);
+    act(g, ctx, 'a', { t: 'move', iid: hole, to: 'hand' });
+    expect(g.cards[gg].zone).toBe('battlefield');
+    expect(g.cards[gg].controller).toBe('b');
+  });
+
+  it('City of Traitors is sacrificed when you play another land (trigger)', () => {
+    const { g, ctx } = setup(['city_of_traitors']);
+    const city = put(g, ctx, 'a', 'city_of_traitors');
+    const land = tutor(g, ctx, 'a', 'basic_mountain');
+    act(g, ctx, 'a', { t: 'playLand', iid: land });
+    drain(g, ctx);
+    expect(g.cards[city].zone).toBe('graveyard');
+    expect(g.cards[land].zone).toBe('battlefield');
+  });
+
+  it('Dash: Ragavan gains haste and returns to hand at the next end step (delayed trigger)', () => {
+    const { g, ctx } = setup(['ragavan_nimble_pilferer']);
+    const rag = tutor(g, ctx, 'a', 'ragavan_nimble_pilferer');
+    act(g, ctx, 'a', { t: 'addMana', mana: 'R', n: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid: rag, costOption: 'dash' });
+    act(g, ctx, 'b', { t: 'pass' });
+    expect(g.cards[rag].zone).toBe('battlefield');
+    expect(hasKeyword(g.cards[rag], getCard, 'Haste')).toBe(true);
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'end' });
+    drain(g, ctx);
+    expect(g.cards[rag].zone).toBe('hand');
+  });
+
+  it("Thalia's tax applies to an alternative cost", () => {
+    const { g, ctx } = setup(['goblin_guide'], ['force_of_will', 'counterspell', 'thalia_guardian_of_thraben']);
+    put(g, ctx, 'b', 'thalia_guardian_of_thraben');
+    const { spell } = aliceCastsBait(g, ctx);
+    const fow = tutor(g, ctx, 'b', 'force_of_will');
+    tutor(g, ctx, 'b', 'counterspell');
+    act(g, ctx, 'b', { t: 'addMana', mana: 'U', n: 1 });
+    act(g, ctx, 'b', { t: 'cast', iid: fow, costOption: 'alt0', targets: [[stackRef(spell.id)]] });
+    expect(P(g, 'b').manaPool.U).toBe(0); // {0} + Thalia's {1}
+    expect(log(g, 6)).toMatch(/Thalia/);
+  });
+
+  it("Teferi, Time Raveler's lock: opponents' instants are refused, force overrides", () => {
+    const { g, ctx } = setup(['teferi_time_raveler'], ['lightning_bolt']);
+    put(g, ctx, 'a', 'teferi_time_raveler');
+    const bolt = tutor(g, ctx, 'b', 'lightning_bolt');
+    expect(applyAction(g, 'b', { t: 'cast', iid: bolt, targets: [[player('a')]] }, ctx)).toMatch(/sorcery speed.*force/);
+    act(g, ctx, 'b', { t: 'cast', iid: bolt, targets: [[player('a')]], force: true });
+    expect(g.stack.at(-1)?.iid).toBe(bolt);
   });
 });

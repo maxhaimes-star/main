@@ -78,18 +78,18 @@ export function activationError(state: GameState, c: CardInstance, pid: string, 
   const p = ab.params;
   const loyalty = p.Planeswalker === 'True' || loyaltyOf(p.Cost ?? '') != null;
   if (loyalty) return loyaltyError(state, c, pid, name);
-  if (p.SorcerySpeed === 'True' && !sorceryTiming(state, pid)) return `${name}: activate only as a sorcery — ${SORCERY_SPEED}`;
-  if (p.PlayerTurn === 'True' && state.activePlayer !== pid) return `${name}: activate only during your turn`;
+  if (p.SorcerySpeed === 'True' && !sorceryTiming(state, pid)) return `${name}: activate only as a sorcery — ${SORCERY_SPEED} (use force to override)`;
+  if (p.PlayerTurn === 'True' && state.activePlayer !== pid) return `${name}: activate only during your turn (use force to override)`;
   const limit = p.ActivationLimit ? parseInt(p.ActivationLimit, 10) : NaN;
-  if (!Number.isNaN(limit) && (turnInfo(state).activations[`${c.iid}|${index}`] ?? 0) >= limit) return `${name}: this ability can be activated only ${limit === 1 ? 'once' : `${limit} times`} each turn`;
+  if (!Number.isNaN(limit) && (turnInfo(state).activations[`${c.iid}|${index}`] ?? 0) >= limit) return `${name}: this ability can be activated only ${limit === 1 ? 'once' : `${limit} times`} each turn (use force to override)`;
   return null;
 }
 
 /** Loyalty abilities: sorcery speed, one per planeswalker per turn. */
 export function loyaltyError(state: GameState, c: CardInstance, pid: string, name: string): string | null {
   if (state.phase !== 'playing') return null;
-  if (turnInfo(state).loyaltyUsed.includes(c.iid)) return `${name} already activated a loyalty ability this turn`;
-  if (!sorceryTiming(state, pid)) return `Loyalty abilities can only be activated at sorcery speed — ${SORCERY_SPEED}`;
+  if (turnInfo(state).loyaltyUsed.includes(c.iid)) return `${name} already activated a loyalty ability this turn (use force to override)`;
+  if (!sorceryTiming(state, pid)) return `Loyalty abilities can only be activated at sorcery speed — ${SORCERY_SPEED} (use force to override)`;
   return null;
 }
 

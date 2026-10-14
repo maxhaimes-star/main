@@ -4,13 +4,20 @@
  *
  * - getScript(cardId)                       script faces (Forge data)
  * - spellAbility(cardId, face)              the face's SP$ ability (index -1 = aura spell synthesized from K:Enchant)
- * - activatedAbilitiesOf(cardId, face)      AB$ abilities (no mana abilities), with cost and loyalty
+ * - activatedAbilitiesOf(cardId, face)      AB$ abilities (no mana abilities), with cost and loyalty, plus keyword
+ *                                           abilities (Equip, Cycling, Crew ...; index >= SYNTH_BASE) and `zone` (hand/graveyard)
+ * - replacements.ts                         R: lines: enters tapped, shocklands, can't be countered, doesn't untap ...
  * - isAutomatable(ability)                  { ok, unsupported[] }
  * - targetSpecs(ability, modes?)            targets needed, in order (pass Charm modes to get their targets)
  * - isValidTarget(state, spec, ref, ...)    legality of one choice (works on GameView too)
  * - castOptions(state, iid, face?)          ways to cast a card: normal / kicker / alternative costs (cast.costOption)
  * - manaOptionsFor(state, iid)              mana abilities of a permanent (activateMana action)
  * - castTimingError / activationError       timing checks (cast / activate `force: true` skips them)
+ * - processTriggers(state, ctx)             Stage 2: put triggered abilities from recorded events on the stack
+ * - triggerSupport(cardId, face, index)     Stage 2: is a T: line detected / its chain automatable
+ * - activeStatics(state, lookup)            static abilities in effect, for an "Active effects" panel
+ * - effectiveCost(state, iid, face, lookup) mana cost after cost increases / reductions (Thalia ...)
+ * - attackRestriction / blockRestriction / castRestriction   why a static forbids an action (or null)
  */
 import type { Rng } from '../draft.ts';
 import type { Lookup } from '../game/rules.ts';
@@ -24,5 +31,14 @@ export { manaOptionsFor } from './mana.ts';
 export { activationError, castTimingError, loyaltyError, sorceryTiming } from './timing.ts';
 export { evalCount, conditionTrue } from './counts.ts';
 export { turnInfo } from './durations.ts';
+export type { ActivatedEntry } from './script.ts';
+export { synthAbilities, levelStats, wardCost, KEYWORD_APIS, type LevelStats, type SynthAbility } from './keywords.ts';
+export { levelOf, levelStatsOf } from './keyword-play.ts';
+export { cantBeCountered, damagePrevented, replacementsOf } from './replacements.ts';
+export { processTriggers, queuedTriggers, triggerSupport, SUPPORTED_MODES, MAX_TRIGGERS_PER_ACTION } from './triggers.ts';
+export {
+  activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,
+  parseStatic, staticGaps, staticMods, staticSupport, type ActiveStatic, type CardMods, type StaticSupport, type StaticsState,
+} from './statics.ts';
 
 export interface EngineCtx { rng: Rng; lookup: Lookup; now: number }

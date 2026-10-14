@@ -4,3 +4,4 @@ data-store
 *.log
 .DS_Store
 test-results
+.claude/worktrees/

@@ -13,11 +13,11 @@ import { getCard } from '../cube.ts';
 import { cardName, faceOf, type Lookup, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GamePlayer, GameState, StackItem } from '../game/types.ts';
-import { addEffect } from './durations.ts';
 import { prepareCast } from './play.ts';
 import { divisionError } from './divide.ts';
 import { getScript, parseParams, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard } from './targets.ts';
+import { adjustCost, castRestriction } from './statics.ts';
 import { castTimingError } from './timing.ts';
 import type { AutoInfo, CastInfo, CastOption, TargetRef } from './types.ts';
 
@@ -255,7 +255,9 @@ export function planCast(state: GameState, c: CardInstance, pid: string, a: Cast
   const name = a.faceDown ? 'A face-down spell' : cardName(c, ctx.lookup);
   if (!a.force) {
     const e = castTimingError(state, c, pid, a.face, ctx.lookup, !!a.faceDown);
-    if (e) return { error: e };
+    if (e) return { error: `${e} (cast with force to override)` };
+    const restricted = castRestriction(state, c.iid, pid, ctx.lookup);
+    if (restricted) return { error: `${restricted} (cast with force to override)` };
   }
   const x = a.x ?? 0;
   if (a.faceDown) return { plan: { def: { id: 'faceDown', label: 'Face down', mana: '{3}', parts: [], flags: {}, delve: false }, mana: '{3}', parts: [], kicked: false, x } };
@@ -305,21 +307,26 @@ function spentColors(before: Record<string, number>, after: Record<string, numbe
 }
 
 /** Pay the mana part of a planned cast from the pool. Returns a note for the log (or ''). */
-export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, plan: CastPlan): { note: string; colors: string[]; deferred: boolean } {
+export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, plan: CastPlan, lookup: Lookup = getCard): { note: string; colors: string[]; deferred: boolean } {
+  // Static cost increases / reductions (Thalia, Sphere ...) apply to whichever cost was chosen.
+  let note = '';
+  if (plan.def.id !== 'faceDown') {
+    const adj = adjustCost(state, c, me.pid, plan.mana, 'Spell', lookup);
+    if (adj.notes.length) { plan.mana = adj.cost; note = ` (cost ${adj.cost || '{0}'}: ${adj.notes.join(', ')})`; }
+  }
   const graveyard = me.zones.graveyard.filter((i) => i !== c.iid).length;
-  if (plan.def.delve && graveyard > 0 && genericOf(plan.mana, plan.x) > 0) return { note: '', colors: [], deferred: true };
-  if (!plan.mana) return { note: '', colors: [], deferred: false };
+  if (plan.def.delve && graveyard > 0 && genericOf(plan.mana, plan.x) > 0) return { note, colors: [], deferred: true };
+  if (!plan.mana) return { note, colors: [], deferred: false };
   const before = { ...me.manaPool };
   const res = payFromPool(plan.mana, me.manaPool, plan.x);
   if (res) {
     me.manaPool = res.pool;
-    let note = '';
-    if (res.lifePaid) { me.life -= res.lifePaid; note = ` (paid ${res.lifePaid} life)`; }
+    if (res.lifePaid) { me.life -= res.lifePaid; note += ` (paid ${res.lifePaid} life)`; }
     return { note, colors: spentColors(before, me.manaPool), deferred: false };
   }
-  if (plan.def.id === 'faceDown') return { note: '', colors: [], deferred: false };
-  if (Object.values(me.manaPool).some((v) => v > 0)) return { note: ' (mana pool did not cover the cost — not deducted)', colors: [], deferred: false };
-  return { note: '', colors: [], deferred: false };
+  if (plan.def.id === 'faceDown') return { note, colors: [], deferred: false };
+  if (Object.values(me.manaPool).some((v) => v > 0)) return { note: `${note} (mana pool did not cover the cost — not deducted)`, colors: [], deferred: false };
+  return { note, colors: [], deferred: false };
 }
 
 // ------------------------------------------------------------------ paying the rest (Pending picks)
@@ -456,6 +463,9 @@ export function finishCast(state: GameState, ctx: Ctx, pid: string, c: CardInsta
 
 // ------------------------------------------------------------------ after resolution
 
+const DASH_LINE = 'DB$ ChangeZone | Defined$ Self | Origin$ Battlefield | Destination$ Hand | SpellDescription$ Dash: return it to its owner\'s hand.';
+const EVOKE_LINE ='DB$ Sacrifice | Defined$ Self | SpellDescription$ Evoke: sacrifice it.';
+
 /** Evoke / dash / buyback, after a spell resolved (`resolved` false = it fizzled). */
 export function afterSpellResolved(state: GameState, ctx: Ctx, item: StackItem, resolved: boolean) {
   const info = item.castInfo;
@@ -464,14 +474,26 @@ export function afterSpellResolved(state: GameState, ctx: Ctx, item: StackItem, 
   if (!c) return;
   const name = cardName(c, ctx.lookup);
   if (info.evoked && c.zone === 'battlefield') {
-    // TODO(triggers): evoke's sacrifice is itself an ETB trigger — once triggered abilities are on the
-    // stack, put it there (ordered with the creature's own ETB trigger) instead of sacrificing at once.
-    moveCard(state, ctx, c.iid, 'graveyard');
-    log(state, ctx, item.controller, `${name} is sacrificed (evoke).`);
+    // Evoke: "When it enters, if its evoke cost was paid, its controller sacrifices it" — a triggered ability.
+    // Queued before the ETB triggers detected after this action, so it goes on the stack first and the
+    // creature's own ETB trigger resolves before the sacrifice (the common ordering; reorder by hand if needed).
+    const auto: AutoInfo = {
+      cardId: c.cardId ?? '', face: c.transformed ? 1 : 0, source: 'trigger', index: -1, targets: [],
+      line: EVOKE_LINE, trigger: { mode: 'ChangesZone', card: c.iid, player: c.controller },
+    };
+    (state.triggerQueue ??= []).push({
+      id: randomId(ctx.rng), controller: c.controller, sourceIid: c.iid, sourceName: name,
+      text: `${name}: Evoke — sacrifice ${name}.`, auto, targetsChosen: true,
+    });
   }
   if (info.dashed && c.zone === 'battlefield') {
     c.tempKeywords = [...new Set([...(c.tempKeywords ?? []), 'Haste'])];
-    addEffect(state, ctx, { kind: 'dash', controller: item.controller, until: 'eot', iid: c.iid });
+    // "Return it to its owner's hand at the beginning of the next end step" (delayed trigger).
+    (state.delayedTriggers ??= []).push({
+      id: randomId(ctx.rng), controller: item.controller, sourceIid: c.iid, sourceName: name, text: `${name}: Dash — return ${name} to its owner's hand.`,
+      step: 'end', turn: state.turn, createdStep: state.step,
+      auto: { cardId: c.cardId ?? '', face: 0, source: 'trigger', index: -1, targets: [], line: DASH_LINE, trigger: { mode: 'Delayed', card: c.iid } },
+    });
   }
   if (info.buyback && resolved && c.zone === 'graveyard') {
     moveCard(state, ctx, c.iid, 'hand');

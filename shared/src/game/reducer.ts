@@ -7,9 +7,13 @@ import { afterSpellResolved, finishCast, payCastMana, planCast } from '../engine
 import { durationsAtCleanup, durationsAtTurnStart } from '../engine/durations.ts';
 import { activateMana } from '../engine/mana.ts';
 import { loyaltyError, recordActivation } from '../engine/timing.ts';
-import { answerPending, resolveAuto, resumeAuto } from '../engine/resolve.ts';
+import { answerPending, createTokenInstance, resolveAuto, resumeAuto } from '../engine/resolve.ts';
+import { answerTriggerChoice, answerTriggerTargets, beginAction, processTriggers, triggerStillApplies } from '../engine/triggers.ts';
+import { attackRestriction, blockRestriction, combatReminders } from '../engine/statics.ts';
+import { skipsStep, untapPrevented } from '../engine/replacements.ts';
+import { wardReminders } from '../engine/keyword-play.ts';
 import {
-  type Ctx, detach, drawCards, log, moveCard, newInstance, player, randomId, shuffleLibrary,
+  type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
 } from './state.ts';
 import {
   type CardInstance, type GameAction, type GamePlayer, type GameState, type PlayerZone, type StackItem, type Step,
@@ -62,7 +66,7 @@ export function createGame(id: string, seats: GameSeat[], startingPlayer: string
       zones: { library: [], hand: [], graveyard: [], exile: [], command: [], sideboard: [] },
       manaPool: {}, mulligans: 0, kept: false, needsBottom: 0, landsPlayed: 0,
       stops: { own: [...DEFAULT_STOPS.own], opp: [...DEFAULT_STOPS.opp] },
-      passUntilEOT: false, peek: null, viewingHandOf: null, conceded: false, designations: [],
+      passUntilEOT: false, peek: null, viewingHandOf: null, conceded: false, designations: [], autoTriggers: true,
     };
     state.players.push(p);
     for (const cardId of seat.deck) p.zones.library.push(newInstance(state, ctx.rng, seat.pid, 'library', cardId).iid);
@@ -117,7 +121,7 @@ function snapshot(state: GameState): string {
   return JSON.stringify(rest);
 }
 
-const NOT_UNDOABLE = new Set<GameAction['t']>(['chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek']);
+const NOT_UNDOABLE = new Set<GameAction['t']>(['chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek', 'setAutoTriggers']);
 
 // ------------------------------------------------------------------ turn structure
 
@@ -145,12 +149,13 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
   state.priority = state.activePlayer;
   emptyPools(state);
   const active = player(state, state.activePlayer);
+  if (step !== 'untap') emit(state, { t: 'phase', step, active: state.activePlayer, turn: state.turn });
   switch (step) {
     case 'untap': {
       for (const id of state.battlefield) {
         const c = state.cards[id];
         if (c.controller !== state.activePlayer) continue;
-        if (!c.noUntap) c.tapped = false;
+        if (!c.noUntap && !untapPrevented(state, ctx, c)) c.tapped = false;
         c.summoningSick = false;
       }
       // No priority in untap: go straight to upkeep.
@@ -158,11 +163,16 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       return;
     }
     case 'draw': {
+      const skip = skipsStep(state, ctx, active.pid, 'draw');
       if (state.turn === 1 && state.activePlayer === state.startingPlayer && state.players.length === 2) {
         log(state, ctx, active.pid, `${active.name} skips the first draw.`);
+      } else if (skip) {
+        log(state, ctx, active.pid, `${active.name} skips their draw step (${skip}).`);
       } else if (drawCards(state, active, 1) === 0) {
         log(state, ctx, active.pid, `${active.name} can't draw — library is empty!`);
       } else {
+        const ev = state.events?.[state.events.length - 1];
+        if (ev?.t === 'drawn' && ev.pid === active.pid) ev.firstInDrawStep = true;
         log(state, ctx, active.pid, `${active.name} draws for the turn.`);
       }
       break;
@@ -173,7 +183,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
     case 'attackers': {
       const canAttack = state.battlefield.some((id) => {
         const c = state.cards[id];
-        return c.controller === state.activePlayer && !c.tapped && isCreature(c, ctx.lookup);
+        return c.controller === state.activePlayer && !c.tapped && isCreature(c, ctx.lookup, state);
       });
       if (!canAttack) { state.combat.attackersDeclared = true; log(state, ctx, null, 'No attackers.'); }
       break;
@@ -211,6 +221,7 @@ function startTurn(state: GameState, ctx: Ctx, pid: string) {
   state.turn++;
   state.activePlayer = pid;
   for (const p of state.players) { p.landsPlayed = 0; p.passUntilEOT = false; }
+  state.turnStats = { cast: {}, drawn: {} };
   log(state, ctx, null, `— Turn ${state.turn}: ${player(state, pid).name} —`);
   durationsAtTurnStart(state, ctx, pid);
   enterStep(state, ctx, 'untap');
@@ -221,9 +232,11 @@ function advanceStep(state: GameState, ctx: Ctx) {
   enterStep(state, ctx, STEPS[i + 1] ?? 'cleanup');
 }
 
-/** Auto-pass for players without a stop, so the game flows like MTGO. */
+/** Auto-pass for players without a stop, so the game flows like MTGO. Puts triggered abilities on the stack first. */
 function settle(state: GameState, ctx: Ctx) {
-  for (let guard = 0; guard < 60 && state.phase === 'playing' && !state.pending.length; guard++) {
+  for (let guard = 0; guard < 60 && state.phase === 'playing'; guard++) {
+    processTriggers(state, ctx);
+    if (state.pending.length) return;
     const pid = state.priority;
     const p = player(state, pid);
     if (p.conceded) { passPriority(state, ctx, pid); continue; }
@@ -295,7 +308,10 @@ function resolveTop(state: GameState, ctx: Ctx) {
   const item = state.stack[state.stack.length - 1];
   if (!item) return;
   let resolved = true;
-  if (item.auto) {
+  if (!triggerStillApplies(state, ctx, item)) {
+    // intervening "if" no longer true: removed
+    resolved = false;
+  } else if (item.auto) {
     const inst = item.iid ? state.cards[item.iid] : undefined;
     resolved = resolveAuto(state, ctx, item, !!inst && isPermanentSpell(inst, ctx), () => finishSpell(state, ctx, item, true));
   } else {
@@ -310,6 +326,12 @@ function resolveTop(state: GameState, ctx: Ctx) {
 
 function applyCombat(state: GameState, ctx: Ctx) {
   const prop = state.combat.proposal!;
+  for (const h of prop.hits ?? []) {
+    const src = state.cards[h.source];
+    if (!src) continue;
+    const tgt = state.cards[h.target];
+    emit(state, { t: 'damage', source: h.source, target: h.target, amount: h.amount, combat: true, sourceSnap: JSON.parse(JSON.stringify(src)), ...(tgt ? { targetSnap: JSON.parse(JSON.stringify(tgt)) } : {}) });
+  }
   for (const [key, delta] of Object.entries(prop.lifeChange)) {
     if (key.startsWith('poison:')) {
       const p = player(state, key.slice(7));
@@ -348,6 +370,7 @@ export function applyAction(state: GameState, pid: string, action: GameAction, c
   const me = state.players.find((p) => p.pid === pid);
   if (!me) return 'You are not playing in this game';
   if (state.phase === 'over' && action.t !== 'chat') return 'The game is over';
+  beginAction(state);
   const before = NOT_UNDOABLE.has(action.t) ? null : snapshot(state);
   const err = reduce(state, me, action, ctx);
   if (err) return err;
@@ -530,6 +553,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (c.zone !== 'hand' && c.zone !== 'graveyard' && c.zone !== 'exile' && c.zone !== 'library') return 'Card must be in your hand';
       moveCard(state, ctx, a.iid, 'battlefield', { controller: pid });
       me.landsPlayed++;
+      emit(state, { t: 'landPlayed', iid: a.iid, pid });
       log(state, ctx, pid, `${name} plays ${cardName(c, ctx.lookup)}${me.landsPlayed > 1 ? ` (land #${me.landsPlayed} this turn)` : ''}.`);
       return null;
     }
@@ -538,7 +562,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!c) return 'No such card';
       if (!canTouch(state, pid, c)) return "You can't cast that card";
       if (c.zone === 'battlefield' || c.zone === 'stack') return 'That card is already in play';
-      const prep = planCast(state, c, pid, a, ctx); // timing, cost option, targets
+      const prep = planCast(state, c, pid, a, ctx); // timing, static restrictions (force overrides both), cost option, targets
       if ('error' in prep) return prep.error;
       const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
       const from = c.zone;
@@ -556,14 +580,20 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         c.castAs = undefined;
       }
       const face = faceOf(c, ctx.lookup);
-      const payment = payCastMana(state, me, c, prep.plan);
+      const payment = payCastMana(state, me, c, prep.plan, ctx.lookup); // cost option + static cost changes (Thalia ...)
       const paid = payment.note;
       const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid: c.iid, controller: pid, text: a.faceDown ? 'Face-down spell' : face.name, x: a.x };
       if (prep.auto) item.auto = prep.auto;
       state.stack.push(item);
+      if (!a.faceDown) {
+        const st = turnStats(state);
+        st.cast[pid] = (st.cast[pid] ?? 0) + 1;
+        emit(state, { t: 'cast', iid: c.iid, pid, nth: st.cast[pid] });
+      }
       const fromText = from === 'hand' ? '' : ` from ${from === 'library' ? 'the top of their library' : ZONE_LABEL[from]}`;
       const tnames = prep.auto?.targets.flat().map((t) => t.kind === 'player' ? player(state, t.pid).name : t.kind === 'card' ? cardName(state.cards[t.iid], ctx.lookup) : state.stack.find((s) => s.id === t.id)?.text ?? 'a spell') ?? [];
       log(state, ctx, pid, `${name} casts ${a.faceDown ? 'a face-down spell' : face.name}${a.x != null ? ` (X=${a.x})` : ''}${fromText}${tnames.length ? ` targeting ${tnames.join(', ')}` : ''}${paid}.`);
+      if (prep.auto) wardReminders(state, ctx, pid, prep.auto.targets);
       finishCast(state, ctx, pid, c, item, prep.plan, payment, a); // cast info, life / sacrifice / exile costs (may ask)
       giveResponse(state, pid);
       return null;
@@ -592,7 +622,22 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       return null;
     }
     case 'choose': {
+      const t = answerTriggerChoice(state, ctx, pid, a.id, a.value);
+      if (t !== undefined) return t;
       return answerPending(state, ctx, pid, a.id, a.value);
+    }
+    case 'chooseTargets': {
+      return answerTriggerTargets(state, ctx, pid, a.id, a.targets);
+    }
+    case 'setAutoTriggers': {
+      me.autoTriggers = a.on;
+      log(state, ctx, pid, `${name} turns automatic triggers ${a.on ? 'on' : 'off'}.`);
+      if (!a.on) {
+        const mine = (state.triggerQueue ?? []).filter((t) => t.controller === pid);
+        state.triggerQueue = (state.triggerQueue ?? []).filter((t) => t.controller !== pid);
+        state.pending = state.pending.filter((p) => !(p.data.kind === 'trigger' && mine.some((t) => t.id === p.data.qid)));
+      }
+      return null;
     }
     case 'trigger': {
       const src = a.sourceIid && state.cards[a.sourceIid] ? cardName(state.cards[a.sourceIid], ctx.lookup) : '';
@@ -689,7 +734,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!c) return 'No such card';
       const key = a.permanent ? 'permPT' : 'tempPT';
       c[key] = [c[key][0] + a.dp, c[key][1] + a.dt];
-      const [p, t] = effectivePT(c, ctx.lookup);
+      const [p, t] = effectivePT(c, ctx.lookup, state);
       log(state, ctx, pid, `${cardName(c, ctx.lookup)} gets ${a.dp >= 0 ? '+' : ''}${a.dp}/${a.dt >= 0 ? '+' : ''}${a.dt}${a.permanent ? '' : ' until end of turn'} (${p}/${t}).`);
       return null;
     }
@@ -697,8 +742,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       const c = card(state, a.iid);
       if (!c) return 'No such card';
       c.damage = Math.max(0, c.damage + a.delta);
-      const [, t] = effectivePT(c, ctx.lookup);
-      log(state, ctx, pid, `${cardName(c, ctx.lookup)} has ${c.damage} damage${c.damage >= t && t > 0 && !hasKeyword(c, ctx.lookup, 'Indestructible') ? ' (lethal)' : ''}.`);
+      const [, t] = effectivePT(c, ctx.lookup, state);
+      log(state, ctx, pid, `${cardName(c, ctx.lookup)} has ${c.damage} damage${c.damage >= t && t > 0 && !hasKeyword(c, ctx.lookup, 'Indestructible', state) ? ' (lethal)' : ''}.`);
       return null;
     }
     case 'transform': {
@@ -741,12 +786,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     case 'createToken': {
       const n = Math.max(1, Math.min(50, a.n));
       const owner = a.pid ?? pid;
-      for (let i = 0; i < n; i++) {
-        const inst = newInstance(state, ctx.rng, owner, 'battlefield', undefined, a.token);
-        inst.tapped = !!a.tapped;
-        inst.summoningSick = true;
-        state.battlefield.push(inst.iid);
-      }
+      for (let i = 0; i < n; i++) createTokenInstance(state, ctx, owner, a.token, !!a.tapped);
       log(state, ctx, pid, `${name} creates ${n} ${a.token.name}${a.token.power != null ? ` ${a.token.power}/${a.token.toughness}` : ''} token${n === 1 ? '' : 's'}.`);
       return null;
     }
@@ -754,13 +794,11 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       const src = card(state, a.iid);
       if (!src || !src.cardId) return 'Can only copy a card';
       const face = faceOf(src, ctx.lookup);
-      const inst = newInstance(state, ctx.rng, pid, 'battlefield', src.cardId, {
+      const inst = createTokenInstance(state, ctx, pid, {
         name: face.name, typeLine: face.typeLine, colors: [], oracle: face.oracle, keywords: face.keywords, power: face.power, toughness: face.toughness,
-      });
-      inst.summoningSick = true;
+      }, false, src.cardId);
       inst.transformed = src.transformed;
       if (face.loyalty) inst.counters.loyalty = parseInt(face.loyalty, 10) || 0;
-      state.battlefield.push(inst.iid);
       log(state, ctx, pid, `${name} creates a token copy of ${face.name}.`);
       return null;
     }
@@ -815,6 +853,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (state.combat.attackersDeclared) return 'Attackers are already declared';
       if (a.target) {
         if (c.tapped) return 'Tapped creatures can’t attack';
+        const no = a.force ? null : attackRestriction(state, c.iid, ctx.lookup);
+        if (no) return `${no} (use force to override)`;
         c.attacking = a.target;
       } else c.attacking = undefined;
       return null;
@@ -834,7 +874,9 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         const att = state.cards[a.attacker];
         if (!att?.attacking) return 'That creature is not attacking';
         if (c.tapped) return 'Tapped creatures can’t block';
-        if (hasKeyword(att, ctx.lookup, 'Flying') && !hasKeyword(c, ctx.lookup, 'Flying') && !hasKeyword(c, ctx.lookup, 'Reach')) {
+        const no = a.force ? null : blockRestriction(state, c.iid, a.attacker, ctx.lookup);
+        if (no) return `${no} (use force to override)`;
+        if (hasKeyword(att, ctx.lookup, 'Flying', state) && !hasKeyword(c, ctx.lookup, 'Flying', state) && !hasKeyword(c, ctx.lookup, 'Reach', state)) {
           // Not enforced: just warn in the log so odd cases (e.g. effects granting reach) still work.
           log(state, ctx, pid, `Warning: ${cardName(c, ctx.lookup)} blocks a flier without flying or reach.`);
         }
@@ -907,19 +949,27 @@ function confirmAttackers(state: GameState, ctx: Ctx) {
   const atk = state.battlefield.filter((id) => state.cards[id].attacking);
   for (const id of atk) {
     const c = state.cards[id];
-    if (!hasKeyword(c, ctx.lookup, 'Vigilance')) c.tapped = true;
+    if (!hasKeyword(c, ctx.lookup, 'Vigilance', state)) c.tapped = true;
   }
   state.combat.attackersDeclared = true;
+  for (const id of atk) {
+    const target = state.cards[id].attacking!;
+    emit(state, { t: 'attacks', iid: id, defender: state.cards[target]?.controller ?? target });
+  }
+  if (atk.length) emit(state, { t: 'attackersDeclared', pid: state.activePlayer });
   const names = atk.map((id) => cardName(state.cards[id], ctx.lookup));
   log(state, ctx, state.activePlayer, atk.length ? `${player(state, state.activePlayer).name} attacks with ${names.join(', ')}.` : 'No attackers.');
+  for (const r of combatReminders(state, ctx.lookup, 'attackers')) log(state, ctx, null, r);
 }
 
 function confirmBlockers(state: GameState, ctx: Ctx, pid: string) {
   state.combat.blockersDeclared = true;
   const blocks = state.battlefield.filter((id) => state.cards[id].blocking && state.cards[id].controller === pid);
+  for (const b of blocks) emit(state, { t: 'blocks', iid: b, attacker: state.cards[b].blocking! });
   log(state, ctx, pid, blocks.length
     ? `${player(state, pid).name} blocks: ${blocks.map((b) => `${cardName(state.cards[b], ctx.lookup)} → ${cardName(state.cards[state.cards[b].blocking!], ctx.lookup)}`).join(', ')}.`
     : `${player(state, pid).name} doesn't block.`);
+  for (const r of combatReminders(state, ctx.lookup, 'blockers')) log(state, ctx, null, r);
 }
 
 function undo(state: GameState, ctx: Ctx, pid: string) {

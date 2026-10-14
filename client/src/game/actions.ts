@@ -1,9 +1,9 @@
 import {
-  activatedAbilities, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
+  activatedAbilities, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { AUTO_LABEL, autoStatus, castStatus, safeActivated, safeSpecs, safeSpell } from './engine.ts';
+import { AUTO_LABEL, autoStatus, castStatus, costNote, safeActivated, safeSpecs, safeSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
 type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'setMode' | 'opp' | 'target'> & { mode: Mode };
@@ -134,9 +134,14 @@ async function activateScripted(base: Base, iid: string, c: CardInstance, entry:
 
 const short = (t: string, n = 80) => (t.length > n ? t.slice(0, n) + '…' : t);
 
-function hintOf(cost: string, cardId: string | undefined, face: number): string {
+function hintOf(cost: string, cardId: string | undefined, face: number, eff?: string): string {
   const st = castStatus(cardId, face);
-  return st ? `${cost} ${AUTO_LABEL[st]}` : cost;
+  const c = eff && eff !== cost ? `${eff} (printed ${cost})` : cost;
+  return st ? `${c} ${AUTO_LABEL[st]}` : c;
+}
+
+function effCost(g: GameView, iid: string, face: number, me: string | null): string | undefined {
+  try { return me ? effectiveCost(g as never, iid, face, getCard, me) || undefined : undefined; } catch { return undefined; }
 }
 
 const moveItems = (base: Base, iid: string, c: CardInstance): MenuItem[] => {
@@ -190,7 +195,7 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     if (mana.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: mana.map((m) => ({ label: m.split('').map((x) => `{${x}}`).join(''), onClick: () => act({ t: 'tapForMana', iid, mana: m }) })) });
     }
-    const scripted = safeActivated(c.cardId, c.transformed ? 1 : 0);
+    const scripted = safeActivated(c.cardId, c.transformed ? 1 : 0).filter((e) => !e.zone);
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({
       label: `[${l.cost > 0 ? '+' : ''}${l.cost}] ${l.text.slice(0, 70)}${l.text.length > 70 ? '…' : ''}`,
       onClick: async () => {
@@ -285,20 +290,26 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     if (!isLand || card?.layout === 'modal_dfc') {
       if (card?.faces && card.layout !== 'normal') {
         for (const fi of [0, 1]) {
-          items.push({ label: `Cast ${card.faces[fi].name}`, hint: hintOf(card.faces[fi].manaCost, c.cardId, fi), onClick: () => castWithX(base, iid, fi) });
+          items.push({ label: `Cast ${card.faces[fi].name}`, hint: hintOf(card.faces[fi].manaCost, c.cardId, fi, effCost(g, iid, fi, me)), onClick: () => castWithX(base, iid, fi) });
           if (safeSpell(c.cardId, fi)) items.push({ label: `Cast ${card.faces[fi].name} (resolve by hand)`, onClick: () => castWithX(base, iid, fi, true) });
         }
       } else {
-        items.push({ label: c.zone === 'hand' ? 'Cast' : `Cast from ${c.zone}`, hint: hintOf(face.manaCost, c.cardId, 0), onClick: () => castWithX(base, iid) });
+        items.push({ label: c.zone === 'hand' ? 'Cast' : `Cast from ${c.zone}`, hint: hintOf(face.manaCost, c.cardId, 0, effCost(g, iid, 0, me)), onClick: () => castWithX(base, iid) });
         if (safeSpell(c.cardId, 0)) items.push({ label: 'Cast (resolve by hand)', onClick: () => castWithX(base, iid, undefined, true) });
       }
+    }
+    // Abilities activated from this zone (cycling, channel, ninjutsu, graveyard abilities).
+    const fromZone = c.owner === me ? safeActivated(c.cardId, 0).filter((e) => e.zone === c.zone) : [];
+    for (const e of fromZone) {
+      const desc = e.ability.description || e.ability.api;
+      items.push({ label: short(desc, 70), hint: autoStatus(e.ability) === 'auto' ? '⚡' : undefined, onClick: () => activateScripted(base, iid, c, e, desc) });
     }
     if (c.zone === 'hand' && mine) {
       items.push({ label: 'Cast face down (morph/disguise)', onClick: () => act({ t: 'cast', iid, faceDown: true }) });
       items.push({ label: 'Reveal', onClick: () => act({ t: 'reveal', iid }) });
       items.push({ label: 'Discard', onClick: () => act({ t: 'move', iid, to: 'graveyard' }) });
       const cyc = /cycling \{/i.test(face.oracle);
-      if (cyc) items.push({ label: 'Cycle (discard, draw)', onClick: async () => { await act({ t: 'move', iid, to: 'graveyard' }); act({ t: 'draw', n: 1 }); } });
+      if (cyc && !fromZone.some((e) => /Cycling/.test(e.keyword ?? ''))) items.push({ label: 'Cycle (discard, draw)', onClick: async () => { await act({ t: 'move', iid, to: 'graveyard' }); act({ t: 'draw', n: 1 }); } });
     }
     items.push({ label: 'Move', sub: moveItems(base, iid, c) });
     return items;

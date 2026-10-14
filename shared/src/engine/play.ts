@@ -2,9 +2,11 @@
 import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
-import { abilityAt, getScript, spellAbility, targetSpecs } from './script.ts';
+import { abilityAt, abilityLine, getScript, spellAbility, targetSpecs } from './script.ts';
 import { divisionError } from './divide.ts';
+import { afterActivation, checkActivation } from './keyword-play.ts';
 import { isValidTarget } from './targets.ts';
+import { adjustCost } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 
@@ -25,7 +27,7 @@ function refKey(ref: TargetRef): string {
 }
 
 /** Validate targets for an ability chain. Returns normalized targets or an error. */
-function checkTargets(state: GameState, ab: ParsedAbility, modes: string[] | undefined, given: TargetRef[][], controller: string, sourceIid: string, ctx: Ctx, what: string):
+export function checkTargets(state: GameState, ab: ParsedAbility, modes: string[] | undefined, given: TargetRef[][], controller: string, sourceIid: string, ctx: Ctx, what: string):
   { targets: TargetRef[][]; targetZones: Record<string, string> } | { error: string } {
   const specs = targetSpecs(ab, modes);
   if (given.length > specs.length && given.slice(specs.length).some((l) => l.length)) return { error: `${what} doesn't have that many targets` };
@@ -95,7 +97,7 @@ function counterKind(forge: string): string {
 export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardInstance, a: ActivateAction): string | null {
   if (!c.cardId) return 'That card has no abilities';
   const face = c.transformed ? 1 : 0;
-  const line = getScript(c.cardId)?.[face]?.abilities[a.ability!];
+  const line = abilityLine(c.cardId, face, a.ability!);
   if (!line || !/^\s*AB\$/.test(line)) return 'No such ability';
   const ab = abilityAt(c.cardId, face, a.ability!);
   if (!ab) return 'No such ability';
@@ -108,6 +110,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if ('error' in res) return res.error;
   const divErr = divisionError(ab, undefined, res.targets, a.division, a.x ?? 0);
   if (divErr) return `${src}: ${divErr}`;
+  const kwErr = checkActivation(state, ctx, pid, c, ab, a.ability!, res.targets);
+  if (kwErr) return kwErr;
   const x = a.x ?? 0;
   const num = (v: string) => (v === 'X' ? x : parseInt(v, 10) || 0);
 
@@ -115,7 +119,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const cost = ab.params.Cost ?? '';
   const tokens = cost.match(/\S+<[^>]*>|\S+/g) ?? [];
   let mana = '';
-  let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false;
+  let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false, discardSelf = false;
   const counterDelta: Record<string, number> = {};
   const byHand: string[] = [];
   for (const tok of tokens) {
@@ -125,7 +129,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
     else if (tok === 'Q') untap = true;
     else if ((m = /^PayLife<(\d+|X)>$/.exec(tok))) life += num(m[1]);
     else if (/^Sac<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) sacSelf = true;
-    else if (/^Exile<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) exileSelf = true;
+    else if (/^Exile(FromGrave)?<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) exileSelf = true;
+    else if (/^Discard<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) discardSelf = true;
     else if ((m = /^(Add|Sub)Counter<(\d+|X)\/([A-Za-z0-9]+)(\/[^>]*)?>$/.exec(tok)) && !m[4]) {
       const k = counterKind(m[3]);
       counterDelta[k] = (counterDelta[k] ?? 0) + (m[1] === 'Add' ? 1 : -1) * num(m[2]);
@@ -133,6 +138,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   }
   if (tap && c.tapped) return `${src} is already tapped`;
   if (untap && !c.tapped) return `${src} is not tapped`;
+  if (discardSelf && c.zone !== 'hand') return `${src} must be in your hand`;
   for (const [k, d] of Object.entries(counterDelta)) if (d < 0 && (c.counters[k] ?? 0) < -d) return `${src} doesn't have enough ${k} counters`;
 
   // ---- pay
@@ -141,6 +147,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (tap) c.tapped = true;
   if (untap) c.tapped = false;
   if (mana) {
+    const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
+    if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
     const paid = payFromPool(mana, me.manaPool, x);
     if (paid) { me.manaPool = paid.pool; if (paid.lifePaid) { me.life -= paid.lifePaid; notes.push(`paid ${paid.lifePaid} life`); } }
     else notes.push('mana not deducted');
@@ -160,7 +168,9 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const loy = counterDelta.loyalty;
   log(state, ctx, pid, `${me.name} activates ${src}${loy != null ? ` [${loy > 0 ? '+' : ''}${loy}]` : ''}: ${ab.description}${notes.length ? ` (${notes.join(', ')})` : ''}`);
   if (byHand.length) log(state, ctx, pid, `Pay by hand: ${byHand.join(' ')}.`);
-  if (sacSelf && c.zone === 'battlefield') { moveCard(state, ctx, c.iid, 'graveyard'); log(state, ctx, pid, `${me.name} sacrifices ${src}.`); }
+  if (sacSelf && c.zone === 'battlefield') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'sacrifice' }); log(state, ctx, pid, `${me.name} sacrifices ${src}.`); }
   if (exileSelf) { moveCard(state, ctx, c.iid, 'exile'); log(state, ctx, pid, `${me.name} exiles ${src}.`); }
+  if (discardSelf && c.zone === 'hand') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'discard' }); log(state, ctx, pid, `${me.name} discards ${src}.`); }
+  afterActivation(state, ctx, pid, c, ab, item);
   return null;
 }

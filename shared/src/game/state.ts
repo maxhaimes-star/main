@@ -2,7 +2,7 @@ import type { TokenData } from '../cards.ts';
 import type { Rng } from '../draft.ts';
 import { afterMove, beforeMove } from '../engine/durations.ts';
 import { faceOf, type Lookup } from './rules.ts';
-import type { CardInstance, GamePlayer, GameState, PlayerZone, Zone } from './types.ts';
+import type { CardInstance, GameEvent, GamePlayer, GameState, PlayerZone, Zone } from './types.ts';
 
 /** Low-level state helpers shared by the reducer and the card-effects engine. */
 
@@ -35,6 +35,18 @@ export function log(state: GameState, ctx: Ctx, pid: string | null, text: string
   if (state.log.length > 400) state.log.splice(0, state.log.length - 400);
 }
 
+/** Stage 2: record an event for trigger detection (only while the game is being played). */
+export function emit(state: GameState, ev: GameEvent) {
+  if (state.phase !== 'playing') return;
+  const evs = (state.events ??= []);
+  if (evs.length < 500) evs.push(ev);
+}
+
+/** Stage 2: per-turn counters. */
+export function turnStats(state: GameState): NonNullable<GameState['turnStats']> {
+  return (state.turnStats ??= { cast: {}, drawn: {} });
+}
+
 export function shuffleLibrary(state: GameState, p: GamePlayer, rng: Rng) {
   const lib = p.zones.library;
   for (let i = lib.length - 1; i > 0; i--) {
@@ -65,6 +77,11 @@ export function drawCards(state: GameState, p: GamePlayer, n: number): number {
     c.revealedTo = [];
     p.zones.hand.push(iid);
     drawn++;
+    if (state.phase === 'playing') {
+      const st = turnStats(state);
+      st.drawn[p.pid] = (st.drawn[p.pid] ?? 0) + 1;
+      emit(state, { t: 'drawn', iid, pid: p.pid, nth: st.drawn[p.pid] });
+    }
   }
   return drawn;
 }
@@ -104,10 +121,33 @@ export function resetPermanentState(inst: CardInstance) {
   inst.tempKeywords = undefined;
 }
 
-export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: { position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean; controller?: string } = {}) {
+export interface MoveOpts { position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean; controller?: string; cause?: 'discard' | 'sacrifice' }
+
+/**
+ * Zone-change replacement hook, installed by engine/replacements.ts (R: lines such as "enters tapped",
+ * "exile it instead"). `before` may change the destination / options and return work to do after the move.
+ */
+export const moveHooks: {
+  before?: (state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts) => { to: Zone; opts: MoveOpts; after?: () => void } | undefined;
+} = {};
+
+/** Move a card between zones, applying replacement effects (see moveHooks). */
+export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts = {}) {
+  const r = state.cards[iid] ? moveHooks.before?.(state, ctx, iid, to, opts) : undefined;
+  moveCardRaw(state, ctx, iid, r?.to ?? to, r?.opts ?? opts);
+  r?.after?.();
+}
+
+/** Move a card between zones without replacement effects. */
+export function moveCardRaw(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts = {}) {
   const inst = state.cards[iid];
   const from = inst.zone;
   to = beforeMove(state, inst, to); // engine bookkeeping (Revolt) and flashback -> exile
+  // Stage 2: zone-change event with a last-known-information snapshot (taken before anything is reset).
+  if (state.phase === 'playing' && from !== to) {
+    const snap = JSON.parse(JSON.stringify(inst)) as CardInstance;
+    emit(state, opts.cause ? { t: 'zone', iid, from, to, snap, cause: opts.cause } : { t: 'zone', iid, from, to, snap });
+  }
   detach(state, inst);
   // Tokens and copies cease to exist outside the battlefield/stack.
   if (inst.token && to !== 'battlefield' && to !== 'stack') {

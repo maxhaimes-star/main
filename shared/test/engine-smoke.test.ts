@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { CUBE, getCard } from '../src/cube.ts';
-import { activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameState, isValidTarget, moveCard, spellAbility, targetSpecs, type TargetRef } from '../src/index.ts';
+import { activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameState, isValidTarget, moveCard, spellAbility, SYNTH_BASE, targetSpecs, type TargetRef } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
 function board(cardId: string, seed: number) {
@@ -17,18 +17,28 @@ function board(cardId: string, seed: number) {
   }
   return { g, ctx };
 }
-function pickTargets(g: GameState, specs: ReturnType<typeof targetSpecs>, src: string) {
+function pickTargets(g: GameState, specs: ReturnType<typeof targetSpecs>, src: string | undefined, controller = 'a') {
   const out: TargetRef[][] = [];
   for (const spec of specs) {
     const cands: TargetRef[] = [...g.players.map((p) => ({ kind: 'player', pid: p.pid }) as TargetRef), ...Object.keys(g.cards).map((iid) => ({ kind: 'card', iid }) as TargetRef), ...g.stack.map((s) => ({ kind: 'stack', id: s.id }) as TargetRef)];
-    const ok = cands.filter((r) => isValidTarget(g, spec, r, 'a', src, getCard));
+    const ok = cands.filter((r) => isValidTarget(g, spec, r, controller, src, getCard));
     out.push(ok.slice(0, Math.max(spec.min, Math.min(1, spec.max))));
   }
   return out;
 }
 function drain(g: GameState, ctx: Ctx) {
   for (let k = 0; k < 30; k++) {
-    if (g.pending.length) { const q = g.pending[0]; const e = applyAction(g, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }, ctx); if (e) throw new Error('choose: ' + e); continue; }
+    if (g.pending.length) {
+      const q = g.pending[0];
+      if (q.targets) {
+        const e = applyAction(g, q.pid, { t: 'chooseTargets', id: q.id, targets: pickTargets(g, q.targets.specs, q.targets.sourceIid, q.targets.controller) }, ctx);
+        if (!e) continue;
+        if (!q.options.length) throw new Error('chooseTargets: ' + e);
+      }
+      const e = applyAction(g, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }, ctx);
+      if (e) throw new Error('choose: ' + e);
+      continue;
+    }
     const pk = g.players.find((p) => p.peek);
     if (pk) { applyAction(g, pk.pid, { t: 'resolvePeek', top: pk.peek!.iids, bottom: [], graveyard: [], hand: [], battlefield: [], exile: [], shuffle: false }, ctx); continue; }
     if (g.stack.length) { applyAction(g, g.priority, { t: 'pass' }, ctx); continue; }
@@ -39,6 +49,7 @@ function drain(g: GameState, ctx: Ctx) {
 it('smoke: every cube spell and ability resolves without throwing', () => {
   const errors: string[] = [];
   let n = 0;
+  let synth = 0, fromHand = 0;
   for (const card of CUBE.cards) {
     for (let face = 0; face < 2; face++) {
       const sp = spellAbility(card.id, face);
@@ -64,7 +75,9 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
       for (const ab of activatedAbilitiesOf(card.id, face)) {
         const { g, ctx } = board(card.id, 5);
         const iid = g.players[0].zones.library.concat(g.players[0].zones.hand).find((i) => g.cards[i].cardId === card.id)!;
-        moveCard(g, ctx, iid, 'battlefield', { controller: 'a' });
+        // Activation zone: battlefield, or hand / graveyard (cycling, channel ...).
+        moveCard(g, ctx, iid, ab.zone ?? 'battlefield', { controller: 'a' });
+        g.pending = []; // e.g. a shockland's "pay 2 life?" question
         g.cards[iid].transformed = face === 1;
         g.cards[iid].counters.loyalty = 20;
         try {
@@ -72,6 +85,8 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
           const err = applyAction(g, 'a', { t: 'activate', iid, text: '', ability: ab.index, targets, x: 1, force: true }, ctx);
           if (err) continue;
           n++;
+          if (ab.index >= SYNTH_BASE) synth++;
+          if (ab.zone) fromHand++;
           drain(g, ctx);
         } catch (e) { errors.push(`${card.id}/ab${ab.index}: ${(e as Error).stack?.split('\n').slice(0, 3).join(' | ')}`); }
       }
@@ -79,4 +94,38 @@ it('smoke: every cube spell and ability resolves without throwing', () => {
   }
   expect(errors).toEqual([]);
   expect(n).toBeGreaterThan(250);
+  expect(synth).toBeGreaterThan(25); // Equip, Cycling, Level up, Reconfigure, Crew ...
+  expect(fromHand).toBeGreaterThan(15);
+});
+
+/** Smoke test (Stage 2): every cube permanent enters the battlefield, its triggers go on the stack and resolve. */
+it('smoke: ETB / landfall triggers of every cube permanent resolve without throwing', () => {
+  const errors: string[] = [];
+  let triggered = 0;
+  for (const card of CUBE.cards) {
+    const sp = spellAbility(card.id, 0);
+    const types = card.types ?? [];
+    if (!['Creature', 'Artifact', 'Enchantment', 'Land', 'Planeswalker', 'Battle'].some((t) => types.includes(t)) && sp && sp.index >= 0) continue;
+    const { g, ctx } = board(card.id, 11);
+    const iid = g.players[0].zones.library.concat(g.players[0].zones.hand).find((i) => g.cards[i].cardId === card.id);
+    if (!iid) continue;
+    try {
+      const stack0 = g.stack.length;
+      const err = applyAction(g, 'a', { t: 'move', iid, to: 'battlefield' }, ctx);
+      if (err) throw new Error(err);
+      if (g.stack.length > stack0 || g.pending.length) triggered++;
+      drain(g, ctx);
+      // a land for landfall triggers
+      const land = g.players[0].zones.library.find((i) => g.cards[i].cardId === 'basic_mountain');
+      if (land && g.cards[iid]?.zone === 'battlefield') {
+        moveCard(g, ctx, land, 'hand');
+        applyAction(g, 'a', { t: 'playLand', iid: land }, ctx);
+        drain(g, ctx);
+      }
+      const bad = g.log.filter((l) => /Trigger detection error/.test(l.text));
+      if (bad.length) errors.push(`${card.id}: ${bad[0].text}`);
+    } catch (e) { errors.push(`${card.id}: ${(e as Error).stack?.split('\n').slice(0, 3).join(' | ')}`); }
+  }
+  expect(errors).toEqual([]);
+  expect(triggered).toBeGreaterThan(80);
 });
