@@ -103,6 +103,12 @@ export interface Pending {
   options: { value: string; label: string }[];
   /** Engine-internal continuation data. */
   data: Record<string, unknown>;
+  /**
+   * Present when the question is "choose targets" (e.g. a triggered ability that targets).
+   * The player answers with the 'chooseTargets' action instead of 'choose'.
+   * `options` may then hold e.g. a "no target / skip" option answerable with 'choose'.
+   */
+  targets?: { specs: TargetSpec[]; sourceIid?: string; controller: string; label: string };
 }
 
 /** Last-known information about a targeted / remembered card (taken before it moves). */

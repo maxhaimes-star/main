@@ -156,6 +156,8 @@ export type GameAction =
   /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. */
   | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number }
   | { t: 'choose'; id: string; value: string }
+  /** Answer a Pending that has `targets`: one list per spec. */
+  | { t: 'chooseTargets'; id: string; targets: TargetRef[][] }
   | { t: 'trigger'; text: string; sourceIid?: string }
   | { t: 'resolve' }
   | { t: 'counterTop' }
