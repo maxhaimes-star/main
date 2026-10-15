@@ -38,11 +38,11 @@ export function moreVarSupported(v: string | undefined): boolean {
     || /^Count\$CardsInYourHand\/.+$/.test(v)
     || /^Count\$xPaid\/(HalfDown|HalfUp|Twice)$/.test(v)
     || /^Count\$ValidExile .+$/.test(v)
-    || /^SVar\$\w+\/(Plus|Minus|Times)\.-?\d+$/.test(v) || /^SVar\$\w+\/(HalfDown|HalfUp|Twice|Negative)$/.test(v)
+    || /^SVar\$\w+\/(Plus|Minus|Times)\.(-?\d+|\w+)$/.test(v) || /^SVar\$\w+\/(HalfDown|HalfUp|Twice|Negative)$/.test(v)
     || /^TriggeredCard\$CardCounters\.\w+$/.test(v) || /^Sacrificed\$Card(ManaCost|Power)(\/Plus\.\d+)?$/.test(v)
     || /^Count\$Valid .+ControlledBy \w+$/.test(v)
     || /^(Remembered|RememberedLKI|Targeted|TargetedLKI)\$Card(Power|Toughness|ManaCost)\/(HalfUp|HalfDown|Twice)$/.test(v)
-    || /^RememberedLKI\$Valid .+$/.test(v)
+    || /^RememberedLKI\$Valid .+$/.test(v) || /^Imprinted\$Valid \w+\.sharesControllerWith (Remembered|Imprinted)$/.test(v)
     || /^Count\$YourCounters\w+$/.test(v) || /^Count\$wasCastFrom(Exile|Graveyard|Hand)\.-?\d+\.-?\d+$/.test(v);
 }
 

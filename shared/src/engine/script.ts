@@ -408,8 +408,8 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     case 'ChangeZoneAll': if (!p.Destination || !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination) || !p.Origin || /Stack|Any/.test(p.Origin)) return 'ChangeZoneAll'; break;
     case 'PutCounter': if (!p.CounterType && !p.Adapt) return 'PutCounter'; break;
     case 'Pump': case 'PumpAll':
-      if (p.PumpZone && !(api === 'Pump' && /^(Flashback|Retrace)$/.test(p.KW ?? ''))) return `${api} (special keyword)`;
-      if (p.KW && /HIDDEN|:/.test(p.KW) && !/^Protection/.test(p.KW)) return `${api} (special keyword)`;
+      if (p.PumpZone && !(api === 'Pump' && (/^(Flashback|Retrace)$/.test(p.KW ?? '') || !p.KW))) return `${api} (special keyword)`;
+      if (p.KW && /HIDDEN|:/.test(p.KW) && !/^Protection/.test(p.KW) && p.KW !== "HIDDEN CARDNAME can't block.") return `${api} (special keyword)`;
       if (p.Defined && ['You', 'Player', 'Opponent', 'TargetedPlayer'].includes(p.Defined) && (api === 'PumpAll' || !p.KW || p.NumAtt || p.NumDef)) return `${api} (player)`;
       break;
   }

@@ -279,8 +279,13 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
   if (!supportedVar(v)) return undefined;
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
   // SVar$X/HalfDown, SVar$X/Minus.1 ... : math on another SVar.
-  let sm = /^SVar\$(\w+)\/(Plus|Minus|Times)\.(-?\d+)$/.exec(v);
-  if (sm) { const b = amount(state, ctx, r, sm[1], 0); if (b == null) return undefined; const k = parseInt(sm[3], 10); return sm[2] === 'Plus' ? b + k : sm[2] === 'Minus' ? b - k : b * k; }
+  let sm = /^SVar\$(\w+)\/(Plus|Minus|Times)\.(-?\d+|\w+)$/.exec(v);
+  if (sm) {
+    const b = amount(state, ctx, r, sm[1], 0);
+    const k = /^-?\d+$/.test(sm[3]) ? parseInt(sm[3], 10) : amount(state, ctx, r, sm[3], 0); // a number or another SVar (Goblin Welder)
+    if (b == null || k == null) return undefined;
+    return sm[2] === 'Plus' ? b + k : sm[2] === 'Minus' ? b - k : b * k;
+  }
   sm = /^SVar\$(\w+)\/(HalfDown|HalfUp|Twice|Negative)$/.exec(v);
   if (sm) { const b = amount(state, ctx, r, sm[1], 0); if (b == null) return undefined; return sm[2] === 'HalfDown' ? Math.floor(b / 2) : sm[2] === 'HalfUp' ? Math.ceil(b / 2) : sm[2] === 'Twice' ? b * 2 : -b; }
   // TriggeredCard$CardCounters.P1P1 (last known), Sacrificed$CardManaCost(/Plus.N)
@@ -393,8 +398,14 @@ function condition(state: GameState, ctx: Ctx, r: Run, i: number): Tri {
     } else cards = [...state.battlefield];
     let count = 0;
     let unknown = false;
+    // "Card.Self+AttachedTo Creature.YouCtrl" (Springheart Nantuko): what it's attached to must match.
+    let present = p.ConditionPresent ?? 'Card';
+    let attachedTo: string | undefined;
+    const am = /\+AttachedTo (\S+)$/.exec(present);
+    if (am) { attachedTo = am[1]; present = present.slice(0, am.index); }
     for (const iid of cards) {
-      const m = matchCard(state.cards[iid], p.ConditionPresent ?? 'Card', env(state, ctx, r));
+      let m = matchCard(state.cards[iid], present, env(state, ctx, r));
+      if (m === true && attachedTo) { const host = state.cards[state.cards[iid].attachedTo ?? '']; m = host ? matchCard(host, attachedTo, env(state, ctx, r)) : false; }
       if (m === true) count++;
       else if (m === 'unknown') unknown = true;
     }
@@ -1102,6 +1113,12 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       return 'ok';
     }
     case 'Pump': case 'PumpAll': {
+      if (p.PumpZone && !p.KW) {
+        // A pump that only names targets / remembers them (Goblin Welder's "target artifact card in that graveyard").
+        if (p.ImprintCards) r.chosen = { ...(r.chosen ?? {}), imprinted: defined(state, r, i, p.ImprintCards)?.cards ?? [] };
+        if (p.RememberObjects) remember(defined(state, r, i, p.RememberObjects)?.cards ?? []);
+        return 'ok';
+      }
       if (p.PumpZone) {
         // "Target card in your graveyard gains flashback until end of turn" (Snapcaster Mage): a cast permission.
         const o = objects(state, r, i, 'Self');
@@ -1116,7 +1133,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const a = amount(state, ctx, r, p.NumAtt, 0);
       const d = amount(state, ctx, r, p.NumDef, 0);
       if (a == null || d == null) return bad();
-      const kws = p.KW ? p.KW.split('&').map((k) => k.trim()).filter(Boolean) : [];
+      const kws = p.KW ? p.KW.split('&').map((k) => k.trim().replace(/^HIDDEN /, '')).filter(Boolean) : [];
       let cards: string[];
       if (step.api === 'PumpAll') {
         const ms = state.battlefield.map((x) => [x, matchCard(state.cards[x], p.ValidCards ?? 'Creature', E)] as const);

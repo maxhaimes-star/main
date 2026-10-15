@@ -636,6 +636,7 @@ export function blockRestriction(st: StaticsState, blocker: string, attacker: st
   const a = visible(st, attacker);
   if (!b) return null;
   const bn = faceOf(b, lookup).name;
+  if (b.tempKeywords?.includes("CARDNAME can't block.")) return `${bn} can't block this turn`; // Zirda's pump
   for (const { s, ev } of active(st, lookup, 'CantBlock')) {
     if (s.params.ValidCard && matchCard(b, s.params.ValidCard, ev.env(s)) === true) return `${bn} can't block (${srcName(st, s, lookup)}: ${s.description})`;
   }

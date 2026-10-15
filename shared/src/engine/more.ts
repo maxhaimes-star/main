@@ -1273,6 +1273,13 @@ export function moreVar(state: GameState, r: { controller: string; sourceIid?: s
     if (/RememberedPlayerCtrl/.test(m[1])) return Object.keys(lki).filter((x) => !isPlayer(state, x) && ps.includes(lki[x].controller)).length;
     return Object.keys(lki).length;
   }
+  // "Remembered$Valid Artifact.sharesControllerWith Imprinted" (Goblin Welder): its controller (owner in a graveyard) matches.
+  if ((m = /^(Remembered|Imprinted)\$Valid (\w+)\.sharesControllerWith (Remembered|Imprinted)$/.exec(v))) {
+    const set = (k: string) => (k === 'Remembered' ? r.remembered : r.chosen?.imprinted ?? []).filter((x) => state.cards[x]);
+    const ctl = (x: string) => (state.cards[x].zone === 'battlefield' ? state.cards[x].controller : state.cards[x].owner);
+    const others = new Set(set(m[3]).map(ctl));
+    return set(m[1]).filter((x) => others.has(ctl(x)) && matchCard(state.cards[x], m![2], { controller: r.controller, lookup: ctx.lookup }) === true).length;
+  }
   if ((m = /^Remembered\$Valid (.+)$/.exec(v))) return r.remembered.filter((x) => state.cards[x] && matchCard(state.cards[x], m![1], { controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup }) === true).length;
   if ((m = /^TriggeredCard\$Card(Power|Toughness|ManaCost)$/.exec(v))) {
     const iid = r.trig?.card;
