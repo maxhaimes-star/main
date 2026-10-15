@@ -715,6 +715,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!a.faceDown) {
         const st = turnStats(state);
         st.cast[pid] = (st.cast[pid] ?? 0) + 1;
+        const gs = (state.gameStats ??= { cast: {} });
+        gs.cast[pid] = (gs.cast[pid] ?? 0) + 1;
         emit(state, { t: 'cast', iid: c.iid, pid, nth: st.cast[pid] });
       }
       const fromText = from === 'hand' ? '' : ` from ${from === 'library' ? 'the top of their library' : ZONE_LABEL[from]}`;

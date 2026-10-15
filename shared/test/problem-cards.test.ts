@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilityUsability, activatedAbilitiesOf, applyAction, castability, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
+  abilityUsability, activatedAbilitiesOf, applyAction, castability, castOptions, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -122,5 +122,30 @@ describe('Urza, Lord High Artificer', () => {
     drain(g, ctx);
     const exiled = g.players[0].zones.exile.at(-1)!;
     expect(castability(g, 'a', exiled, getCard).ok).toBe(true);
+  });
+});
+
+describe('Once Upon a Time', () => {
+  it('free only as the first spell of the game; looks at the top five', () => {
+    const { g, ctx } = setup(['once_upon_a_time', 'opt', 'containment_priest'], [], 'basic_forest');
+    const ouat = toHand(g, ctx, 'a', 'once_upon_a_time');
+    const alt = castOptions(g, ouat).find((o) => /first spell/.test(o.label))!;
+    expect(alt).toBeTruthy();
+    expect(alt.unavailable).toBeUndefined();
+    expect(alt.cost).toBe('{0}');
+    act(g, ctx, 'a', { t: 'cast', iid: ouat, costOption: alt.id });
+    drain(g, ctx);
+    expect(g.pending.length + (g.players[0].peek ? 1 : 0)).toBeGreaterThan(0);
+  });
+
+  it('not free after another spell was cast this game', () => {
+    const { g, ctx } = setup(['once_upon_a_time', 'opt'], [], 'basic_island');
+    lands(g, 'a', 'basic_island', 1);
+    const opt = toHand(g, ctx, 'a', 'opt');
+    act(g, ctx, 'a', { t: 'cast', iid: opt });
+    drain(g, ctx);
+    const ouat = toHand(g, ctx, 'a', 'once_upon_a_time');
+    const alt = castOptions(g, ouat).find((o) => /first spell/.test(o.label))!;
+    expect(alt.unavailable).toMatch(/Condition not met/);
   });
 });

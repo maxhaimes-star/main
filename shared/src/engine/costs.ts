@@ -17,7 +17,7 @@ import { prepareCast } from './play.ts';
 import { divisionError } from './divide.ts';
 import { getScript, parseParams, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard } from './targets.ts';
-import { adjustCost, castRestriction } from './statics.ts';
+import { adjustCost, castRestriction, staticLineActive } from './statics.ts';
 import { castTimingError } from './timing.ts';
 import { applyPermissions } from './permissions.ts';
 import { applyCastKeywords, escalateParts } from './castkw.ts';
@@ -210,7 +210,7 @@ function optionDefs(state: GameState, c: CardInstance, pid: string, face: number
     if (p.IsPresent && !state.battlefield.some((iid) => matchCard(state.cards[iid], p.IsPresent, env) === true)) def.unavailable = `Needs ${describeValid(p.IsPresent.replace(/\.YouCtrl|\+YouCtrl/, ''))} you control`;
     if (p.Condition === 'PlayerTurn' && state.activePlayer !== pid) def.unavailable = 'Only during your turn';
     if (p.Condition === 'NotPlayerTurn' && state.activePlayer === pid) def.unavailable = "Only when it's not your turn";
-    if (p.CheckSVar) def.parts = [...def.parts, { kind: 'other', n: '0', valid: '', text: 'Check the condition by hand' }];
+    if (p.CheckSVar && staticLineActive(state, line, script?.svars ?? {}, c.iid, pid, lookup) !== true) def.unavailable = p.Description ? `Condition not met: ${p.Description.replace(/CARDNAME/g, name)}` : 'Condition not met';
     defs.push(def);
   }
   applyCastKeywords(state, c, pid, face, defs, name, parseCost, lookup); // spectacle, multikicker, mayhem ... (engine/castkw.ts)

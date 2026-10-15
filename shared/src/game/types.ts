@@ -170,6 +170,8 @@ export interface GameState {
   remembered?: Record<string, string[]>;
   /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
   turnStats?: { cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number> };
+  /** Whole-game counters: spells each player cast this game (Count$YouCastThisGame: Once Upon a Time). */
+  gameStats?: { cast: Record<string, number> };
   /** Extra turns (engine/turns.ts): player ids, the LAST one is taken next ("after this one" stacks LIFO). */
   extraTurns?: string[];
   /** Whose regular turn is due once the extra turns are over (set when an extra turn interrupts the rotation). */

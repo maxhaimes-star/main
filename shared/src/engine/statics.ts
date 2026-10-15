@@ -34,6 +34,8 @@ export interface StaticsState {
   turn?: number;
   /** Effect records (engine/effects.ts): emblems and "this turn" effects with static abilities. */
   effects?: TimedEffect[];
+  /** Whole-game counters (spells each player cast this game: Once Upon a Time). */
+  gameStats?: { cast: Record<string, number> };
 }
 
 /** One static ability of a permanent (or a card being cast, for EffectZone$ All). */
@@ -322,6 +324,7 @@ class Evaluator {
     }
     switch (e) {
       case 'Count$CardsInYourHand': return handSize(this.st, s.controller);
+      case 'Count$YouCastThisGame': return this.st.gameStats?.cast[s.controller] ?? 0;
       case 'Count$YourLifeTotal': return this.st.players.find((p) => p.pid === s.controller)?.life;
       case 'Count$Domain': {
         const env = this.env(s);
@@ -538,6 +541,12 @@ export function parseStatic(line: string, svars: Record<string, string> = {}): P
 }
 
 // ------------------------------------------------------------------ public queries
+
+/** Condition$ / IsPresent$ / CheckSVar$ of a static line of a card not (necessarily) on the battlefield (alternative costs). */
+export function staticLineActive(st: StaticsState, line: string, svars: Record<string, string>, sourceIid: string, controller: string, lookup: Lookup): Tri {
+  const ps = parseStatic(line, svars);
+  return new Evaluator(st, lookup, true).active({ ...ps, sourceIid, controller, description: '' });
+}
 
 /** Can `pid` gain life (CantGainLife statics: Screaming Nemesis' "can't gain life for the rest of the game")? Reason or null. */
 export function lifeGainPrevented(st: StaticsState, pid: string, lookup: Lookup): string | null {
