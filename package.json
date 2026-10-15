@@ -16,7 +16,7 @@
     "build-cube": "tsx scripts/build-cube.ts",
     "build-carddb": "bash scripts/fetch-forge.sh",
     "crop-pdf": "python3 scripts/crop_pdf.py",
-    "e2e": "node e2e/smoke.mjs && node e2e/auction.mjs && node e2e/engine2.mjs"
+    "e2e": "node e2e/run.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.7",
