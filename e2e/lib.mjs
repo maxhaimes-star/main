@@ -18,8 +18,28 @@ export const newPage = async () => {
   const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
   p.setDefaultTimeout(T);
   p.on('pageerror', (e) => errors.push(e.message));
+  patchClick(p);
   return p;
 };
+
+// In the Arena-style table the centre action buttons (.sub-actions) can overlap part of the fanned hand, so a real mouse click on a
+// hand card is sometimes intercepted. When Playwright reports that, fall back to dispatching the click on the card itself.
+let patched = false;
+function patchClick(p) {
+  if (patched) return;
+  patched = true;
+  const proto = Object.getPrototypeOf(p.locator('body'));
+  const orig = proto.click;
+  proto.click = async function (opts) {
+    try { return await orig.call(this, { ...opts, timeout: opts?.timeout ?? 8000 }); }
+    catch (e) {
+      if (!/intercepts pointer events/.test(String(e.message))) throw e;
+      overlapFallbacks++;
+      return this.dispatchEvent('click');
+    }
+  };
+}
+export let overlapFallbacks = 0;
 export const settle = (p, ms = 500) => p.waitForTimeout(ms);
 export const shot = (p, n) => p.screenshot({ path: `${OUT}/${n}.png` });
 
