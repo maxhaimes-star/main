@@ -133,9 +133,10 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
   const mayPlay = rec.statics.some((s) => f?.svars[s] && isPermission(parseStatic(f.svars[s]).params));
   if (mayPlay) {
     const cards = rec.remembered.filter((x) => state.cards[x]);
-    const zone = cards[0] ? state.cards[cards[0]].zone : 'exile';
+    const permLine = rec.statics.map((s) => f?.svars[s]).find((l) => l && isPermission(parseStatic(l).params));
+    const zone = cards[0] ? state.cards[cards[0]].zone : (permLine ? parseStatic(permLine).params.AffectedZone ?? 'Exile' : 'Exile').toLowerCase();
     const shown = cards.filter((x) => !state.cards[x].faceDown);
-    log(state, ctx, owner, `${who} may play ${shown.length ? shown.map((x) => cardName(state.cards[x], ctx.lookup)).join(', ') : cards.length ? `${cards.length} card${cards.length === 1 ? '' : 's'}` : 'those cards'} from ${zone === 'graveyard' ? 'their graveyard' : zone}.`);
+    log(state, ctx, owner, `${who} may play ${shown.length ? shown.map((x) => cardName(state.cards[x], ctx.lookup)).join(', ') : cards.length ? `${cards.length} card${cards.length === 1 ? '' : 's'}` : zone === 'graveyard' ? 'cards' : 'those cards'} from ${zone === 'graveyard' ? 'their graveyard' : zone}.`);
   }
 }
 

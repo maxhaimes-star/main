@@ -20,7 +20,7 @@
 import { cardName, type Lookup } from '../game/rules.ts';
 import { type Ctx, emit, log, moveCard, moveHooks, type MoveOpts, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
-import { getScript, parseParams, SCRIPTS, scriptRef } from './script.ts';
+import { getScript, parseParams, SCRIPTS, scriptRef, isRoomCard } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';
 import { playerProtectedFrom, protectedFrom } from './protection.ts';
 import { untapLimits } from './statics.ts';
@@ -233,6 +233,13 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
       if (!tapped) afters.push(() => log(state, ctx, null, `${cardName(c, ctx.lookup)} enters tapped (${by}).`));
       tapped = true;
     }
+  }
+
+  // Rooms: the door that was cast is unlocked; a Room put onto the battlefield otherwise has both doors locked.
+  if (isRoomCard(c.cardId) && !c.faceDown) {
+    const data = ctx.lookup(c.cardId!);
+    const door = from !== 'stack' ? -1 : c.castAs ? data?.faces?.findIndex((f) => f.name === c.castAs) ?? -1 : 0; // no castAs: the left door
+    afters.push(() => { const inst = state.cards[c.iid]; if (inst?.zone === 'battlefield') inst.unlocked = door >= 0 ? [door] : []; });
   }
 
   // The card's own "as it enters" replacements.

@@ -69,6 +69,8 @@ export interface CardInstance {
   tempKeywords?: string[];
   /** How it was cast (kicked, evoked, flashback...). Kept while on the stack and when it resolves onto the battlefield. */
   castInfo?: CastInfo;
+  /** Rooms on the battlefield: the unlocked doors (0 = left, 1 = right), engine/script.ts roomScript. */
+  unlocked?: number[];
 }
 
 export interface StackItem {

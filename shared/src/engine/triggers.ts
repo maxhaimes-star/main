@@ -80,6 +80,12 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
     if (/MayPlaySource/.test(p.ValidSA ?? '') && (p.Mode === 'SpellCast' || p.Mode === 'LandPlayed') && ch?.api === 'Animate' && ch.params.Triggers && !ch.sub) return { detect: true, chain: true };
     return { detect: false, chain: false, reason: 'static' };
   }
+  // Rooms: "When you unlock this door" is queued by the unlock special action (keyword-play.ts unlockDoor).
+  if (p.Mode === 'UnlockDoor' && p.ThisDoor === 'True') {
+    const ch = triggerChain(cardId, face, p.Execute);
+    const un = ch ? isAutomatable(ch).unsupported : ['no chain'];
+    return un.length ? { detect: true, chain: false, reason: `effect ${un[0].split(' ')[0]}` } : { detect: true, chain: true };
+  }
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
   const unknown = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
   const chain = triggerChain(cardId, face, p.Execute);

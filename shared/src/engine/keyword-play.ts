@@ -7,7 +7,7 @@ import { cardName, effectivePT, faceOf, hasKeyword, isCreature } from '../game/r
 import { type Ctx, emit, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem } from '../game/types.ts';
 import { levelStats, type LevelStats } from './keywords.ts';
-import { scriptFaceOf } from './script.ts';
+import { getScript, parseParams, scriptFaceOf } from './script.ts';
 import { canPayMana, payMana } from './paycost.ts';
 import { type AutoInfo, type ParsedAbility, type Pending, SYNTH_BASE, type TargetRef } from './types.ts';
 
@@ -69,6 +69,7 @@ export function checkActivation(state: GameState, ctx: Ctx, pid: string, c: Card
  * The card's name isn't logged (a foretold card stays hidden from the opponent).
  */
 export function specialAction(state: GameState, ctx: Ctx, pid: string, c: CardInstance, ab: ParsedAbility): string | null | undefined {
+  if (ab.api === '_Unlock') return unlockDoor(state, ctx, pid, c, ab);
   if (ab.api !== '_Foretell') return undefined;
   if (state.activePlayer !== pid) return 'You can foretell only during your turn';
   if (c.zone !== 'hand' || c.owner !== pid) return 'Foretell: the card must be in your hand';
@@ -77,6 +78,32 @@ export function specialAction(state: GameState, ctx: Ctx, pid: string, c: CardIn
   moveCard(state, ctx, c.iid, 'exile', { faceDown: true });
   (state.remembered ??= {})[`foretold|${c.iid}`] = [String(state.turn)];
   log(state, ctx, pid, `${pname(state, pid)} pays {2} and foretells a card (exiled face down).`);
+  return null;
+}
+
+/** Rooms: unlock a door (a special action at sorcery speed: pay the door's mana cost). "When you unlock this door" triggers. */
+function unlockDoor(state: GameState, ctx: Ctx, pid: string, c: CardInstance, ab: ParsedAbility): string | null {
+  const door = parseInt(ab.params.Door ?? '-1', 10);
+  if (!c.unlocked || c.zone !== 'battlefield' || c.controller !== pid) return 'Not a Room you control';
+  if (c.unlocked.includes(door) || !c.cardId) return 'That door is already unlocked';
+  const data = ctx.lookup(c.cardId);
+  const cost = data?.faces?.[door]?.manaCost ?? '';
+  if (!canPayMana(state, pid, cost, 0, ctx.lookup)) return `Unlock: you need ${cost}`;
+  payMana(state, ctx, pid, cost);
+  c.unlocked = [...c.unlocked, door].sort();
+  const faces = getScript(c.cardId);
+  const doorName = faces?.[door]?.name ?? 'a door';
+  log(state, ctx, pid, `${pname(state, pid)} pays ${cost} and unlocks ${doorName}.`);
+  // "When you unlock this door" (Mode$ UnlockDoor | ThisDoor$ True): queued, put on the stack after this action.
+  faces?.[door]?.triggers.forEach((line, index) => {
+    const p = parseParams(line).params;
+    if (p.Mode !== 'UnlockDoor' || !p.Execute) return;
+    const desc = (p.TriggerDescription ?? 'When you unlock this door').replace(/CARDNAME/g, doorName);
+    (state.triggerQueue ??= []).push({
+      id: randomId(ctx.rng), controller: pid, sourceIid: c.iid, sourceName: doorName, text: `${doorName}: ${desc}`,
+      auto: { cardId: c.cardId!, face: door, source: 'trigger', index, svar: p.Execute, targets: [], trigger: { mode: 'UnlockDoor', card: c.iid, player: pid } },
+    });
+  });
   return null;
 }
 

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilityUsability, activatedAbilitiesOf, applyAction, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
+  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -339,5 +339,40 @@ describe('Serra Paragon', () => {
     expect(g.cards[isl].zone).toBe('battlefield');
     expect(g.cards[isl].animations?.some((a) => a.grant?.triggers?.length)).toBe(true);
     expect(castability(g, 'a', priest, getCard).ok).toBe(false);
+  });
+});
+
+describe('Walk-In Closet // Forgotten Cellar (Room)', () => {
+  it('casting a door unlocks it; unlocking the other door triggers; locked doors have no abilities', () => {
+    const { g, ctx } = setup(['walk_in_closet_forgotten_cellar', 'basic_island', 'once_upon_a_time'], [], 'basic_forest');
+    lands(g, 'a', 'basic_forest', 10);
+    const room = toHand(g, ctx, 'a', 'walk_in_closet_forgotten_cellar');
+    act(g, ctx, 'a', { t: 'cast', iid: room, face: 0 });
+    drain(g, ctx);
+    expect(g.cards[room].zone).toBe('battlefield');
+    expect(g.cards[room].unlocked).toEqual([0]);
+    // Walk-In Closet: lands from the graveyard
+    const isl = find(g, 'a', 'basic_island');
+    moveCard(g, ctx, isl, 'graveyard');
+    expect(castability(g, 'a', isl, getCard).ok).toBe(true);
+    const ouat = find(g, 'a', 'once_upon_a_time');
+    moveCard(g, ctx, ouat, 'graveyard');
+    expect(castability(g, 'a', ouat, getCard).ok).toBe(false);
+    // unlock Forgotten Cellar ({3}{G}{G})
+    const abs = abilitiesOfInstance(g.cards[room]);
+    const unlock = abs.find((a) => a.ability.api === '_Unlock')!;
+    expect(unlock).toBeTruthy();
+    expect(abilityUsability(g, 'a', room, unlock.index, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'activate', iid: room, ability: unlock.index, text: '' });
+    expect(g.cards[room].unlocked).toEqual([0, 1]);
+    expect(logText(g)).toMatch(/unlocks Forgotten Cellar/);
+    drain(g, ctx);
+    // you may cast spells from your graveyard this turn; they're exiled instead of going to the graveyard
+    expect(castability(g, 'a', ouat, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'cast', iid: ouat });
+    drain(g, ctx);
+    while (g.pending.length) answer(g, ctx, /./);
+    expect(g.cards[ouat].zone).toBe('exile');
+    expect(abilitiesOfInstance(g.cards[room]).some((a) => a.ability.api === '_Unlock')).toBe(false);
   });
 });
