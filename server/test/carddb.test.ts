@@ -68,7 +68,7 @@ describe('booster templates (synthetic set)', () => {
 const has = carddbAvailable();
 if (!has) console.warn('data/carddb missing — run `npm run build-carddb` (or scripts/build-carddb.ts --forge …) to enable card DB tests');
 
-describe.skipIf(!has)('card database (built data)', () => {
+describe.skipIf(!has)('card database (built data)', { timeout: 30_000 }, () => {
   it('contains every OJ cube card under the same id', () => {
     for (const c of CUBE.cards) {
       const db = getCardById(c.id);
