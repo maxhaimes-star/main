@@ -1,5 +1,5 @@
 import {
-  activatedAbilitiesOf, activeStatics, castOptions, divisionError, effectiveCost, flatten, faceManaCost, isAutomatable, isValidTarget, spellAbility, targetSpecs,
+  abilitiesOfInstance, activatedAbilitiesOf, activeStatics, castOptions, divisionError, effectiveCost, flatten, faceManaCost, isAutomatable, isValidTarget, spellAbility, targetSpecs,
   type ActiveStatic, type CastOption, type GameView, type ParsedAbility, type TargetRef, type TargetSpec,
 } from '@ojb/shared';
 import * as Shared from '@ojb/shared';
@@ -13,6 +13,9 @@ function safe<T>(f: () => T): T | undefined {
 
 export const safeSpell = (cardId: string | undefined, face: number) => cardId ? safe(() => spellAbility(cardId, face)) : undefined;
 export const safeActivated = (cardId: string | undefined, face: number) => (cardId ? safe(() => activatedAbilitiesOf(cardId, face)) : undefined) ?? [];
+/** Activated abilities of a permanent now: script + animate grants + abilities other cards grant it (indexes >= GRANT_BASE / FOREIGN_BASE). */
+export const safeAbilities = (g: GameView, c: { iid: string; cardId?: string; transformed?: boolean }): ReturnType<typeof safeActivated> =>
+  safe(() => abilitiesOfInstance(c as never, g as never, getCard)) ?? safeActivated(c.cardId, c.transformed ? 1 : 0);
 export const safeSpecs = (ab: ParsedAbility, modes?: string[]): TargetSpec[] => safe(() => targetSpecs(ab, modes)) ?? [];
 
 export function chainLength(ab: ParsedAbility): number {

@@ -260,7 +260,9 @@ export function OptionsModal({ title, options, onDone }: { title: string; option
   );
 }
 
-export function DivideModal({ title, total, targets, validate, onDone }: {
+export function DivideModal({ title, total, targets, validate, onDone, even }: {
+  /** even: a suggested split (button "Even split"). */
+  even?: Record<string, number>;
   title: string; total: number | undefined; targets: { key: string; label: string }[]; validate: (d: Record<string, number>) => string | null; onDone: (v: Record<string, number> | null) => void;
 }) {
   const [vals, setVals] = useState<Record<string, number>>(() => {
@@ -281,7 +283,7 @@ export function DivideModal({ title, total, targets, validate, onDone }: {
         ))}
       </div>
       {err && <p className="muted divide-err">{err}</p>}
-      <div className="row"><button className="primary" disabled={!!err} onClick={() => onDone(vals)}>OK</button><button onClick={() => onDone(null)}>Cancel</button></div>
+      <div className="row"><button className="primary" disabled={!!err} onClick={() => onDone(vals)}>OK</button>{even && <button onClick={() => setVals(even)}>Even split</button>}<button onClick={() => onDone(null)}>Cancel</button></div>
     </Modal>
   );
 }

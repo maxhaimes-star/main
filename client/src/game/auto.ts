@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { faceOf, isHidden, type GameAction, type GameView, type Step } from '@ojb/shared';
 import * as Shared from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { castability, isStrict, safeActivated } from './engine.ts';
+import { castability, isStrict, safeAbilities } from './engine.ts';
 
 // ------------------------------------------------------------ persisted settings (Arena-style auto-pass / full control / auto-yield)
 
@@ -51,7 +51,7 @@ export function canRespond(g: GameView, me: string): boolean {
     for (const iid of g.battlefield) {
       const c = g.cards[iid];
       if (!c || isHidden(c) || c.controller !== me || c.faceDown || !c.cardId) continue;
-      for (const e of safeActivated(c.cardId, c.transformed ? 1 : 0)) {
+      for (const e of safeAbilities(g, c)) {
         if (!isStrict(g) || !usable) return true;
         const r = usable(g, me, iid, e.index, getCard);
         if (r?.ok) return true;

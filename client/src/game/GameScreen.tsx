@@ -861,7 +861,7 @@ function PendingChoices() {
   }, [g.pending, mode, setMode]);
   const revealedIds = mine ? pendingRevealed(mine) : [];
   const targetingThis = !!tg && mode?.kind === 'target' && handling.current === mineId;
-  const showModal = mine && (!tg || (dismissed === mineId && mine.options.length > 0));
+  const showModal = mine && !mine.divide && (!tg || (dismissed === mineId && mine.options.length > 0));
   return (
     <>
       {mine && tg && dismissed === mineId && (
@@ -870,6 +870,7 @@ function PendingChoices() {
           <button className="tiny" onClick={() => startTargeting(mine)}>Choose targets for {tg.label}</button>
         </div>
       )}
+      {mine?.divide && <PendingDivide pending={mine} />}
       {showModal && (
         <div className="modal-bg pending-bg" onMouseDown={(e) => e.stopPropagation()}>
           <div className="modal pending" onMouseDown={(e) => e.stopPropagation()}>
@@ -892,6 +893,21 @@ function PendingChoices() {
       ))}
     </>
   );
+}
+
+/** Pending.divide: split `total` among the targets; answered with 'choose' and a JSON {key: amount}. */
+function PendingDivide({ pending }: { pending: { id: string; prompt: string; options: { value: string; label: string }[]; divide?: { total: number; min: number; targets: { key: string; label: string }[] } } }) {
+  const { act } = useGame();
+  const d = pending.divide!;
+  let even: Record<string, number> | undefined;
+  try { const o = pending.options[0]; even = o ? JSON.parse(o.value) : undefined; } catch { even = undefined; }
+  const validate = (v: Record<string, number>) => {
+    const sum = d.targets.reduce((a, t) => a + (v[t.key] ?? 0), 0);
+    if (d.targets.some((t) => (v[t.key] ?? 0) < d.min)) return `Each target needs at least ${d.min}`;
+    return sum === d.total ? null : `Amounts must total ${d.total} (now ${sum})`;
+  };
+  return <DivideModal title={pending.prompt} total={d.total} targets={d.targets} even={even} validate={validate}
+    onDone={(v) => { if (v) act({ t: 'choose', id: pending.id, value: JSON.stringify(v) }); }} />;
 }
 
 /** Cards revealed by a question (Duress-style): legal choices are clickable, the rest dimmed. */

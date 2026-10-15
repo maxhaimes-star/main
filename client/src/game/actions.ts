@@ -3,7 +3,7 @@ import {
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { AUTO_LABEL, autoStatus, isStrict, manualOk, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
+import { AUTO_LABEL, autoStatus, isStrict, manualOk, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
 type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'pickOption' | 'divide' | 'setMode' | 'opp' | 'target'> & { toast?: (m: string) => void } & { mode: Mode };
@@ -240,7 +240,7 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     if (mana.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: mana.map((m) => ({ label: m.split('').map((x) => `{${x}}`).join(''), onClick: () => act({ t: 'tapForMana', iid, mana: m }) })) });
     }
-    const scripted = safeActivated(c.cardId, c.transformed ? 1 : 0).filter((e) => !e.zone);
+    const scripted = safeAbilities(g, c).filter((e) => !e.zone);
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({
       label: `[${l.cost > 0 ? '+' : ''}${l.cost}] ${l.text.slice(0, 70)}${l.text.length > 70 ? '…' : ''}`,
       onClick: async () => {
