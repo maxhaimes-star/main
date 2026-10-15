@@ -21,7 +21,7 @@ import { writeFileSync } from 'node:fs';
 import { CUBE, getCard } from '../shared/src/cube.ts';
 import {
   abilitiesOfInstance, activatedAbilitiesOf, adjustCost, applyAction, castOptions, type CardData, type Color, createGame, type Ctx,
-  effectivePT, faceOf, landPlaysAllowed, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
+  effectivePT, faceOf, landPlaysAllowed, landPlaysLeft, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
   parseManaSymbols, type Pending, spellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
 } from '../shared/src/index.ts';
 
@@ -344,7 +344,7 @@ function abilityPlays(G: Game, pid: string): Play[] {
 function landPlays(G: Game, pid: string): Play[] {
   const { g } = G;
   const me = g.players.find((p) => p.pid === pid)!;
-  if (me.landsPlayed >= landPlaysAllowed(g, pid, getCard)) return [];
+  if (G.strict ? landPlaysLeft(g, pid, getCard) <= 0 : me.landsPlayed >= landPlaysAllowed(g, pid, getCard)) return [];
   const fromElsewhere = [...me.zones.graveyard, ...me.zones.exile, ...me.zones.library.slice(0, 1)].filter((iid) => mayPlayFrom(g, pid, iid, getCard));
   return [...me.zones.hand, ...fromElsewhere].filter((iid) => {
     const d = g.cards[iid]?.cardId ? getCard(g.cards[iid].cardId!) : undefined;

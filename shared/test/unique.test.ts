@@ -374,11 +374,10 @@ describe('lands', () => {
     expect(g.cards[us].counters.lore).toBe(3);
     act(g, ctx, 'b', { t: 'pass' });
     // Chapter III: search for a {0}/{1} artifact.
-    const peek = P(g, 'a').peek!;
-    expect(peek.mode).toBe('search');
     const top = find(g, 'a', 'senseis_divining_top');
-    act(g, ctx, 'a', { t: 'resolvePeek', top: [], bottom: [], graveyard: [], hand: [], battlefield: [top], exile: [], shuffle: true });
-    expect(g.cards[top].zone).toBe('battlefield');
+    const tc = g.cards[top];
+    act(g, ctx, 'a', { t: 'choose', id: g.pending[0].id, value: top });
+    expect(tc.zone).toBe('battlefield');
     expect(g.cards[us].zone).toBe('graveyard');
     expect(logText(g)).toMatch(/sacrifices Urza's Saga \(final chapter\)/);
   });
@@ -616,9 +615,8 @@ describe('cube staples work end to end', () => {
     if (g.pending.length) answer(g, ctx, gg);
     expect(g.cards[gg].zone).toBe('graveyard');
     act(g, ctx, 'b', { t: 'pass' });
-    expect(P(g, 'a').peek?.mode).toBe('search');
     const gb = find(g, 'a', 'griselbrand');
-    act(g, ctx, 'a', { t: 'resolvePeek', top: [], bottom: [], graveyard: [], hand: [gb], battlefield: [], exile: [], shuffle: true });
+    act(g, ctx, 'a', { t: 'choose', id: g.pending[0].id, value: gb });
     expect(P(g, 'a').zones.hand.some((i) => g.cards[i].cardId === 'griselbrand')).toBe(true);
   });
 

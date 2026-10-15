@@ -19,6 +19,7 @@ import { getScript, grantedLines, parseParams, scriptRef } from './script.ts';
 import type { EffectRecord, TimedEffect } from './types.ts';
 import { type MatchEnv, type Tri, matchCard } from './targets.ts';
 import { evasionRestriction } from './protection.ts';
+import { bestPermission } from './permissions.ts';
 
 // ------------------------------------------------------------------ types
 
@@ -854,6 +855,10 @@ export function maxHandSize(st: StaticsState, pid: string, lookup: Lookup): numb
 export function mayPlayPermission(st: StaticsState, iid: string, pid: string, lookup: Lookup, remembered?: Record<string, string[]>): { source: string; free: boolean } | null {
   const c = visible(st, iid);
   if (!c) return null;
+  // Effects (impulse draw, Hostage Taker ...), keyword grants (Snapcaster, retrace, escape, airbend), adventures,
+  // once-per-turn limits: engine/permissions.ts.
+  const perm = bestPermission(st as never, pid, iid, undefined, lookup);
+  if (perm) return { source: perm.source, free: !!perm.free };
   const zoneName = c.zone.charAt(0).toUpperCase() + c.zone.slice(1);
   for (const { s, ev } of active(st, lookup, 'Continuous')) {
     const p = s.params;

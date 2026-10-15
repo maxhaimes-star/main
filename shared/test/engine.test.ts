@@ -289,12 +289,16 @@ describe('engine: cards & libraries', () => {
     act(g, ctx, 'a', { t: 'cast', iid: dt });
     act(g, ctx, 'b', { t: 'pass' });
     const me = P(g, 'a');
-    expect(me.peek?.mode).toBe('search');
-    expect(me.peek?.iids).toHaveLength(me.zones.library.length);
+    // the search is a question for the caster: every card in the library is an option
+    const q = g.pending[0];
+    expect(q.pid).toBe('a');
+    expect(q.options.filter((o) => o.value !== 'none')).toHaveLength(me.zones.library.length);
+    expect(viewFor(g, 'b').pending[0].options).toEqual([]);
     expect(g.cards[dt].zone).toBe('graveyard');
     const pick = me.zones.library.find((i) => g.cards[i].cardId === 'goblin_guide')!;
-    act(g, ctx, 'a', { t: 'resolvePeek', top: [], bottom: [], graveyard: [], hand: [pick], battlefield: [], exile: [], shuffle: true });
-    expect(g.cards[pick].zone).toBe('hand');
+    const gg = g.cards[pick];
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: pick });
+    expect(gg.zone).toBe('hand');
   });
 
   it('Ponder looks at 3, then draws after the cards are put back', () => {

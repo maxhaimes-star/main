@@ -119,11 +119,11 @@ describe('keyword abilities: from hand', () => {
     expect(g.cards[lr].zone).toBe('graveyard');
     expect(P(g, 'a').manaPool.U).toBe(0);
     resolveAll(g, ctx);
-    const pk = P(g, 'a').peek!;
-    expect(pk.mode).toBe('search');
-    const island = pk.iids.find((i) => g.cards[i].cardId === 'basic_island')!;
+    const q = g.pending[0];
+    expect(q.options.every((o) => o.value === 'none' || g.cards[o.value].cardId === 'basic_island')).toBe(true);
+    const island = q.options.find((o) => o.value !== 'none')!.value;
     const hand = P(g, 'a').zones.hand.length;
-    act(g, ctx, 'a', { t: 'resolvePeek', top: [], bottom: [], graveyard: [], hand: [island], battlefield: [], exile: [], shuffle: false });
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: island });
     expect(P(g, 'a').zones.hand.length).toBe(hand + 1);
     expect(P(g, 'a').zones.hand.some((i) => g.cards[i].cardId === 'basic_island')).toBe(true);
   });

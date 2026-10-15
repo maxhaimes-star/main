@@ -12,7 +12,8 @@ import { getCard } from '../cube.ts';
 import { cardName, faceOf, hasKeyword, isCreature, type Lookup, payFromPool } from '../game/rules.ts';
 import { type Ctx, drawCards, log, moveCard, player } from '../game/state.ts';
 import type { GameState } from '../game/types.ts';
-import { activateMana, manaOptionsFor } from './mana.ts';
+import { manaOptionsFor } from './mana.ts';
+import { autoTapFor, planAutoPay } from './strict.ts';
 import { matchCard } from './targets.ts';
 import { parseManaSymbols } from '../cards.ts';
 
@@ -77,18 +78,15 @@ export function planManaPayment(cost: string, x: number, pool: Record<string, nu
 /** Can `pid` pay this mana cost now (pool + untapped sources)? */
 export function canPayMana(state: GameState, pid: string, cost: string, x = 0, lookup: Lookup = getCard, exclude?: string): boolean {
   if (!cost) return true;
-  const me = state.players.find((p) => p.pid === pid);
-  if (!me) return false;
-  return planManaPayment(cost, x, me.manaPool, manaSources(state, pid, lookup, exclude)) != null;
+  // The strict engine's solver (engine/strict.ts / game/manapay.ts): pool first, then untapped sources.
+  return planAutoPay(state, pid, cost, x, lookup, exclude ? new Set([exclude]) : new Set()) != null;
 }
 
 /** Pay a mana cost: tap sources as needed, then pay from the pool. Returns false (nothing paid) when it can't be paid. */
 export function payMana(state: GameState, ctx: Ctx, pid: string, cost: string, x = 0, exclude?: string): boolean {
   if (!cost) return true;
   const me = player(state, pid);
-  const plan = planManaPayment(cost, x, me.manaPool, manaSources(state, pid, ctx.lookup, exclude));
-  if (!plan) return false;
-  for (const u of plan) activateMana(state, ctx, pid, { t: 'activateMana', iid: u.iid, option: u.option });
+  if (!autoTapFor(state, ctx, pid, cost, x, exclude ? new Set([exclude]) : new Set())) return false;
   const res = payFromPool(cost, me.manaPool, x);
   if (!res) return false;
   me.manaPool = res.pool;
