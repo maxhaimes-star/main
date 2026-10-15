@@ -630,7 +630,12 @@ function detect(state: GameState, ctx: Ctx) {
           budget--;
           if (uniqueTriggerSkip(state, ctx, t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p, hit.player)) continue;
           if (host.effect) hit.effectRemembered = [...host.effect.remembered];
-          found.push({ controller: c.controller, q: queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p), t.ref) });
+          const q = queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p), t.ref);
+          found.push({ controller: c.controller, q });
+          // Panharmonicon-style statics (Sanctum of All): the ability triggers additional times.
+          if (!host.effect) for (let k = extraTriggerCount(state, ctx, c, p); k > 0; k--) {
+            found.push({ controller: c.controller, q: { ...JSON.parse(JSON.stringify(q)) as QueuedTrigger, id: randomId(ctx.rng) } });
+          }
         }
       } catch (e) {
         log(state, ctx, null, `Trigger detection error (${hostLabel(host, ctx)}): ${(e as Error).message} — handle it by hand.`);
@@ -686,6 +691,30 @@ function exertOffer(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'att
       auto: { cardId: ref.cardId, face: ref.face, source: 'trigger', index: -1, svar: p.Trigger, targets: [], trigger: { mode: 'Attacks', card: c.iid, player: c.controller, defender: ev.defender } },
     } });
   }
+}
+
+/** Panharmonicon statics (S:Mode$ Panharmonicon | ValidCard$ | IsPresent$ | PresentCompare$): how many extra times a trigger of `c` triggers. */
+export function extraTriggerCount(state: GameState, ctx: Ctx, c: CardInstance, p: Record<string, string>): number {
+  if (c.zone !== 'battlefield') return 0;
+  let n = 0;
+  for (const iid of state.battlefield) {
+    const src = state.cards[iid];
+    if (!src || src.faceDown || src.controller !== c.controller) continue;
+    const f = scriptRef(src) ? getScript(scriptRef(src)!.cardId)?.[scriptRef(src)!.face] : undefined;
+    for (const line of f?.statics ?? []) {
+      const sp = parseParams(line).params;
+      if (sp.Mode !== 'Panharmonicon' || Object.keys(sp).some((k) => !['Mode', 'ValidCard', 'IsPresent', 'PresentCompare', 'Description', 'ValidMode'].includes(k))) continue;
+      if (sp.ValidMode && !sp.ValidMode.split(',').includes(p.Mode)) continue;
+      const env: MatchEnv = { controller: src.controller, sourceIid: src.iid, lookup: ctx.lookup };
+      if (sp.ValidCard && matchCard(c, sp.ValidCard, env) !== true) continue;
+      if (sp.IsPresent) {
+        const have = state.battlefield.filter((x) => matchCard(state.cards[x], sp.IsPresent, env) === true).length;
+        if (cmp(have, sp.PresentCompare ?? 'GE1', () => undefined) !== true) continue;
+      }
+      n++;
+    }
+  }
+  return n;
 }
 
 /** Mark a creature exerted: it doesn't untap during its controller's next untap step. */

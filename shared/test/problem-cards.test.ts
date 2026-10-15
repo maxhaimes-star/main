@@ -55,9 +55,16 @@ function answer(g: GameState, ctx: Ctx, match: RegExp) {
 }
 /** Pass priority (answering questions with their first option) until `done`. */
 function passUntil(g: GameState, ctx: Ctx, done: () => boolean) {
-  for (let i = 0; i < 60 && !done(); i++) {
+  for (let i = 0; i < 80 && !done(); i++) {
     const q = g.pending[0];
-    if (q) act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value });
+    const peeker = g.players.find((p) => p.peek);
+    if (q?.options.length) act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value });
+    else if (q?.number) act(g, ctx, q.pid, { t: 'choose', id: q.id, value: String(q.number.min) });
+    else if (q?.targets) {
+      const opp = q.pid === 'a' ? 'b' : 'a';
+      act(g, ctx, q.pid, { t: 'chooseTargets', id: q.id, targets: q.targets.specs.map((s) => (s.min > 0 ? [s.players ? { kind: 'player' as const, pid: opp } : { kind: 'card' as const, iid: g.battlefield[0] }] : [])) });
+    } else if (q) throw new Error(`unanswerable: ${q.prompt}`);
+    else if (peeker?.peek) act(g, ctx, peeker.pid, { t: 'resolvePeek', top: peeker.peek.iids, bottom: [], graveyard: [], hand: [], battlefield: [], exile: [], shuffle: false });
     else act(g, ctx, g.priority, { t: 'pass' });
   }
   expect(done()).toBe(true);
@@ -457,5 +464,29 @@ describe('Grist, the Hunger Tide', () => {
     act(g, ctx, 'a', { t: 'activate', iid: g2, ability: minus5.index, text: '' });
     drain(g, ctx);
     expect(g.players[1].life).toBe(18); // Grist itself died (0 loyalty) before the ability resolved: two creature cards
+  });
+});
+
+
+describe('Sanctum of All (Panharmonicon for Shrines)', () => {
+  it("with six Shrines, another Shrine's ability triggers an additional time", () => {
+    const shrines = ['sanctum_of_calm_waters', 'honden_of_seeing_winds', 'sanctum_of_stone_fangs', 'honden_of_nights_reach', 'sanctum_of_fruitful_harvest'];
+    const { g, ctx } = setup(['sanctum_of_all', ...shrines]);
+    put(g, ctx, 'a', 'sanctum_of_all');
+    for (const s of shrines) put(g, ctx, 'a', s);
+    passUntil(g, ctx, () => g.activePlayer === 'b');
+    passUntil(g, ctx, () => g.activePlayer === 'a' && g.step === 'main1' && !g.stack.length && !g.pending.length);
+    // Stone Fangs (precombat main): each opponent loses 6, you gain 6 — twice
+    expect((logText(g).match(/Sanctum of Stone Fangs's trigger/g) ?? []).length).toBe(2);
+    expect(g.players[1].life).toBe(8);
+  });
+
+  it('fewer than six Shrines: no extra trigger', () => {
+    const { g, ctx } = setup(['sanctum_of_all', 'sanctum_of_stone_fangs']);
+    put(g, ctx, 'a', 'sanctum_of_all');
+    put(g, ctx, 'a', 'sanctum_of_stone_fangs');
+    passUntil(g, ctx, () => g.activePlayer === 'b');
+    passUntil(g, ctx, () => g.activePlayer === 'a' && g.step === 'main1' && !g.stack.length && !g.pending.length);
+    expect((logText(g).match(/Sanctum of Stone Fangs's trigger/g) ?? []).length).toBe(1);
   });
 });
