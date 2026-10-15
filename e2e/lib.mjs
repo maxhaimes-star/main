@@ -34,7 +34,7 @@ export async function setup(list, tag = 'e') {
   await B.getByLabel('Your name').fill('Sam');
   await B.getByRole('button', { name: 'Join' }).click();
   await A.getByText('Sam').waitFor();
-  await A.getByRole('button', { name: /Sealed/ }).click();
+  await A.getByRole('button', { name: /^Cube sealed/ }).click();
   await A.getByRole('button', { name: /custom card list/ }).click();
   await A.locator('.custom-list textarea').fill(list);
   await A.getByRole('button', { name: 'Use this list' }).click();
@@ -44,7 +44,7 @@ export async function setup(list, tag = 'e') {
   await set('Cards per pack', 20);
   await A.locator('.setting.check', { hasText: 'bots' }).locator('input').click();
   await A.waitForTimeout(300);
-  await A.getByRole('button', { name: /Start sealed/ }).click();
+  await A.getByRole('button', { name: /Start cube sealed/i }).click();
   for (const p of [A, B]) {
     await p.getByText('Deckbuilding').waitFor().catch(async (e) => { await shot(p, `${tag}-debug`); throw e; });
     for (let i = 0; i < 20; i++) await p.locator('.db-main > .pool-summary .pool-stack').first().locator('.cube-card').last().click({ force: true });

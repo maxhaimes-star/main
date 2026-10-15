@@ -25,7 +25,7 @@ await A.waitForTimeout(400);
 await shot(A, '01-lobby');
 
 step('start draft (4 seats: 2 humans + 2 bots)');
-await A.getByRole('button', { name: /Start booster draft/ }).click();
+await A.getByRole('button', { name: /Start cube draft/i }).click();
 await A.getByText(/Pack 1\/3/).waitFor();
 await shot(A, '02-draft');
 
