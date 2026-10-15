@@ -2,20 +2,21 @@ import { useMemo, useState } from 'react';
 import { NumberField } from '../NumberField.tsx';
 import { type CardInstance, faceOf, isHidden, type TokenData, type Color, multisetDiff } from '@ojb/shared';
 import { CardBack, CardImage, CubeCard, getCard, setPreview, tokenToFace } from '../cards.tsx';
+import { isTouch } from '../touch.ts';
 import { Modal, useGame } from './ui.tsx';
 import { PoolSummary } from '../Draft.tsx';
 
 // ---------------------------------------------------------------- zone viewer
 
 export function ZoneViewer({ pid, zone, onClose }: { pid: string; zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand'; onClose: () => void }) {
-  const { g, openMenu, menuFor, mode, pickTarget, isLegal } = useGame();
+  const { g, openMenu, menuFor, mode, pickTarget, isLegal, showCardSheet } = useGame();
   const targeting = mode?.kind === 'target';
   const p = g.players.find((x) => x.pid === pid)!;
   const ids = p.zones[zone];
   const title = `${p.name}'s ${zone} (${ids.length})`;
   return (
     <Modal title={title} onClose={onClose} wide>
-      <p className="muted">Click or right-click a card for options.</p>
+      <p className="muted">{isTouch() ? 'Tap a card for options.' : 'Click or right-click a card for options.'}</p>
       <div className="zone-grid">
         {ids.map((iid) => {
           const c = g.cards[iid];
@@ -24,7 +25,7 @@ export function ZoneViewer({ pid, zone, onClose }: { pid: string; zone: 'graveya
           const face = faceOf(c, getCard);
           return (
             <div key={iid} className={`zcard ${targeting ? (isLegal({ kind: 'card', iid }) ? 'legal-target' : 'dim') : ''}`} onMouseEnter={() => setPreview({ face })}
-              onClick={(e) => targeting ? pickTarget({ kind: 'card', iid }) : openMenu(e.clientX, e.clientY, menuFor(iid), face.name)}
+              onClick={(e) => targeting ? pickTarget({ kind: 'card', iid }) : isTouch() ? showCardSheet(iid) : openMenu(e.clientX, e.clientY, menuFor(iid), face.name)}
               onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
               {c.faceDown && <div className="fd-label">face down</div>}
               <CardImage face={face} />
@@ -42,7 +43,7 @@ export function ZoneViewer({ pid, zone, onClose }: { pid: string; zone: 'graveya
 type Dest = 'top' | 'bottom' | 'graveyard' | 'hand' | 'battlefield' | 'exile' | 'stay';
 
 export function PeekModal() {
-  const { g, me, act, openMenu, menuFor } = useGame();
+  const { g, me, act, openMenu, menuFor, showCardSheet } = useGame();
   const p = g.players.find((x) => x.pid === me)!;
   const peek = p.peek!;
   const search = peek.mode === 'search';
@@ -81,7 +82,7 @@ export function PeekModal() {
           const face = faceOf(c, getCard);
           return (
             <div key={c.iid} className={`zcard dest-${dest[c.iid]}`} onMouseEnter={() => setPreview({ face })}>
-              <div title="Click for more (cast / play from library)" onClick={(e) => openMenu(e.clientX, e.clientY, menuFor(c.iid), face.name)}><CardImage face={face} /></div>
+              <div title="Click for more (cast / play from library)" onClick={(e) => isTouch() ? showCardSheet(c.iid) : openMenu(e.clientX, e.clientY, menuFor(c.iid), face.name)}><CardImage face={face} /></div>
               <select value={dest[c.iid]} onChange={(e) => setDest({ ...dest, [c.iid]: e.target.value as Dest })}>
                 {options.map((o) => <option key={o} value={o}>{o === 'stay' ? 'leave in library' : o === 'top' ? 'top of library' : o === 'bottom' ? 'bottom of library' : o}</option>)}
               </select>
@@ -210,8 +211,8 @@ export function Sideboarding({ main, side, onSave, onReady, ready }: { main: str
         <button className="primary" disabled={ready} onClick={() => { onSave(m); onReady(); }}>{ready ? 'Waiting for opponent…' : 'Ready for next game'}</button>
       </div>
       <div className="sb-cols">
-        <PoolSummary ids={m} title="Deck" onClick={(_id, i) => setM(m.filter((_, j) => j !== i))} />
-        <PoolSummary ids={s} title="Sideboard" onClick={(id) => setM([...m, id])} />
+        <PoolSummary ids={m} title="Deck" onClick={(_id, i) => setM(m.filter((_, j) => j !== i))} tapLabel="Move to sideboard" />
+        <PoolSummary ids={s} title="Sideboard" onClick={(id) => setM([...m, id])} tapLabel="Move to deck" />
       </div>
     </div>
   );
