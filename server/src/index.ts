@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Server, type Socket } from 'socket.io';
 import type { ClientMsg } from '@ojb/shared';
 import { type RoomRecord, Rooms } from './rooms.ts';
+import { registerCardDbRoutes } from './carddb-routes.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3001);
@@ -64,6 +65,7 @@ app.get('/api/rooms/:id', (req, res) => {
   res.json({ id: rec.state.id, name: rec.state.name, phase: rec.state.phase, players: rec.state.players.map((p) => p.name) });
 });
 app.get('/healthz', (_req, res) => res.send('ok'));
+registerCardDbRoutes(app);
 
 if (fs.existsSync(CLIENT_DIST)) {
   app.use(express.static(CLIENT_DIST, { maxAge: '1h', index: false }));
