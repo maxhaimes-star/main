@@ -1757,6 +1757,15 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
   const legal = auto.targets.map((list, k) => list.filter((ref) => stillLegal(state, ctx, item, specs[k], ref)));
   const total = auto.targets.reduce((n, l) => n + l.length, 0);
   const left = legal.reduce((n, l) => n + l.length, 0);
+  if (total > 0 && left === 0 && item.iid && state.cards[item.iid]?.castInfo?.bestowed && state.cards[item.iid].zone === 'stack') {
+    // Bestow: with its target gone it isn't an Aura spell any more — it resolves as a creature spell (702.103e).
+    const c = state.cards[item.iid];
+    delete c.castInfo!.bestowed;
+    if (item.castInfo) delete item.castInfo.bestowed;
+    log(state, ctx, item.controller, `${name}: its target is gone — it resolves as a creature.`);
+    finish();
+    return true;
+  }
   if (total > 0 && left === 0) {
     if (item.iid && state.cards[item.iid]?.zone === 'stack') moveCard(state, ctx, item.iid, 'graveyard');
     log(state, ctx, item.controller, `${name} fizzles — its target${total === 1 ? ' is' : 's are'} no longer legal.`);

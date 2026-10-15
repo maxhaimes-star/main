@@ -22,7 +22,7 @@ import { CUBE, getCard } from '../shared/src/cube.ts';
 import {
   abilitiesOfInstance, activatedAbilitiesOf, adjustCost, applyAction, castOptions, type CardData, type Color, createGame, type Ctx,
   effectivePT, faceOf, landPlaysAllowed, landPlaysLeft, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
-  parseManaSymbols, type Pending, spellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
+  parseManaSymbols, type Pending, castSpellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
 } from '../shared/src/index.ts';
 
 // ------------------------------------------------------------------ rng
@@ -267,7 +267,7 @@ function castPlays(G: Game, pid: string): Play[] {
         out.push({
           label: `cast ${data.name}${face ? ` (face ${face})` : ''} [${o.id}]`, card: data.name,
           run: () => {
-            const sp = spellAbility(c.cardId!, face ?? 0);
+            const sp = castSpellAbility(c.cardId!, face ?? 0, o.id);
             let modes: string[] | undefined;
             if (sp?.ability.choices?.length) {
               const lo = sp.ability.charmMin ?? 1, hi = Math.min(sp.ability.charmMax ?? 1, sp.ability.choices.length);

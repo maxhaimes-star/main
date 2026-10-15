@@ -525,7 +525,13 @@ export function checkStateBased(state: GameState, ctx: Ctx) {
       const f = faceOf(c, ctx.lookup);
       const to = c.attachedTo;
       const targetOk = !!to && (state.cards[to]?.zone === 'battlefield' || state.players.some((p) => p.pid === to && !p.conceded));
-      if (/\bAura\b/.test(f.typeLine) && !targetOk && !isCreature(c, ctx.lookup, state)) {
+      if (c.castInfo?.bestowed && (!targetOk || (to && state.cards[to] && !isCreature(state.cards[to], ctx.lookup, state)))) {
+        // Bestow: an unattached bestowed Aura becomes a creature again (702.103f).
+        delete c.castInfo.bestowed;
+        c.attachedTo = undefined;
+        log(state, ctx, null, `${cardName(c, ctx.lookup)} is no longer attached — it's a creature again (bestow).`);
+        changed = true;
+      } else if (/\bAura\b/.test(f.typeLine) && !targetOk && !isCreature(c, ctx.lookup, state)) {
         moveCard(state, ctx, iid, 'graveyard');
         log(state, ctx, null, `${f.name} is put into its owner's graveyard (not attached to a legal object).`);
         changed = true;

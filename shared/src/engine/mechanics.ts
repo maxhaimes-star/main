@@ -15,6 +15,8 @@ export const HANDLED_KEYWORDS = new Set([
   'Improvise',
   // Fewer loyalty counters when life was paid for Phyrexian mana (engine/replacements.ts).
   'Compleated',
+  // Cast as an Aura for the bestow cost (costs.ts option, script.ts castSpellAbility, rules.ts faceOf).
+  'Bestow',
   // Triggered keywords synthesized as triggers (engine/kwtriggers.ts), rebound (resolve.ts).
   ...TRIGGER_KEYWORDS,
   // Splice onto Arcane: the cube's only Arcane spell is Through the Breach itself, so there is nothing to splice onto.

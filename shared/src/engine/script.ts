@@ -131,6 +131,7 @@ export function abilityLine(cardId: string, face: number, index: number): string
   const f = getScript(cardId)?.[face];
   if (!f) return undefined;
   if (index === -1) return auraLine(f);
+  if (index === BESTOW_INDEX) return bestowLine(f);
   if (index >= GRANT_BASE) { const sv = f.svars[Object.keys(f.svars)[index - GRANT_BASE] ?? '']; return sv && /^\s*AB\$/.test(sv) ? sv : undefined; }
   if (index >= SYNTH_BASE) return synthLine(f, index);
   return f.abilities[index];
@@ -180,6 +181,24 @@ const trigCache = new Map<string, { index: number; params: Record<string, string
 /** Human text with CARDNAME replaced. */
 export function describe(text: string, cardName: string): string {
   return nameText(text, cardName);
+}
+
+/** Ability index of the Aura spell a creature with bestow becomes when cast for its bestow cost. */
+export const BESTOW_INDEX = -2;
+
+/** Bestow: "K:Bestow:<cost>" -> the Aura spell "enchant creature". */
+function bestowLine(f: ForgeFace): string | undefined {
+  if (!f.keywords.some((k) => /^Bestow:/.test(k))) return undefined;
+  return 'SP$ Attach | ValidTgts$ Creature | TgtPrompt$ Choose a creature to enchant | SpellDescription$ Bestow — enchant creature';
+}
+
+/** The spell ability a cast uses: the bestow Aura spell for costOption 'bestow', else the face's spell ability. */
+export function castSpellAbility(cardId: string, face: number, costOption?: string): { index: number; ability: ParsedAbility } | undefined {
+  if (costOption === 'bestow') {
+    const ability = abilityAt(cardId, face, BESTOW_INDEX);
+    if (ability) return { index: BESTOW_INDEX, ability };
+  }
+  return spellAbility(cardId, face);
 }
 
 /** Auras: "K:Enchant:<valid>[:<description>]" -> an equivalent "SP$ Attach" line. */

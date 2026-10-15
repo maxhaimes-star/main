@@ -2,7 +2,7 @@
 import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
-import { abilityAt, abilityLine, getScript, GRANT_BASE, scriptRef, spellAbility, targetSpecs } from './script.ts';
+import { abilityAt, abilityLine, castSpellAbility, getScript, GRANT_BASE, scriptRef, targetSpecs } from './script.ts';
 import { FOREIGN_BASE, foreignAbility } from './grants.ts';
 import { hasGrantedAbility } from './animate.ts';
 import { divisionError } from './divide.ts';
@@ -71,7 +71,7 @@ function charmModes(ab: ParsedAbility, modes: string[] | undefined): string | nu
 export function prepareCast(state: GameState, inst: CardInstance, pid: string, a: CastAction, ctx: Ctx): { auto?: AutoInfo; error?: string } {
   if (a.manual || a.faceDown || !inst.cardId) return {};
   const face = a.face ?? 0;
-  const sp = spellAbility(inst.cardId, face);
+  const sp = castSpellAbility(inst.cardId, face, a.costOption); // bestow: the Aura spell
   if (!sp) return {};
   const specs = targetSpecs(sp.ability, a.modes);
   if (specs.length && a.targets === undefined) return {};

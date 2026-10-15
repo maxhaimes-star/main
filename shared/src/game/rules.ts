@@ -64,7 +64,15 @@ export function faceOf(inst: CardInstance, lookup: Lookup): Face {
   if (inst.copyToken && inst.zone === 'battlefield') f = { ...tokenFace(inst.copyToken), isToken: !!inst.token };
   else if (inst.copyOf && inst.zone === 'battlefield') f = printedFace({ ...inst, cardId: inst.copyOf, token: undefined, transformed: inst.copyFace === 1, castAs: undefined }, lookup, !!inst.token);
   else f = printedFace(inst, lookup, !!inst.token);
+  if (inst.castInfo?.bestowed && (inst.zone === 'stack' || inst.zone === 'battlefield')) f = bestowedFace(f);
   return inst.copyExtra || inst.animations?.length ? layerFace(f, inst) : f;
+}
+
+/** Bestow: an Aura spell / Aura with enchant creature instead of a creature (rule 702.103). */
+function bestowedFace(f: Face): Face {
+  const types = f.types.filter((t) => t !== 'Creature');
+  const supertypes = f.typeLine.split(/\s+[—-]\s+/)[0].split(/\s+/).filter((w) => w !== 'Creature');
+  return { ...f, types, typeLine: `${supertypes.join(' ')} — Aura`, power: undefined, toughness: undefined };
 }
 
 function printedFace(inst: CardInstance, lookup: Lookup, isToken: boolean): Face {

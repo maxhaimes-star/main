@@ -167,6 +167,7 @@ const KEYWORD_OPTIONS: Record<string, { id: string; label: string; zone?: string
   Spectacle: { id: 'spectacle', label: 'Spectacle', zone: 'hand', flags: {}, note: 'Only if an opponent lost life this turn' },
   Surge: { id: 'surge', label: 'Surge', zone: 'hand', flags: {}, note: 'Only if you or a teammate cast another spell this turn' },
   Miracle: { id: 'miracle', label: 'Miracle', zone: 'hand', flags: {}, note: 'Only as the first card you drew this turn is revealed' },
+  Bestow: { id: 'bestow', label: 'Bestow', flags: { bestowed: true }, note: 'Cast as an Aura (enchant creature); becomes a creature again if it becomes unattached' },
 };
 
 function optionDefs(state: GameState, c: CardInstance, pid: string, face: number | undefined, lookup: Lookup, x: number): OptionDef[] {

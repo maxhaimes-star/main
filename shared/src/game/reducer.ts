@@ -21,7 +21,7 @@ import {
   isLandCard, landPlayError, planAutoPay, strictActionError, summoningSick,
 } from '../engine/strict.ts';
 import { maxHandSize, mayPlayPermission } from '../engine/statics.ts';
-import { spellAbility, targetSpecs } from '../engine/script.ts';
+import { castSpellAbility, spellAbility, targetSpecs } from '../engine/script.ts';
 import { parseRequirements } from './manapay.ts';
 import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
@@ -668,7 +668,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         const zoneErr = castZoneError(state, pid, c, a.costOption, ctx.lookup);
         if (zoneErr && !fix) return zoneErr;
         if (!a.manual && !a.faceDown && c.cardId && a.targets === undefined) {
-          const sp = spellAbility(c.cardId, a.face ?? 0);
+          const sp = castSpellAbility(c.cardId, a.face ?? 0, a.costOption);
           if (sp && targetSpecs(sp.ability, a.modes).length) return `${cardName(c, ctx.lookup)}: choose targets`;
         }
       }

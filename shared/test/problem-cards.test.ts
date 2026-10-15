@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilityUsability, activatedAbilitiesOf, applyAction, castability, castOptions, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
+  abilityUsability, activatedAbilitiesOf, applyAction, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -263,5 +263,42 @@ describe('Nissa, Ascended Animist (compleated)', () => {
     drain(g, ctx);
     expect(g.players[0].life).toBe(20);
     expect(g.cards[n].counters.loyalty).toBe(7);
+  });
+});
+
+describe('Springheart Nantuko (bestow)', () => {
+  it('cast for its bestow cost it enchants a creature (+1/+1); when the creature leaves it becomes a creature', () => {
+    const { g, ctx } = setup(['springheart_nantuko', 'containment_priest'], [], 'basic_forest');
+    lands(g, 'a', 'basic_forest', 2);
+    const priest = put(g, ctx, 'a', 'containment_priest');
+    const sn = toHand(g, ctx, 'a', 'springheart_nantuko');
+    const opt = castOptions(g, sn).find((o) => o.id === 'bestow')!;
+    expect(opt.cost).toBe('{1}{G}');
+    expect(castSpellAbility('springheart_nantuko', 0, 'bestow')).toBeTruthy();
+    act(g, ctx, 'a', { t: 'cast', iid: sn, costOption: 'bestow', targets: [[{ kind: 'card', iid: priest }]] });
+    expect(faceOf(g.cards[sn], getCard).types).not.toContain('Creature');
+    drain(g, ctx);
+    expect(g.cards[sn].zone).toBe('battlefield');
+    expect(g.cards[sn].attachedTo).toBe(priest);
+    expect(isCreature(g.cards[sn], getCard, g)).toBe(false);
+    expect(effectivePT(g.cards[priest], getCard, g)).toEqual([3, 3]);
+    // the enchanted creature leaves: Springheart Nantuko is a 1/1 creature again
+    moveCard(g, ctx, priest, 'graveyard');
+    act(g, ctx, 'a', { t: 'setStops', own: ['main1', 'main2'], opp: ['end'] });
+    expect(g.cards[sn].zone).toBe('battlefield');
+    expect(isCreature(g.cards[sn], getCard, g)).toBe(true);
+    expect(effectivePT(g.cards[sn], getCard, g)).toEqual([1, 1]);
+  });
+
+  it('target gone while on the stack: it resolves as a creature', () => {
+    const { g, ctx } = setup(['springheart_nantuko', 'containment_priest'], [], 'basic_forest');
+    lands(g, 'a', 'basic_forest', 2);
+    const priest = put(g, ctx, 'a', 'containment_priest');
+    const sn = toHand(g, ctx, 'a', 'springheart_nantuko');
+    act(g, ctx, 'a', { t: 'cast', iid: sn, costOption: 'bestow', targets: [[{ kind: 'card', iid: priest }]] });
+    moveCard(g, ctx, priest, 'graveyard');
+    drain(g, ctx);
+    expect(g.cards[sn].zone).toBe('battlefield');
+    expect(isCreature(g.cards[sn], getCard, g)).toBe(true);
   });
 });
