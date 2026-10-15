@@ -17,6 +17,7 @@ import { parseCost } from './costs.ts';
 import { type CountState, evalCount } from './counts.ts';
 import { getScript, parseAbility } from './script.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
+import { chapterManaLines } from './turns.ts';
 
 const BASIC: Record<string, string> = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' };
 const ANY = ['W', 'U', 'B', 'R', 'G'];
@@ -50,7 +51,9 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
   const name = cardName(c, lookup);
   const face = getScript(c.cardId ?? '')?.[c.transformed ? 1 : 0];
   let scripted = false;
-  face?.abilities.forEach((line, index) => {
+  // A: lines, plus mana abilities a Saga's chapters granted (Urza's Saga, turns.ts).
+  const lines: [string, string | number][] = [...(face?.abilities ?? []).map((l, i) => [l, i] as [string, number]), ...chapterManaLines(c as CardInstance)];
+  if (face) lines.forEach(([line, index]) => {
     if (!/^\s*AB\$\s*Mana\b/.test(line)) return;
     const ab = parseAbility(line, face.svars, face.name);
     if (!ab || ab.params.Planeswalker === 'True') return;

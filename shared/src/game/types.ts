@@ -153,6 +153,16 @@ export interface GameState {
   remembered?: Record<string, string[]>;
   /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
   turnStats?: { cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number> };
+  /** Extra turns (engine/turns.ts): player ids, the LAST one is taken next ("after this one" stacks LIFO). */
+  extraTurns?: string[];
+  /** Whose regular turn is due once the extra turns are over (set when an extra turn interrupts the rotation). */
+  nextNormalTurn?: string | null;
+  /**
+   * Mindslaver (engine/turns.ts): `by` controls `pid` during pid's next turn. `active` once that turn started
+   * (the controller then acts for that player and sees their hand); cleared when the turn ends.
+   * `since` = turn number when it was set up (the controlled turn is a later one); `turn` = the controlled turn.
+   */
+  controlledBy?: { pid: string; by: string; active: boolean; since: number; turn?: number } | null;
 }
 
 /** Stage 2: something that happened during an action (engine-internal; used to detect triggers). */
@@ -168,8 +178,13 @@ export type GameEvent =
   | { t: 'damage'; source: string; target: string; amount: number; combat: boolean; sourceSnap?: CardInstance; targetSnap?: CardInstance }
   | { t: 'landPlayed'; iid: string; pid: string };
 
-/** Actions a player can send. All are validated in the reducer. */
-export type GameAction =
+/**
+ * Actions a player can send. All are validated in the reducer.
+ * Any action may carry `as: <player id>` — "act on behalf of" that player, accepted only from the player who
+ * controls them this turn (Mindslaver, see state.controlledBy); without it the reducer routes obvious cases.
+ */
+export type GameAction = GameActionBody & { as?: string };
+type GameActionBody =
   | { t: 'mulligan' }
   | { t: 'keep' }
   | { t: 'bottom'; iids: string[] }

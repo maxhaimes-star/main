@@ -402,6 +402,11 @@ function continueCosts(state: GameState, ctx: Ctx, d: CostData): void {
   finishCosts(state, ctx, d);
 }
 
+/** Start paying cost choices (also used for activated abilities' costs, engine/turns.ts). */
+export function startCostPicks(state: GameState, ctx: Ctx, d: CostData): void {
+  continueCosts(state, ctx, d);
+}
+
 /** Answer to a cost question (called from answerPending). */
 export function answerCostPending(state: GameState, ctx: Ctx, _pid: string, d: CostData, value: string): string | null {
   const pk = d.picks[0];

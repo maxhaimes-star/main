@@ -1,4 +1,5 @@
 import type { CardInstance, GameState, GameView, HiddenCard, ViewCard, ViewPlayer } from './types.ts';
+import { controls } from '../engine/turns.ts';
 
 /** Can `viewer` see the face of this card? (viewer null = spectator) */
 export function canSee(state: GameState, viewer: string | null, c: CardInstance): boolean {
@@ -13,13 +14,13 @@ export function canSee(state: GameState, viewer: string | null, c: CardInstance)
     case 'command':
       return true;
     case 'hand': {
-      if (viewer === c.owner) return true;
+      if (viewer === c.owner || controls(state, viewer, c.owner)) return true; // Mindslaver: the controller sees the hand
       const v = viewer ? state.players.find((p) => p.pid === viewer) : undefined;
       return !!v && v.viewingHandOf === c.owner;
     }
     case 'library': {
-      if (viewer !== c.owner) return false;
-      const p = state.players.find((x) => x.pid === viewer);
+      if (viewer !== c.owner && !controls(state, viewer, c.owner)) return false;
+      const p = state.players.find((x) => x.pid === c.owner);
       return !!p?.peek?.iids.includes(c.iid);
     }
     case 'sideboard':
@@ -45,6 +46,7 @@ export function viewFor(state: GameState, viewer: string | null): GameView {
   for (const s of state.stack) if (s.iid) include(s.iid);
   const players: ViewPlayer[] = state.players.map((p) => {
     const own = p.pid === viewer;
+    const ctrl = own || controls(state, viewer, p.pid); // Mindslaver: the controller sees what that player sees (not their sideboard)
     const visibleLib = p.zones.library.filter((iid) => canSee(state, viewer, state.cards[iid]));
     // Library order is secret, so only expose the iids the viewer may see (peeked / revealed).
     visibleLib.forEach(include);
@@ -65,12 +67,12 @@ export function viewFor(state: GameState, viewer: string | null): GameView {
       },
       libraryCount: p.zones.library.length,
       handCount: p.zones.hand.length,
-      peek: own ? p.peek : p.peek ? { mode: p.peek.mode, iids: [] } : null,
+      peek: ctrl ? p.peek : p.peek ? { mode: p.peek.mode, iids: [] } : null,
       viewingHandOf: p.viewingHandOf,
     };
   });
   const { history, cards: _c, players: _p, pending, events: _e, triggerQueue: _q, delayedTriggers: _d, turnStats: _t, remembered: _r, ...rest } = state;
   // Engine questions: only the answering player sees the options (they may name hidden cards); internal data never leaves the server.
-  const pendingView = (pending ?? []).map((q) => ({ ...q, options: q.pid === viewer ? q.options : [], data: {} }));
+  const pendingView = (pending ?? []).map((q) => ({ ...q, options: q.pid === viewer || controls(state, viewer, q.pid) ? q.options : [], data: {} }));
   return { ...rest, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
 }

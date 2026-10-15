@@ -18,6 +18,8 @@ import { lkiOf } from './resolve.ts';
 import { chainOf, describe, getScript, isAutomatable, PHASES, targetSpecs, triggersOf } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
+import { uniqueVar } from './unique.ts';
+import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
 
 /** Max triggered abilities detected per player action (loop guard). */
 export const MAX_TRIGGERS_PER_ACTION = 100;
@@ -52,6 +54,8 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
   const t = triggersOf(cardId, face)[index];
   if (!t) return { detect: false, chain: false, reason: 'missing' };
   const p = t.params;
+  const unique = uniqueTriggerSupport(cardId, face, index); // rewritten chains / Mode$ Always (turns.ts)
+  if (unique && (SUPPORTED_MODES.has(p.Mode) || p.Mode === 'Always')) return unique;
   if (p.Static === 'True') return { detect: false, chain: false, reason: 'static' };
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
   const unknown = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
@@ -116,6 +120,8 @@ function svarValue(state: GameState, ctx: Ctx, env: MatchEnv, svars: Record<stri
   if (!v) return /^-?\d+$/.test(name) ? parseInt(name, 10) : undefined;
   let m = /^Number\$(-?\d+)$/.exec(v);
   if (m) return parseInt(m[1], 10);
+  const u = uniqueVar(state, ctx, env.controller, [], v); // Field of the Dead's different names (unique.ts)
+  if (u !== undefined) return u;
   if ((m = /^Count\$Valid (.+)$/.exec(v))) {
     let n = 0;
     for (const iid of state.battlefield) {
@@ -403,7 +409,8 @@ function detect(state: GameState, ctx: Ctx) {
           }
           if (budget <= 0) { if (budget === 0) log(state, ctx, null, 'Too many triggers in one action — stopping automatic triggers (put the rest on the stack by hand).'); budget--; continue; }
           budget--;
-          found.push({ controller: c.controller, q: queueFor(state, ctx, host, t.index, p, hit) });
+          if (uniqueTriggerSkip(state, ctx, c.cardId, host.face, p, hit.player)) continue;
+          found.push({ controller: c.controller, q: queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(c.cardId, host.face, p)) });
         }
       } catch (e) {
         log(state, ctx, null, `Trigger detection error (${hostLabel(host, ctx)}): ${(e as Error).message} — handle it by hand.`);
@@ -517,6 +524,7 @@ function flush(state: GameState, ctx: Ctx): string[] {
  */
 export function processTriggers(state: GameState, ctx: Ctx): boolean {
   if (state.phase !== 'playing') { state.events = []; return false; }
+  uniqueTriggers(state, ctx); // Sagas, Hideaway, Mode$ Always, Saga sacrifice (turns.ts)
   try { detect(state, ctx); } catch (e) { log(state, ctx, null, `Trigger detection error: ${(e as Error).message}`); }
   const pushed = flush(state, ctx);
   if (!pushed.length) return false;

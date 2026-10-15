@@ -12,6 +12,7 @@ import { answerTriggerChoice, answerTriggerTargets, beginAction, processTriggers
 import { attackRestriction, blockRestriction, combatReminders } from '../engine/statics.ts';
 import { skipsStep, untapPrevented } from '../engine/replacements.ts';
 import { wardReminders } from '../engine/keyword-play.ts';
+import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
 import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
 } from './state.ts';
@@ -211,7 +212,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       for (const p of state.players) p.viewingHandOf = null;
       durationsAtCleanup(state, ctx);
       if (active.zones.hand.length > 7) log(state, ctx, active.pid, `${active.name} has ${active.zones.hand.length} cards — discard down to 7.`);
-      startTurn(state, ctx, nextPlayer(state, state.activePlayer));
+      startTurn(state, ctx, nextTurnPlayer(state, ctx, nextPlayer(state, state.activePlayer))); // extra turns (engine/turns.ts)
       return;
     }
   }
@@ -223,6 +224,7 @@ function startTurn(state: GameState, ctx: Ctx, pid: string) {
   for (const p of state.players) { p.landsPlayed = 0; p.passUntilEOT = false; }
   state.turnStats = { cast: {}, drawn: {} };
   log(state, ctx, null, `— Turn ${state.turn}: ${player(state, pid).name} —`);
+  turnStarted(state, ctx, pid); // Mindslaver control starts / ends (engine/turns.ts)
   durationsAtTurnStart(state, ctx, pid);
   enterStep(state, ctx, 'untap');
 }
@@ -367,6 +369,11 @@ function checkMulliganDone(state: GameState, ctx: Ctx) {
 
 /** Apply an action. Returns an error string, or null on success. Mutates `state`. */
 export function applyAction(state: GameState, pid: string, action: GameAction, ctx: Ctx): string | null {
+  if (!state.players.some((p) => p.pid === pid)) return 'You are not playing in this game';
+  // Mindslaver: the controlling player acts as the controlled one (engine/turns.ts).
+  const route = routeAction(state, pid, action);
+  if ('error' in route) return route.error;
+  pid = route.pid;
   const me = state.players.find((p) => p.pid === pid);
   if (!me) return 'You are not playing in this game';
   if (state.phase === 'over' && action.t !== 'chat') return 'The game is over';

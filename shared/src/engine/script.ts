@@ -6,6 +6,7 @@ import data from '../../data/scripts.json' with { type: 'json' };
 import { KNOWN_CONDITIONS, supportedCount } from './counts.ts';
 import { type AutoInfo, type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
 import { KEYWORD_APIS, synthAbilities, synthLine } from './keywords.ts';
+import { uniqueReason, uniqueVarSupported } from './unique-support.ts';
 
 export const SCRIPTS = data as unknown as ScriptData;
 
@@ -291,7 +292,8 @@ export function supportedVar(v: string | undefined): boolean {
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
     || supportedCount(v)
-    || /^Count\$Valid [A-Za-z.+,!]+$/.test(v);
+    || /^Count\$Valid [A-Za-z.+,!]+$/.test(v)
+    || uniqueVarSupported(v);
 }
 
 export function amountSupported(raw: string | undefined, svars: Record<string, string> | undefined): boolean {
@@ -305,6 +307,8 @@ export function amountSupported(raw: string | undefined, svars: Record<string, s
 export function unsupportedReason(step: ParsedAbility): string | null {
   const p = step.params;
   const api = step.api;
+  const unique = uniqueReason(step); // unique / hard cards (unique-support.ts)
+  if (unique !== undefined) return unique === null && p.Condition && !KNOWN_CONDITIONS.has(p.Condition) ? `${api} (Condition$ ${p.Condition})` : unique;
   if (api === 'Effect' && p.AILogic === 'CantRegenerate') return null; // regeneration isn't modelled: no-op
   if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api)) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;

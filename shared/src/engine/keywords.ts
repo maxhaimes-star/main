@@ -81,6 +81,21 @@ export function synthAbilities(f: ForgeFace): SynthAbility[] {
         add(0, `AB$ Crew | CrewPower$ ${n} | Defined$ Self | Keyword$ Crew | SpellDescription$ Crew ${n} (Tap any number of untapped creatures you control with total power ${n} or more: CARDNAME becomes an artifact creature until end of turn.)`);
         break;
       }
+      case 'Chapter': {
+        // Saga chapters that give the Saga activated abilities (Urza's Saga): available from that chapter on
+        // (ChapterLore$, checked in turns.ts). Mana abilities come from turns.ts chapterManaLines.
+        let v = 0;
+        (parts[2] ?? '').split(',').map((s) => s.trim()).forEach((svar, ch) => {
+          const m = /^\s*DB\$\s*Animate\b.*\|\s*Abilities\$\s*([^|]+)/.exec(f.svars[svar] ?? '');
+          if (!m) return;
+          for (const name of m[1].split(',').map((s) => s.trim())) {
+            const line = f.svars[name];
+            if (!line || !/^\s*AB\$/.test(line) || /^\s*AB\$\s*Mana\b/.test(line) || v > 9) continue;
+            add(v++, `${line} | ChapterLore$ ${ch + 1}`);
+          }
+        });
+        break;
+      }
       case 'Ninjutsu': {
         const cost = (parts[1] ?? '0').trim() || '0';
         add(0, `AB$ Ninjutsu | Cost$ ${cost} | ActivationZone$ Hand | ValidTgts$ Creature.attacking+YouCtrl | TgtPrompt$ Select an unblocked attacking creature you control to return to its owner's hand | TargetsAreCost$ True | Keyword$ Ninjutsu | SpellDescription$ Ninjutsu ${costText(cost)} (Return an unblocked attacker you control to hand: put CARDNAME onto the battlefield from your hand tapped and attacking.)`);

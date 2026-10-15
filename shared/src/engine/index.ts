@@ -18,6 +18,9 @@
  * - activeStatics(state, lookup)            static abilities in effect, for an "Active effects" panel
  * - effectiveCost(state, iid, face, lookup) mana cost after cost increases / reductions (Thalia ...)
  * - attackRestriction / blockRestriction / castRestriction   why a static forbids an action (or null)
+ * - unique.ts / turns.ts                    hard cards: extra turns (state.extraTurns), Mindslaver (state.controlledBy,
+ *                                           action.as, controls(state, viewer, pid)), Sagas (sagaOf, lore counters),
+ *                                           Balance / votes / piles / hideaway / Oath / Sylvan Library / Dark Depths
  */
 import type { Rng } from '../draft.ts';
 import type { Lookup } from '../game/rules.ts';
@@ -40,5 +43,8 @@ export {
   activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,
   parseStatic, staticGaps, staticMods, staticSupport, type ActiveStatic, type CardMods, type StaticSupport, type StaticsState,
 } from './statics.ts';
+
+export { controls, sagaOf, uniqueTriggerSupport } from './turns.ts';
+export { UNIQUE_APIS, uniqueReason } from './unique-support.ts';
 
 export interface EngineCtx { rng: Rng; lookup: Lookup; now: number }
