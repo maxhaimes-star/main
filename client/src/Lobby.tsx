@@ -22,7 +22,7 @@ export function Lobby({ view, send }: RoomProps) {
   const imgSrc = useImageSource();
 
   const n = Math.max(s.seats, humans.length);
-  const cardsNeeded = s.mode === 'draft' ? n * s.packs * s.packSize : s.mode === 'sealed' ? n * s.sealedPacks * s.sealedPackSize : n * s.auctionPoolSize;
+  const cardsNeeded = s.mode === 'draft' ? n * s.packs * s.packSize : s.mode === 'sealed' ? n * s.sealedPacks * s.sealedPackSize : n * s.auctionPacksPerPlayer * s.auctionPackSize;
 
   const num = (label: string, key: keyof RoomSettings, min: number, max: number, hint?: string) => (
     <label className="setting">
@@ -76,9 +76,11 @@ export function Lobby({ view, send }: RoomProps) {
           </>}
           {s.mode === 'auction' && <>
             {num('Budget per player', 'auctionBudget', 10, 10000)}
-            {num('Cards per player', 'auctionPoolSize', 10, 90, 'pool size cap')}
+            {num('Minimum bid', 'auctionMinBid', 1, 100)}
+            {num('Packs per player', 'auctionPacksPerPlayer', 1, 8)}
             {num('Cards per pack', 'auctionPackSize', 3, 30)}
-            {num('Bid timer (sec)', 'auctionTimer', 3, 120, 'resets on each bid')}
+            {num('Pool size cap', 'auctionPoolSize', 0, 90, '0 = no cap')}
+            {num('Bid timer (sec, 0 = off)', 'auctionTimer', 0, 120, 'backstop; lots close when everyone passes')}
             {num('Time to choose a card (sec)', 'nominateTimer', 0, 300)}
           </>}
           <label className="setting check"><input type="checkbox" checked={s.colorBalance} disabled={!isHost} onChange={(e) => set({ colorBalance: e.target.checked })} /> Color-balanced packs</label>

@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import {
   type ClientMsg, type DraftView, type Match, type MatchView, type Player, type RoomState, type RoomView,
   applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, emptyDeck,
-  finishPoolsWithBots, multisetDiff, nominate, passDirection, placeBid, seatedPlayers, startAuction, startDraft,
+  finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, placeBid, skipCard, seatedPlayers, startAuction, startDraft,
   startSealed, viewFor, type Color, type RoomSettings, type Deck,
 } from '@ojb/shared';
 import { CUBE, getCard } from '@ojb/shared/src/cube.ts';
@@ -130,7 +130,15 @@ export class Rooms {
       }
       case 'nominate': {
         if (!me || s.phase !== 'auction') return 'No auction';
-        return nominate(s, pid, msg.cardId, now);
+        return nominate(s, pid, msg.cardId, now, msg.amount == null ? undefined : Math.floor(Number(msg.amount)));
+      }
+      case 'skipLot': {
+        if (!me || s.phase !== 'auction') return 'No auction';
+        return skipCard(s, pid, msg.cardId, now);
+      }
+      case 'passLot': {
+        if (!me || s.phase !== 'auction') return 'No auction';
+        return passLot(s, pid, now);
       }
       case 'bid': {
         if (!me || s.phase !== 'auction') return 'No auction';
@@ -342,10 +350,12 @@ export function sanitizeSettings(x: RoomSettings, humans: number): RoomSettings 
     sealedPacks: clamp(x.sealedPacks, 1, 12, d.sealedPacks),
     sealedPackSize: clamp(x.sealedPackSize, 5, 20, d.sealedPackSize),
     auctionBudget: clamp(x.auctionBudget, 10, 10000, d.auctionBudget),
-    auctionTimer: clamp(x.auctionTimer, 3, 120, d.auctionTimer),
+    auctionMinBid: clamp(x.auctionMinBid, 1, 100, d.auctionMinBid),
+    auctionPacksPerPlayer: clamp(x.auctionPacksPerPlayer, 1, 8, d.auctionPacksPerPlayer),
+    auctionTimer: clamp(x.auctionTimer, 0, 120, d.auctionTimer),
     nominateTimer: clamp(x.nominateTimer, 0, 300, d.nominateTimer),
     auctionPackSize: clamp(x.auctionPackSize, 3, 30, d.auctionPackSize),
-    auctionPoolSize: clamp(x.auctionPoolSize, 10, 90, d.auctionPoolSize),
+    auctionPoolSize: clamp(x.auctionPoolSize, 0, 90, d.auctionPoolSize),
     colorBalance: !!x.colorBalance,
     customList: Array.isArray(x.customList) ? x.customList.filter((c) => validIds.has(c)).slice(0, 2000) : undefined,
   };

@@ -19,12 +19,16 @@ export interface RoomSettings {
   sealedPackSize: number;
   // Auction
   auctionBudget: number;
-  /** Seconds a lot stays open after the latest bid. */
+  /** Smallest allowed bid (also the smallest opening bid). */
+  auctionMinBid: number;
+  /** Packs per player; total packs = players x this. */
+  auctionPacksPerPlayer: number;
+  /** Seconds a lot stays open after the latest bid (backstop; 0 = no timer). */
   auctionTimer: number;
   /** Seconds the nominator has to choose which card goes up next. */
   nominateTimer: number;
   auctionPackSize: number;
-  /** Cards each player should end with; also the hard cap per pool. */
+  /** Hard cap on cards per pool; 0 = no cap. */
   auctionPoolSize: number;
   // Shared
   colorBalance: boolean;
@@ -41,11 +45,13 @@ export const DEFAULT_SETTINGS: RoomSettings = {
   pickTimer: 75,
   sealedPacks: 6,
   sealedPackSize: 15,
-  auctionBudget: 100,
-  auctionTimer: 10,
-  nominateTimer: 20,
-  auctionPackSize: 15,
-  auctionPoolSize: 45,
+  auctionBudget: 200,
+  auctionMinBid: 2,
+  auctionPacksPerPlayer: 2,
+  auctionTimer: 20,
+  nominateTimer: 30,
+  auctionPackSize: 30,
+  auctionPoolSize: 0,
   colorBalance: true,
 };
 
@@ -98,12 +104,16 @@ export interface AuctionState {
   lot: null | {
     cardId: string;
     bids: Bid[];
-    deadline: number;
+    /** Backstop deadline, or null when the bid timer is off. */
+    deadline: number | null;
     nominatedBy: string;
+    /** Players who passed since the last bid. */
+    passes: string[];
   };
   budgets: Record<string, number>;
   pools: Record<string, string[]>;
   /** Recent results for the feed. */
+  /** pid null = unsold (skipped and discarded). */
   results: { cardId: string; pid: string | null; amount: number }[];
   done: boolean;
 }

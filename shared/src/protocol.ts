@@ -8,7 +8,9 @@ export type ClientMsg =
   | { t: 'rename'; name: string }
   | { t: 'start' }
   | { t: 'pick'; cardId: string }
-  | { t: 'nominate'; cardId: string }
+  | { t: 'nominate'; cardId: string; amount?: number }
+  | { t: 'skipLot'; cardId: string }
+  | { t: 'passLot' }
   | { t: 'bid'; amount: number }
   | { t: 'saveDeck'; deck: Omit<Deck, 'ready'>; ready: boolean }
   | { t: 'createMatch'; players: [string, string]; bestOf: number }

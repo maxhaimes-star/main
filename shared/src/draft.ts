@@ -250,11 +250,18 @@ export function finishPoolsWithBots(room: RoomState, lookup: CardLookup) {
 
 // ===================================================================== auction
 
+export function auctionTargetCards(room: RoomState): number {
+  const { auctionPoolSize, auctionPacksPerPlayer, auctionPackSize } = room.settings;
+  return auctionPoolSize > 0 ? auctionPoolSize : Math.max(1, Math.round(auctionPacksPerPlayer * auctionPackSize * 0.6));
+}
+
 export function startAuction(room: RoomState, list: string[], rng: Rng, lookup: CardLookup, now: number) {
   const n = room.players.length;
-  const { auctionPackSize, auctionPoolSize, auctionBudget, colorBalance } = room.settings;
-  const needed = Math.ceil((n * auctionPoolSize) / auctionPackSize);
-  const totalPacks = Math.min(needed, Math.floor(list.length / auctionPackSize));
+  const { auctionPackSize, auctionPacksPerPlayer, auctionBudget, colorBalance } = room.settings;
+  const totalPacks = n * auctionPacksPerPlayer;
+  if (totalPacks * auctionPackSize > list.length) {
+    throw new Error(`Not enough cards: ${n} players × ${auctionPacksPerPlayer} packs × ${auctionPackSize} = ${totalPacks * auctionPackSize}, but the cube has ${list.length}`);
+  }
   const packs = makePacks(list, totalPacks, auctionPackSize, rng, lookup, colorBalance);
   const a: AuctionState = {
     packs,
@@ -275,7 +282,12 @@ export function startAuction(room: RoomState, list: string[], rng: Rng, lookup: 
 }
 
 function isCapped(room: RoomState, pid: string): boolean {
-  return room.auction!.pools[pid].length >= room.settings.auctionPoolSize;
+  const cap = room.settings.auctionPoolSize;
+  return cap > 0 && room.auction!.pools[pid].length >= cap;
+}
+
+function canOpen(room: RoomState, pid: string): boolean {
+  return !isCapped(room, pid) && room.auction!.budgets[pid] >= room.settings.auctionMinBid;
 }
 
 function openNextPack(room: RoomState, now: number) {
@@ -287,25 +299,13 @@ function openNextPack(room: RoomState, now: number) {
   armNominator(room, now, false);
 }
 
-/** Moves the nominator to the next uncapped seat (or keeps current if advance=false and eligible). */
+/** Moves the nominator to the next player who can afford the minimum bid (ends the auction if nobody can). */
 function armNominator(room: RoomState, now: number, advance: boolean) {
   const a = room.auction!;
   const players = seatedPlayers(room);
-  const eligible = players.filter((p) => !isCapped(room, p.id));
-  if (eligible.length === 0) return endAuction(room);
-  if (eligible.length === 1) {
-    // Only one player can still take cards: they get the rest of the open pack for free.
-    const pid = eligible[0].id;
-    while (a.open.length && !isCapped(room, pid)) {
-      const card = a.open.shift()!;
-      a.pools[pid].push(card);
-      a.results.unshift({ cardId: card, pid, amount: 0 });
-    }
-    if (isCapped(room, pid)) return endAuction(room);
-    return openNextPack(room, now);
-  }
+  if (!players.some((p) => canOpen(room, p.id))) return endAuction(room);
   let seat = advance ? (a.nominatorSeat + 1) % players.length : a.nominatorSeat;
-  for (let i = 0; i < players.length && isCapped(room, players[seat].id); i++) seat = (seat + 1) % players.length;
+  for (let i = 0; i < players.length && !canOpen(room, players[seat].id); i++) seat = (seat + 1) % players.length;
   a.nominatorSeat = seat;
   a.nominateDeadline = room.settings.nominateTimer ? now + room.settings.nominateTimer * 1000 : null;
 }
@@ -314,26 +314,57 @@ function endAuction(room: RoomState) {
   const a = room.auction!;
   a.done = true;
   a.lot = null;
+  a.open = [];
   a.nominateDeadline = null;
   finishPools(room, (seat) => a.pools[seatedPlayers(room)[seat].id]);
 }
 
-export function nominate(room: RoomState, pid: string, cardId: string, now: number): string | null {
+function afterLot(room: RoomState, now: number) {
+  const a = room.auction!;
+  if (a.open.length === 0) openNextPack(room, now);
+  else armNominator(room, now, true);
+}
+
+function checkNominator(room: RoomState, pid: string, cardId: string): string | null {
   const a = room.auction;
   if (!a || a.done) return 'No auction in progress';
   if (a.lot) return 'A card is already up for auction';
   const nominator = seatedPlayers(room)[a.nominatorSeat];
   if (nominator.id !== pid) return `Waiting for ${nominator.name} to choose`;
-  const idx = a.open.indexOf(cardId);
-  if (idx < 0) return 'Card is not in the open pack';
-  a.open.splice(idx, 1);
+  if (!a.open.includes(cardId)) return 'Card is not in the open pack';
+  return null;
+}
+
+/** The nominator puts a card up with an opening bid (default: the minimum bid). */
+export function nominate(room: RoomState, pid: string, cardId: string, now: number, amount?: number): string | null {
+  const err = checkNominator(room, pid, cardId);
+  if (err) return err;
+  const a = room.auction!;
+  const min = room.settings.auctionMinBid;
+  const open = amount ?? min;
+  if (!Number.isInteger(open) || open < min) return `Opening bid must be at least ${min}`;
+  if (open > a.budgets[pid]) return `You only have ${a.budgets[pid]}`;
+  a.open.splice(a.open.indexOf(cardId), 1);
   a.lot = {
     cardId,
-    bids: [{ pid, amount: 0, at: now }],
-    deadline: now + room.settings.auctionTimer * 1000,
+    bids: [{ pid, amount: open, at: now }],
+    deadline: room.settings.auctionTimer ? now + room.settings.auctionTimer * 1000 : null,
     nominatedBy: pid,
+    passes: [],
   };
   a.nominateDeadline = null;
+  closeIfSettled(room, now);
+  return null;
+}
+
+/** The nominator declines to buy: the card is discarded unsold. */
+export function skipCard(room: RoomState, pid: string, cardId: string, now: number): string | null {
+  const err = checkNominator(room, pid, cardId);
+  if (err) return err;
+  const a = room.auction!;
+  a.open.splice(a.open.indexOf(cardId), 1);
+  a.results.unshift({ cardId, pid: null, amount: 0 });
+  afterLot(room, now);
   return null;
 }
 
@@ -341,17 +372,47 @@ export function highBid(a: AuctionState) {
   return a.lot?.bids[a.lot.bids.length - 1];
 }
 
+/** Players who could still outbid the current high bid. */
+export function lotContenders(room: RoomState): string[] {
+  const a = room.auction;
+  if (!a?.lot) return [];
+  const high = highBid(a)!;
+  return room.players.filter((p) => p.id !== high.pid && !isCapped(room, p.id) && a.budgets[p.id] >= high.amount + 1).map((p) => p.id);
+}
+
+function closeIfSettled(room: RoomState, now: number): boolean {
+  const a = room.auction!;
+  if (!a.lot) return false;
+  if (lotContenders(room).every((id) => a.lot!.passes.includes(id))) {
+    awardLot(room, now);
+    return true;
+  }
+  return false;
+}
+
 export function placeBid(room: RoomState, pid: string, amount: number, now: number): string | null {
   const a = room.auction;
   if (!a || !a.lot) return 'Nothing to bid on';
-  if (!Number.isInteger(amount) || amount < 0) return 'Invalid bid';
+  if (!Number.isInteger(amount) || amount < room.settings.auctionMinBid) return `Minimum bid is ${room.settings.auctionMinBid}`;
   if (isCapped(room, pid)) return 'Your pool is full';
   const high = highBid(a)!;
   if (high.pid === pid) return 'You are already the high bidder';
   if (amount <= high.amount) return `Bid must be more than ${high.amount}`;
   if (amount > a.budgets[pid]) return `You only have ${a.budgets[pid]}`;
   a.lot.bids.push({ pid, amount, at: now });
-  a.lot.deadline = Math.max(a.lot.deadline, now + room.settings.auctionTimer * 1000);
+  a.lot.passes = [];
+  if (a.lot.deadline != null) a.lot.deadline = Math.max(a.lot.deadline, now + room.settings.auctionTimer * 1000);
+  closeIfSettled(room, now);
+  return null;
+}
+
+export function passLot(room: RoomState, pid: string, now: number): string | null {
+  const a = room.auction;
+  if (!a || !a.lot) return 'Nothing to pass on';
+  if (highBid(a)!.pid === pid) return 'You are the high bidder';
+  if (!room.players.some((p) => p.id === pid)) return 'Not in this auction';
+  if (!a.lot.passes.includes(pid)) a.lot.passes.push(pid);
+  closeIfSettled(room, now);
   return null;
 }
 
@@ -363,18 +424,18 @@ function awardLot(room: RoomState, now: number) {
   a.pools[high.pid].push(lot.cardId);
   a.results.unshift({ cardId: lot.cardId, pid: high.pid, amount: high.amount });
   a.lot = null;
-  if (a.open.length === 0) openNextPack(room, now);
-  else armNominator(room, now, true);
+  afterLot(room, now);
 }
 
 export function botValuation(room: RoomState, pid: string, cardId: string, lookup: CardLookup): number {
   const card = lookup(cardId);
   const a = room.auction!;
   if (!card) return 0;
-  const perCard = room.settings.auctionBudget / room.settings.auctionPoolSize;
+  const target = auctionTargetCards(room);
+  const perCard = room.settings.auctionBudget / target;
   const s = cardScore(card, a.pools[pid], lookup); // ~0.1 .. 2.1
   // Spend more freely when the bot has budget left relative to the cards it still needs.
-  const need = Math.max(1, room.settings.auctionPoolSize - a.pools[pid].length);
+  const need = Math.max(1, target - a.pools[pid].length);
   const pace = Math.min(2, a.budgets[pid] / (need * perCard || 1));
   return Math.floor(perCard * s * s * 1.6 * pace);
 }
@@ -383,22 +444,29 @@ export function auctionTick(room: RoomState, now: number, lookup: CardLookup, rn
   const a = room.auction;
   if (!a || a.done) return false;
   const players = seatedPlayers(room);
+  const min = room.settings.auctionMinBid;
   if (a.lot) {
-    if (now >= a.lot.deadline) {
+    if (a.lot.deadline != null && now >= a.lot.deadline) {
       awardLot(room, now);
       return true;
     }
+    if (closeIfSettled(room, now)) return true;
     const high = highBid(a)!;
-    // Bots consider bidding at most once a second, after a short think.
+    // Bots consider acting at most once a second, after a short think.
     if (now - high.at < 900) return false;
     const bidders = players.filter((p) => p.isBot && p.id !== high.pid && !isCapped(room, p.id));
     for (const bot of shuffle(bidders, rng)) {
+      if (a.lot.passes.includes(bot.id)) continue;
       const value = Math.min(botValuation(room, bot.id, a.lot.cardId, lookup), a.budgets[bot.id]);
-      if (high.amount + 1 > value || rng() > 0.75) continue;
+      if (high.amount + 1 > value) {
+        passLot(room, bot.id, now);
+        return true;
+      }
+      if (rng() > 0.75) continue;
       // Jump-bid toward the valuation so bot bidding wars don't crawl up one point at a time.
       const gap = value - high.amount;
       const next = high.amount + (gap > 3 ? Math.ceil(gap / 2) : 1);
-      placeBid(room, bot.id, next, now);
+      placeBid(room, bot.id, Math.max(min, next), now);
       return true;
     }
     return false;
@@ -406,8 +474,15 @@ export function auctionTick(room: RoomState, now: number, lookup: CardLookup, rn
   const nominator = players[a.nominatorSeat];
   const timedOut = a.nominateDeadline != null && now >= a.nominateDeadline;
   if (a.open.length && (nominator.isBot || timedOut)) {
-    const pick = nominator.isBot ? botPick(a.open, a.pools[nominator.id], lookup, rng) : bestRanked(a.open, lookup);
-    nominate(room, nominator.id, pick, now);
+    if (nominator.isBot) {
+      const pick = botPick(a.open, a.pools[nominator.id], lookup, rng);
+      const value = Math.min(botValuation(room, nominator.id, pick, lookup), a.budgets[nominator.id]);
+      // Bots only open on cards they value at or above the minimum bid; otherwise the card is discarded.
+      if (value < min) skipCard(room, nominator.id, pick, now);
+      else nominate(room, nominator.id, pick, now, Math.max(min, Math.floor(value / 3)));
+    } else {
+      nominate(room, nominator.id, bestRanked(a.open, lookup), now);
+    }
     return true;
   }
   return false;
