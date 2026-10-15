@@ -12,7 +12,7 @@ import { lifeGainPrevented, staticsDefineToughness } from './statics.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { KEYWORD_APIS } from './keywords.ts';
 import { answerKeywordPending, execKeywordStep } from './keyword-play.ts';
-import { answerReplacementPending, cantBeCountered, counterAmount, damagePrevented, replaceDraws, tokenEntered, tokenMultiplier } from './replacements.ts';
+import { answerReplacementPending, cantBeCountered, counterAmount, damagePrevented, replaceDraws, tokenEntered, tokenMultiplier, modifiedDamage } from './replacements.ts';
 import { answerCostPending, type CostData } from './costs.ts';
 import { conditionTrue, type CountEnv, evalCount } from './counts.ts';
 import { addEffect, turnInfo } from './durations.ts';
@@ -756,20 +756,22 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       let dealt = 0;
       for (const iid of o.cards) {
         const c = onBattlefield(state, iid);
-        const k = dmgOf(iid);
+        let k = dmgOf(iid);
         if (!c || k <= 0) continue;
         const stopped = damagePrevented(state, ctx.lookup, iid, srcObj);
         if (stopped) { log(state, ctx, null, `Damage to ${cardName(c, ctx.lookup)} is prevented (${stopped}).`); continue; }
+        k = modifiedDamage(state, ctx.lookup, iid, srcObj, k);
         damageCard(state, ctx, r, c, k, deathtouch);
         hit.push(division && many ? `${cardName(c, ctx.lookup)} (${k})` : cardName(c, ctx.lookup));
         dealt += k;
         if (srcObj) emit(state, { t: 'damage', source: srcObj, target: iid, amount: k, combat: false });
       }
       for (const pid of o.players) {
-        const k = dmgOf(pid);
+        let k = dmgOf(pid);
         if (k <= 0) continue;
         const prev = damagePrevented(state, ctx.lookup, pid, srcObj);
         if (prev) { log(state, ctx, pid, `Damage to ${pname(state, pid)} is prevented (${prev}).`); continue; }
+        k = modifiedDamage(state, ctx.lookup, pid, srcObj, k);
         player(state, pid).life -= k;
         noteLife(state, pid, -k);
         hit.push(division && many ? `${pname(state, pid)} (${k})` : pname(state, pid));
@@ -792,9 +794,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const cs = state.battlefield.map((x) => state.cards[x]);
         const ms = cs.map((c) => matchCard(c, p.ValidCards, E));
         if (ms.includes('unknown')) return bad();
-        cs.forEach((c, k) => { if (ms[k] && !damagePrevented(state, ctx.lookup, c.iid, r.sourceIid)) { damageCard(state, ctx, r, c, n, false); hit.push(cardName(c, ctx.lookup)); if (r.sourceIid) emit(state, { t: 'damage', source: r.sourceIid, target: c.iid, amount: n, combat: false }); } });
+        cs.forEach((c, k) => { if (ms[k] && !damagePrevented(state, ctx.lookup, c.iid, r.sourceIid)) { const m = modifiedDamage(state, ctx.lookup, c.iid, r.sourceIid, n); damageCard(state, ctx, r, c, m, false); hit.push(cardName(c, ctx.lookup)); if (r.sourceIid) emit(state, { t: 'damage', source: r.sourceIid, target: c.iid, amount: m, combat: false }); } });
       }
-      if (p.ValidPlayers) for (const pl of state.players) if (!pl.conceded && matchPlayer(pl.pid, p.ValidPlayers, E) !== false && !damagePrevented(state, ctx.lookup, pl.pid, r.sourceIid)) { pl.life -= n; noteLife(state, pl.pid, -n); hit.push(pl.name); if (r.sourceIid) emit(state, { t: 'damage', source: r.sourceIid, target: pl.pid, amount: n, combat: false }); }
+      if (p.ValidPlayers) for (const pl of state.players) if (!pl.conceded && matchPlayer(pl.pid, p.ValidPlayers, E) !== false && !damagePrevented(state, ctx.lookup, pl.pid, r.sourceIid)) { const m = modifiedDamage(state, ctx.lookup, pl.pid, r.sourceIid, n); pl.life -= m; noteLife(state, pl.pid, -m); hit.push(pl.name); if (r.sourceIid) emit(state, { t: 'damage', source: r.sourceIid, target: pl.pid, amount: m, combat: false }); }
       log(state, ctx, r.controller, `${r.sourceName} deals ${n} damage to ${hit.join(', ') || 'nothing'}.`);
       return 'ok';
     }
@@ -1640,8 +1642,9 @@ export function noteLife(state: GameState, pid: string, delta: number) {
 }
 
 /** Damage from a source to a card iid or player id, for more.ts effects. */
-function dealDamageTo(state: GameState, ctx: Ctx, r: Run, source: string | undefined, key: string, n: number): number {
-  if (n <= 0) return 0;
+function dealDamageTo(state: GameState, ctx: Ctx, r: Run, source: string | undefined, key: string, n0: number): number {
+  if (n0 <= 0) return 0;
+  const n = modifiedDamage(state, ctx.lookup, key, source, n0);
   const src = source ? state.cards[source] : undefined;
   if (state.players.some((p) => p.pid === key)) {
     const prev = damagePrevented(state, ctx.lookup, key, source);

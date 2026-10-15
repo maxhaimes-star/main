@@ -1,6 +1,6 @@
 import type { CombatProposal, GameState } from './types.ts';
 import { cardName, effectivePT, faceOf, hasKeyword, type Lookup } from './rules.ts';
-import { damagePrevented } from '../engine/replacements.ts';
+import { damagePrevented, modifiedDamage } from '../engine/replacements.ts';
 import { lifeGainPrevented } from '../engine/statics.ts';
 
 /**
@@ -35,6 +35,7 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
     // Protection, Maze of Ith ... (engine/replacements.ts); players' "prevent all damage" too.
     const stopped = damagePrevented(state, lookup, target, src, true);
     if (stopped) { lines.push(`${name}'s damage to ${cards[target] ? cardName(cards[target], lookup) : state.players.find((p) => p.pid === target)?.name ?? 'player'} is prevented (${stopped})`); return; }
+    amount = modifiedDamage(state, lookup, target, src, amount); // "deals double that damage instead" (Lightning, Army of One)
     hits.push({ source: src, target, amount });
     const infect = hasKeyword(s, lookup, 'Infect', state);
     if (cards[target]) {

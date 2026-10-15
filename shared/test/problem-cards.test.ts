@@ -409,3 +409,30 @@ describe('granted triggers (S:AddTrigger)', () => {
     expect(g.cards[nadu].zone).toBe('battlefield');
   });
 });
+
+describe('Lightning, Army of One (stagger)', () => {
+  it('after combat damage to a player, damage to that player and their permanents is doubled until your next turn', () => {
+    const { g, ctx } = setup(['lightning_army_of_one', 'lightning_bolt', 'lightning_bolt'], ['goblin_guide'], 'basic_mountain');
+    const light = put(g, ctx, 'a', 'lightning_army_of_one');
+    const gg = put(g, ctx, 'b', 'goblin_guide');
+    g.cards[gg].tapped = true; // no blocks
+    lands(g, 'a', 'basic_mountain', 2);
+    const pw = effectivePT(g.cards[light], getCard, g)[0];
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: light, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    passUntil(g, ctx, () => g.step === 'main2');
+    expect(g.players[1].life).toBe(20 - pw);
+    expect(g.effects?.some((e) => e.kind === 'effect' && e.name === 'Lightning, Army of One')).toBe(true);
+    const bolt = toHand(g, ctx, 'a', 'lightning_bolt');
+    act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: [[{ kind: 'player', pid: 'b' }]] });
+    drain(g, ctx);
+    expect(g.players[1].life).toBe(20 - pw - 6);
+    // Goblin Guide (Bob's permanent) takes double damage too
+    const bolt2 = toHand(g, ctx, 'a', 'lightning_bolt');
+    act(g, ctx, 'a', { t: 'cast', iid: bolt2, targets: [[{ kind: 'card', iid: gg }]] });
+    drain(g, ctx);
+    expect(logText(g)).toMatch(/Lightning Bolt deals 3 damage to Goblin Guide/);
+    expect(g.cards[gg].zone).toBe('graveyard');
+  });
+});

@@ -217,6 +217,7 @@ export function matchPlayer(pid: string, valid: string, env: MatchEnv): Tri {
     for (const p of props) {
       if (p === 'Opponent' || p === 'OppCtrl' || p === 'Other' || p === 'NonYou') r = and(r, pid !== env.controller);
       else if (p === 'You' || p === 'YouCtrl') r = and(r, pid === env.controller);
+      else if (p === 'IsRemembered') r = and(r, env.remembered === undefined ? 'unknown' : env.remembered.includes(pid));
       else r = and(r, 'unknown');
     }
     if (r === true) return true;

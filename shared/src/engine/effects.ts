@@ -47,7 +47,9 @@ export function effectUnsupported(step: ParsedAbility): string | null {
       // Supported: "if a card would be put into a graveyard, exile it instead" (Yawgmoth's Will), damage prevention.
       const moved = rp.Event === 'Moved' && rp.Destination === 'Graveyard' && rw?.api === 'ChangeZone';
       const prevent = rp.Event === 'DamageDone' && rp.Prevent === 'True';
-      if (!moved && !prevent) return 'Effect (replacement)';
+      // "it deals double that damage instead" (replacements.ts modifiedDamage)
+      const doubled = rp.Event === 'DamageDone' && rw?.api === 'ReplaceEffect' && rw.params.VarName === 'DamageAmount' && /^ReplaceCount\$DamageAmount\/Twice$/.test(sv[rw.params.VarValue ?? ''] ?? '');
+      if (!moved && !prevent && !doubled) return 'Effect (replacement)';
     }
   }
   if (p.Duration && !DURATIONS[p.Duration]) return `Effect (Duration$ ${p.Duration})`;

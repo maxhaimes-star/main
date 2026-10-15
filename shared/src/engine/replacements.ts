@@ -471,6 +471,40 @@ export function damagePrevented(state: GameState, lookup: Lookup, target: string
   return undefined;
 }
 
+/** Effects' "it deals double that damage instead" replacements (Lightning, Army of One's stagger): ReplaceWith a ReplaceEffect of DamageAmount. */
+function doublingReplacement(r: RLine): boolean {
+  const sv = svarParams(r, r.params.ReplaceWith);
+  if (sv?.api !== 'ReplaceEffect' || sv.params.VarName !== 'DamageAmount') return false;
+  const value = r.svars?.[sv.params.VarValue ?? ''] ?? sv.params.VarValue ?? '';
+  return /^ReplaceCount\$DamageAmount\/Twice$/.test(value);
+}
+
+/**
+ * Damage after "deals double that damage instead" effects (Lightning, Army of One): `amount` doubled once per
+ * applicable effect. `target` is a player id or a permanent's iid.
+ */
+export function modifiedDamage(state: GameState, lookup: Lookup, target: string, source: string | undefined, amount: number): number {
+  if (amount <= 0 || !state.effects?.length) return amount;
+  const isPlayer = state.players.some((p) => p.pid === target);
+  const tgt = isPlayer ? undefined : state.cards[target];
+  let n = amount;
+  for (const { e, r } of effectReplacements(state, 'DamageDone')) {
+    if (r.params.Prevent === 'True' || !doublingReplacement(r)) continue;
+    const env: MatchEnv = { controller: e.controller, sourceIid: e.hostIid, lookup, remembered: e.remembered };
+    const ok = (r.params.ValidTarget ?? 'Any').split(',').some((alt) => {
+      const v = alt.trim();
+      // "Permanent.ControlledBy Player.IsRemembered": a permanent a remembered player controls
+      if (/^Permanent\.ControlledBy Player\.IsRemembered$/.test(v)) return !!tgt && tgt.zone === 'battlefield' && e.remembered.includes(tgt.controller);
+      if (isPlayer) return /^Player\b/.test(v) && matchPlayer(target, v, env) === true;
+      return !!tgt && /^(Card|Permanent|Creature|Planeswalker)\b/.test(v) && matchCard(tgt, v, env) === true;
+    });
+    if (!ok) continue;
+    void source;
+    n *= 2;
+  }
+  return n;
+}
+
 const PHASES: Partial<Record<Step, string>> = { upkeep: 'Upkeep', draw: 'Draw', end: 'End of Turn' };
 
 /** "Skip your draw step" (Solitary Confinement): the source's name, or undefined. */
