@@ -2,6 +2,7 @@ import { type CardData, type CardFace, type TokenData, parseManaSymbols } from '
 import type { CardInstance, GameState, ViewCard } from './types.ts';
 import { isHidden } from './types.ts';
 import { type StaticsState, staticMods } from '../engine/statics.ts';
+import { layerFace } from '../engine/layers.ts';
 
 export type Lookup = (id: string) => CardData | undefined;
 
@@ -19,6 +20,10 @@ export interface Face {
   isToken: boolean;
   image?: string;
   localImage?: string;
+  /** Colors (WUBRG letters), when known: card / token colors, after copy and animate effects. */
+  colors?: string[];
+  /** "Has all creature types" (Mutavault, changeling-like animate effects). */
+  allCreatureTypes?: boolean;
 }
 
 const KW = ['Flying', 'First strike', 'Double strike', 'Deathtouch', 'Lifelink', 'Trample', 'Vigilance', 'Haste', 'Reach',
@@ -45,28 +50,41 @@ export function tokenFace(t: TokenData): Face {
   return {
     name: t.name, manaCost: '', typeLine: t.typeLine, oracle: t.oracle, power: t.power, toughness: t.toughness,
     types: typesOf(t.typeLine.replace(/^Token\s+/, '')), keywords: t.keywords.length ? t.keywords : parseKeywords(t.oracle), isToken: true,
+    colors: [...t.colors],
   };
 }
 
+/**
+ * The face a card instance currently shows: copy effects (copyOf / copyToken, engine/copy.ts), then copy exceptions
+ * and animate effects (engine/layers.ts) on top of the printed face / token.
+ */
 export function faceOf(inst: CardInstance, lookup: Lookup): Face {
+  let f: Face;
+  if (inst.copyToken && inst.zone === 'battlefield') f = { ...tokenFace(inst.copyToken), isToken: !!inst.token };
+  else if (inst.copyOf && inst.zone === 'battlefield') f = printedFace({ ...inst, cardId: inst.copyOf, token: undefined, transformed: inst.copyFace === 1, castAs: undefined }, lookup, !!inst.token);
+  else f = printedFace(inst, lookup, !!inst.token);
+  return inst.copyExtra || inst.animations?.length ? layerFace(f, inst) : f;
+}
+
+function printedFace(inst: CardInstance, lookup: Lookup, isToken: boolean): Face {
   if (inst.token && !inst.cardId) return tokenFace(inst.token);
   const card = inst.cardId ? lookup(inst.cardId) : undefined;
-  if (!card) return { name: 'Unknown card', manaCost: '', typeLine: '', oracle: '', types: [], keywords: [], isToken: !!inst.token };
+  if (!card) return { name: 'Unknown card', manaCost: '', typeLine: '', oracle: '', types: [], keywords: [], isToken };
   const back: CardFace | undefined = inst.transformed && card.faces?.[1] && (card.layout === 'transform' || card.layout === 'modal_dfc' || card.layout === 'flip') ? card.faces[1] : undefined;
   const adventure: CardFace | undefined = inst.castAs && card.faces ? card.faces.find((f) => f.name === inst.castAs) : undefined;
   const f = back ?? adventure;
   if (f) {
     return {
       name: f.name, manaCost: f.manaCost, typeLine: f.typeLine, oracle: f.oracle, power: f.power, toughness: f.toughness,
-      loyalty: f.loyalty, types: typesOf(f.typeLine), keywords: parseKeywords(f.oracle), isToken: !!inst.token,
-      image: back ? card.backImage : card.image, localImage: back ? undefined : card.localImage,
+      loyalty: f.loyalty, types: typesOf(f.typeLine), keywords: parseKeywords(f.oracle), isToken,
+      image: back ? card.backImage : card.image, localImage: back ? undefined : card.localImage, colors: [...card.colors],
     };
   }
   return {
     name: card.name, manaCost: card.manaCost, typeLine: card.typeLine, oracle: card.oracle, power: card.power,
     toughness: card.toughness, loyalty: card.loyalty, types: card.types,
     keywords: card.keywords.length ? [...new Set([...card.keywords, ...parseKeywords(card.oracle)])] : parseKeywords(card.oracle),
-    isToken: !!inst.token, image: card.image, localImage: card.localImage,
+    isToken, image: card.image, localImage: card.localImage, colors: [...card.colors],
   };
 }
 

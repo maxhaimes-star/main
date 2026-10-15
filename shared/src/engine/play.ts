@@ -2,11 +2,12 @@
 import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
-import { abilityAt, abilityLine, getScript, spellAbility, targetSpecs } from './script.ts';
+import { abilityAt, abilityLine, getScript, GRANT_BASE, scriptRef, spellAbility, targetSpecs } from './script.ts';
+import { hasGrantedAbility } from './animate.ts';
 import { divisionError } from './divide.ts';
 import { afterActivation, checkActivation } from './keyword-play.ts';
 import { isValidTarget } from './targets.ts';
-import { adjustCost } from './statics.ts';
+import { activateRestriction, adjustCost } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 
@@ -95,14 +96,18 @@ function counterKind(forge: string): string {
  * Returns an error (nothing changed) or null. The caller hands priority over.
  */
 export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardInstance, a: ActivateAction): string | null {
-  if (!c.cardId) return 'That card has no abilities';
-  const face = c.transformed ? 1 : 0;
-  const line = abilityLine(c.cardId, face, a.ability!);
+  const ref = c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined; // a copy: the copied card's
+  if (!ref) return 'That card has no abilities';
+  const { cardId, face } = ref;
+  const line = abilityLine(cardId, face, a.ability!);
   if (!line || !/^\s*AB\$/.test(line)) return 'No such ability';
-  const ab = abilityAt(c.cardId, face, a.ability!);
+  if (a.ability! >= GRANT_BASE && !hasGrantedAbility(c, a.ability!)) return 'No such ability';
+  const ab = abilityAt(cardId, face, a.ability!);
   if (!ab) return 'No such ability';
   const src = cardName(c, ctx.lookup);
   if (!a.force) {
+    const banned = activateRestriction(state, c.iid, pid, ctx.lookup);
+    if (banned) return banned;
     const timing = activationError(state, c, pid, ab, a.ability!, src);
     if (timing) return timing;
   }
@@ -158,7 +163,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
     c.counters[k] = (c.counters[k] ?? 0) + d;
     if (!c.counters[k] && k !== 'loyalty') delete c.counters[k];
   }
-  const auto: AutoInfo = { cardId: c.cardId, face, source: 'ability', index: a.ability!, targets: res.targets, targetZones: res.targetZones };
+  const auto: AutoInfo = { cardId, face, source: 'ability', index: a.ability!, targets: res.targets, targetZones: res.targetZones };
   if (a.x != null) auto.x = a.x;
   if (a.division) auto.division = { ...a.division };
   recordActivation(state, c, ab, a.ability!, counterDelta.loyalty != null);

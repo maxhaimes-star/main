@@ -9,7 +9,8 @@ import { activateMana } from '../engine/mana.ts';
 import { loyaltyError, recordActivation } from '../engine/timing.ts';
 import { answerPending, createTokenInstance, resolveAuto, resumeAuto } from '../engine/resolve.ts';
 import { answerTriggerChoice, answerTriggerTargets, beginAction, processTriggers, triggerStillApplies } from '../engine/triggers.ts';
-import { attackRestriction, blockRestriction, combatReminders } from '../engine/statics.ts';
+import { activateRestriction, attackRestriction, blockRestriction, combatReminders } from '../engine/statics.ts';
+import { tokenCopy } from '../engine/copy.ts';
 import { skipsStep, untapPrevented } from '../engine/replacements.ts';
 import { wardReminders } from '../engine/keyword-play.ts';
 import {
@@ -608,6 +609,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         giveResponse(state, pid);
         return null;
       }
+      const banned = a.force || c.zone !== 'battlefield' ? null : activateRestriction(state, c.iid, pid, ctx.lookup); // Phyrexian Revoker ...
+      if (banned) return banned;
       if (a.loyalty != null) {
         const lerr = a.force ? null : loyaltyError(state, c, pid, cardName(c, ctx.lookup));
         if (lerr) return lerr;
@@ -792,13 +795,9 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
     case 'copyCard': {
       const src = card(state, a.iid);
-      if (!src || !src.cardId) return 'Can only copy a card';
+      if (!src || (!src.cardId && !src.token)) return 'Can only copy a card or token';
       const face = faceOf(src, ctx.lookup);
-      const inst = createTokenInstance(state, ctx, pid, {
-        name: face.name, typeLine: face.typeLine, colors: [], oracle: face.oracle, keywords: face.keywords, power: face.power, toughness: face.toughness,
-      }, false, src.cardId);
-      inst.transformed = src.transformed;
-      if (face.loyalty) inst.counters.loyalty = parseInt(face.loyalty, 10) || 0;
+      tokenCopy(state, ctx, pid, src, {}); // copiable values (engine/copy.ts): copies of tokens / copies copy what they copy
       log(state, ctx, pid, `${name} creates a token copy of ${face.name}.`);
       return null;
     }

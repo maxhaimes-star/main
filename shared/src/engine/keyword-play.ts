@@ -7,7 +7,7 @@ import { cardName, effectivePT, hasKeyword, isCreature } from '../game/rules.ts'
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem } from '../game/types.ts';
 import { levelStats, type LevelStats, wardCost } from './keywords.ts';
-import { getScript } from './script.ts';
+import { scriptFaceOf } from './script.ts';
 import { type ParsedAbility, type Pending, SYNTH_BASE, type TargetRef } from './types.ts';
 
 const ZONE_WORD: Record<string, string> = { hand: 'hand', graveyard: 'graveyard', exile: 'exile', battlefield: 'the battlefield' };
@@ -174,7 +174,7 @@ export function wardReminders(state: GameState, ctx: Ctx, pid: string, targets: 
     if (ref.kind !== 'card') continue;
     const c = state.cards[ref.iid];
     if (!c || c.zone !== 'battlefield' || c.controller === pid || c.faceDown) continue;
-    const f = c.cardId ? getScript(c.cardId)?.[c.transformed ? 1 : 0] : undefined;
+    const f = scriptFaceOf(c);
     const cost = f ? wardCost(f) : undefined;
     if (!cost && !hasKeyword(c, ctx.lookup, 'Ward')) continue;
     log(state, ctx, c.controller, `Ward — ${cardName(c, ctx.lookup)} was targeted: counter that spell or ability unless ${pname(state, pid)} pays ${cost ?? 'the ward cost'} (handle by hand).`);
@@ -189,8 +189,8 @@ export function levelOf(inst: CardInstance): number {
 
 /** Level-dependent P/T and keywords of a leveler on the battlefield (undefined = base card / not a leveler). */
 export function levelStatsOf(inst: CardInstance): LevelStats | undefined {
-  if (!inst.cardId || inst.faceDown) return undefined;
-  const f = getScript(inst.cardId)?.[inst.transformed ? 1 : 0];
+  if (inst.faceDown) return undefined;
+  const f = scriptFaceOf(inst);
   if (!f || !f.keywords.some((k) => k.startsWith('Level up'))) return undefined;
   return levelStats(f, levelOf(inst));
 }

@@ -17,13 +17,22 @@
  * - triggerSupport(cardId, face, index)     Stage 2: is a T: line detected / its chain automatable
  * - activeStatics(state, lookup)            static abilities in effect, for an "Active effects" panel
  * - effectiveCost(state, iid, face, lookup) mana cost after cost increases / reductions (Thalia ...)
- * - attackRestriction / blockRestriction / castRestriction   why a static forbids an action (or null)
+ * - attackRestriction / blockRestriction / castRestriction / activateRestriction   why a static forbids an action (or null)
+ * - scriptRef(inst) / scriptFaceOf(inst)    the script an instance uses (a copy: the copied card's; none if it lost all abilities)
+ * - abilitiesOfInstance(inst)               activated abilities of a permanent now: script (copy-aware) + granted by animate effects
+ *                                           (granted ones have index >= GRANT_BASE; activate them like any A: index)
+ * - activeEffects(state)                    Effect records (emblems, "this turn" effects) in the command zone
+ * - Animate / Effect / CopyPermanent / Clone / ChooseType / ChooseColor / NameCard / ChoosePlayer: engine/ext.ts
  */
 import type { Rng } from '../draft.ts';
 import type { Lookup } from '../game/rules.ts';
 
 export * from './types.ts';
-export { getScript, spellAbility, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility } from './script.ts';
+export { getScript, spellAbility, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility, scriptRef, scriptFaceOf, GRANT_BASE } from './script.ts';
+export { abilitiesOfInstance, grantedAbilities } from './animate.ts';
+export { becomeCopy, tokenCopy } from './copy.ts';
+export { activeEffects } from './effects.ts';
+export { EXT_APIS } from './ext.ts';
 export { isValidTarget, matchCard, matchPlayer } from './targets.ts';
 export { castOptions, parseCost } from './costs.ts';
 export { divisionError } from './divide.ts';
@@ -37,7 +46,7 @@ export { levelOf, levelStatsOf } from './keyword-play.ts';
 export { cantBeCountered, damagePrevented, replacementsOf } from './replacements.ts';
 export { processTriggers, queuedTriggers, triggerSupport, SUPPORTED_MODES, MAX_TRIGGERS_PER_ACTION } from './triggers.ts';
 export {
-  activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,
+  activateRestriction, activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,
   parseStatic, staticGaps, staticMods, staticSupport, type ActiveStatic, type CardMods, type StaticSupport, type StaticsState,
 } from './statics.ts';
 

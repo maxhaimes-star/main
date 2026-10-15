@@ -15,7 +15,8 @@
 import { parseManaSymbols } from '../cards.ts';
 import { effectivePT, faceOf, hasKeyword, type Lookup } from '../game/rules.ts';
 import { type CardInstance, type ViewCard, isHidden } from '../game/types.ts';
-import { getScript, parseParams } from './script.ts';
+import { getScript, grantedLines, parseParams, scriptRef } from './script.ts';
+import type { EffectRecord, TimedEffect } from './types.ts';
 import { type MatchEnv, type Tri, matchCard } from './targets.ts';
 
 // ------------------------------------------------------------------ types
@@ -29,6 +30,8 @@ export interface StaticsState {
   step?: string;
   stack?: unknown[];
   turn?: number;
+  /** Effect records (engine/effects.ts): emblems and "this turn" effects with static abilities. */
+  effects?: TimedEffect[];
 }
 
 /** One static ability of a permanent (or a card being cast, for EffectZone$ All). */
@@ -41,6 +44,9 @@ export interface StaticAbility {
   svars: Record<string, string>;
   description: string;
   line: string;
+  /** Effects (engine/effects.ts): the effect's name ("Emblem — ...") and remembered objects. */
+  sourceName?: string;
+  remembered?: string[];
 }
 
 /** How fully the engine handles a static. */
@@ -52,6 +58,8 @@ export interface ActiveStatic {
   mode: string;
   /** 'full' = applied/enforced automatically; 'partial' = some parts applied; 'none' = reminder only. */
   support: StaticSupport;
+  /** Set for effects / emblems (sourceIid is then "effect:<id>", not a card). */
+  sourceName?: string;
 }
 
 /** Continuous-effect modifications to one permanent. */
@@ -153,23 +161,25 @@ function cmp(a: number, op: string, b: number): boolean {
 function staticsOfCard(c: CardInstance, lookup: Lookup): StaticAbility[] {
   if (c.faceDown) return [];
   let lines: string[] = [], svars: Record<string, string> = {}, name = '';
-  if (c.cardId) {
-    const face = getScript(c.cardId)?.[c.transformed ? 1 : 0];
-    if (!face) return [];
-    lines = face.statics; svars = face.svars; name = face.name;
-  } else if (c.token) {
-    const t = TOKEN_STATICS[c.token.oracle.trim()];
-    if (!t) return [];
-    lines = t.statics; svars = t.svars; name = c.token.name;
+  const ref = scriptRef(c); // copies use the copied card's script (engine/copy.ts)
+  const tok = c.zone === 'battlefield' && c.copyToken ? c.copyToken : c.token && !c.cardId ? c.token : undefined;
+  if (ref) {
+    const face = getScript(ref.cardId)?.[ref.face];
+    if (face) { lines = face.statics; svars = face.svars; name = face.name; }
+  } else if (tok && !c.animations?.some((a) => a.removeAllAbilities)) {
+    const t = TOKEN_STATICS[tok.oracle.trim()];
+    if (t) { lines = t.statics; svars = t.svars; name = tok.name; }
   }
   void lookup;
-  return lines.map((line) => {
+  const make = (line: string, sv: Record<string, string>, nm: string): StaticAbility => {
     const { params } = parseParams(line);
     return {
       sourceIid: c.iid, controller: c.controller, modes: (params.Mode ?? '').split(',').map((m) => m.trim()).filter(Boolean),
-      params, svars, line, description: nameText(params.Description ?? params.Mode ?? 'Static ability', name),
+      params, svars: sv, line, description: nameText(params.Description ?? params.Mode ?? 'Static ability', nm),
     };
-  });
+  };
+  // + statics granted by animate effects (engine/animate.ts)
+  return [...lines.map((line) => make(line, svars, name)), ...grantedLines(c, 'statics').map((g) => make(g.line, g.svars, g.faceName))];
 }
 
 /** Static abilities functioning on the battlefield. */
@@ -185,7 +195,34 @@ function battlefieldStatics(st: StaticsState, lookup: Lookup): StaticAbility[] {
       out.push(s);
     }
   }
+  out.push(...effectStatics(st));
   return out;
+}
+
+/** Static abilities of Effect records (emblems, "this turn" effects), engine/effects.ts. */
+function effectStatics(st: StaticsState): StaticAbility[] {
+  const out: StaticAbility[] = [];
+  for (const e of st.effects ?? []) {
+    if (e.kind !== 'effect' || !e.statics.length) continue;
+    const f = getScript(e.cardId)?.[e.face];
+    if (!f) continue;
+    for (const name of e.statics) {
+      const line = f.svars[name];
+      if (!line) continue;
+      const { params } = parseParams(line);
+      out.push({
+        sourceIid: `effect:${e.id}`, controller: e.controller, modes: (params.Mode ?? '').split(',').map((m) => m.trim()).filter(Boolean),
+        params, svars: f.svars, line, description: nameText((params.Description ?? e.text).replace(/EFFECTSOURCE/g, f.name), f.name), sourceName: e.name, remembered: e.remembered,
+      });
+    }
+  }
+  return out;
+}
+
+/** Effect records without static abilities (trigger-only emblems ...), for the active effects list. */
+function effectEntries(st: StaticsState): ActiveStatic[] {
+  return (st.effects ?? []).filter((e): e is EffectRecord => e.kind === 'effect' && !e.statics.length)
+    .map((e) => ({ sourceIid: `effect:${e.id}`, description: e.text, mode: e.emblem ? 'Emblem' : 'Effect', support: 'full' as const, sourceName: e.name }));
 }
 
 // ------------------------------------------------------------------ variables & conditions
@@ -195,6 +232,9 @@ class Evaluator {
 
   env(s: StaticAbility): MatchEnv {
     const env: MatchEnv = { controller: s.controller, sourceIid: s.sourceIid, lookup: this.lookup, num: (n) => this.value(s, n) };
+    const src = visible(this.st, s.sourceIid);
+    if (src) env.chosen = src.chosen ?? {};
+    if (s.remembered) env.remembered = s.remembered;
     if (this.withPT) {
       env.pt = (c) => effectivePT(c, this.lookup, this.st);
       env.kw = (c, k) => hasKeyword(c, this.lookup, k, this.st);
@@ -394,10 +434,12 @@ function signature(st: StaticsState): string {
     const c = st.cards[i];
     if (!c || isHidden(c)) return `${i}:h:${c?.controller}`;
     return [i, c.cardId ?? c.token?.name, c.controller, c.owner, c.tapped ? 1 : 0, c.faceDown ? 1 : 0, c.transformed ? 1 : 0, c.attachedTo ?? '',
-      JSON.stringify(c.counters), c.tempPT.join(','), c.permPT.join(','), c.attacking ?? '', c.blocking ?? '', (c.tempKeywords ?? []).join(','), c.note ?? ''].join(':');
+      JSON.stringify(c.counters), c.tempPT.join(','), c.permPT.join(','), c.attacking ?? '', c.blocking ?? '', (c.tempKeywords ?? []).join(','), c.note ?? '',
+      c.copyOf ?? c.copyToken?.name ?? '', (c.animations ?? []).map((a) => a.id).join(','), c.chosen ? JSON.stringify(c.chosen) : '', c.copyExtra ? JSON.stringify(c.copyExtra) : ''].join(':');
   });
   const pl = st.players.map((p) => `${p.pid}:${p.life}:${handSize(st, p.pid)}:${(p.zones.graveyard ?? []).join(',')}:${(p.zones.exile ?? []).length}`);
-  return `${st.activePlayer}|${st.turn}|${bf.join(';')}|${pl.join(';')}`;
+  const fx = (st.effects ?? []).map((e) => (e.kind === 'effect' ? `${e.id}:${e.remembered.join(',')}` : '')).join(',');
+  return `${st.activePlayer}|${st.turn}|${bf.join(';')}|${pl.join(';')}|${fx}`;
 }
 
 function computed(st: StaticsState, lookup: Lookup): Computed {
@@ -424,7 +466,7 @@ const CONT_HANDLED_KEYS = new Set([
   'AddKeyword', 'RemoveKeyword', 'AddType', 'RemoveType', 'RemoveCardTypes', 'Condition', 'IsPresent', 'PresentCompare', 'PresentZone',
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone',
 ]);
-const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage']);
+const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated']);
 /** Modes that are listed and logged as reminders. */
 const REMINDER_MODES = new Set(['MustAttack', 'MinMaxBlocker', 'CantDraw']);
 
@@ -446,7 +488,7 @@ export function staticGaps(s: Pick<StaticAbility, 'params' | 'svars' | 'modes'> 
       for (const k of Object.keys(p)) if (!CONT_HANDLED_KEYS.has(k)) gaps.push(k);
       if (p.AffectedZone && p.AffectedZone !== 'Battlefield') gaps.push(`AffectedZone$ ${p.AffectedZone}`);
       if (p.Affected && PLAYER_AFFECTED.test(p.Affected)) gaps.push('player effect');
-      if (p.Affected && /Chosen|NamedCard|Remembered|ExiledWith|TopLibrary/.test(p.Affected)) gaps.push(`Affected$ ${p.Affected}`);
+      if (p.Affected && /ChosenPlayer|ChosenCard|Remembered|ExiledWith|TopLibrary/.test(p.Affected)) gaps.push(`Affected$ ${p.Affected}`);
       if (p.AffectedDefined && !['Self', 'Equipped', 'Enchanted'].includes(p.AffectedDefined)) gaps.push(`AffectedDefined$ ${p.AffectedDefined}`);
       if (p.AddKeyword?.split('&').some((k) => !keywordSupported(k))) gaps.push('AddKeyword (special)');
       else if (p.AddKeyword && /Protection|Ward/.test(p.AddKeyword)) gaps.push('Protection/Ward (shown, not enforced)');
@@ -483,9 +525,9 @@ export function parseStatic(line: string, svars: Record<string, string> = {}): P
 /** Static abilities currently in effect (conditions met), for an "Active effects" panel. */
 export function activeStatics(st: StaticsState, lookup: Lookup): ActiveStatic[] {
   const c = computed(st, lookup);
-  return c.statics.filter((s) => c.active.get(s) !== false).map((s) => ({
-    sourceIid: s.sourceIid, description: s.description, mode: s.modes.join(','), support: staticSupport(s),
-  }));
+  return [...c.statics.filter((s) => c.active.get(s) !== false).map((s) => ({
+    sourceIid: s.sourceIid, description: s.description, mode: s.modes.join(','), support: staticSupport(s), ...(s.sourceName ? { sourceName: s.sourceName } : {}),
+  })), ...effectEntries(st)];
 }
 
 function active(st: StaticsState, lookup: Lookup, mode: string): { s: StaticAbility; ev: Evaluator }[] {
@@ -495,6 +537,7 @@ function active(st: StaticsState, lookup: Lookup, mode: string): { s: StaticAbil
 }
 
 function srcName(st: StaticsState, s: StaticAbility, lookup: Lookup): string {
+  if (s.sourceName) return s.sourceName;
   const c = visible(st, s.sourceIid);
   return c ? faceOf(c, lookup).name : 'A static ability';
 }
@@ -529,6 +572,24 @@ export function blockRestriction(st: StaticsState, blocker: string, attacker: st
     const okA = !s.params.ValidAttacker || matchCard(a, s.params.ValidAttacker, env) === true;
     const okB = !s.params.ValidBlocker || matchCard(b, s.params.ValidBlocker, env) === true;
     if (okA && okB) return `${bn} can't block ${faceOf(a, lookup).name} (${srcName(st, s, lookup)}: ${s.description})`;
+  }
+  return null;
+}
+
+/**
+ * Why `pid` can't activate an ability of `iid` (CantBeActivated statics, e.g. Phyrexian Revoker's chosen name), or null.
+ * `mana`: the ability is a mana ability (NonMana$ True statics don't stop those).
+ */
+export function activateRestriction(st: StaticsState, iid: string, pid: string, lookup: Lookup, mana = false): string | null {
+  const c = visible(st, iid);
+  if (!c) return null;
+  for (const { s, ev } of active(st, lookup, 'CantBeActivated')) {
+    const p = s.params;
+    if (mana && p.NonMana === 'True') continue;
+    if (p.Activator === 'Opponent' && pid === s.controller) continue;
+    if (p.Activator === 'You' && pid !== s.controller) continue;
+    if (p.ValidCard && matchCard(c, p.ValidCard, ev.env(s)) !== true) continue;
+    return `${srcName(st, s, lookup)}: ${s.description || "that ability can't be activated"}`;
   }
   return null;
 }

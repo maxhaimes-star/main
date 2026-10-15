@@ -236,7 +236,82 @@ export type TimedEffect =
   | { kind: 'pump'; id: string; controller: string; until: 'yourNextTurn'; cards: string[]; pt: [number, number]; keywords: string[] }
   | { kind: 'control'; id: string; controller: string; until: 'eot' | 'hostLeaves'; iid: string; previous: string; hostIid?: string }
   | { kind: 'exiled'; id: string; controller: string; until: 'hostLeaves'; hostIid: string; cards: { iid: string; from: string; owner: string }[] }
-  | { kind: 'dash'; id: string; controller: string; until: 'eot'; iid: string };
+  | { kind: 'dash'; id: string; controller: string; until: 'eot'; iid: string }
+  | EffectRecord;
+
+/** When an Effect / animation ends. */
+export type EffectDuration = 'eot' | 'permanent' | 'yourNextTurn' | 'hostLeaves' | 'endOfCombat' | 'yourNextEndStep' | 'endOfYourNextTurn';
+
+/**
+ * Forge "Effect" (engine/effects.ts): an effect object — emblem, "this turn ..." rule, "you may play that card" —
+ * with static / triggered abilities from the creating card's SVars. Lives in the command zone (state.effects).
+ */
+export interface EffectRecord {
+  kind: 'effect';
+  id: string;
+  controller: string;
+  until: EffectDuration;
+  /** The permanent that created it (UntilHostLeavesPlay). */
+  hostIid?: string;
+  /** Script that holds the SVars (statics / triggers / their Execute$ chains). */
+  cardId: string;
+  face: number;
+  /** "Emblem — Elspeth, Sun's Champion" or the creating card's name. */
+  name: string;
+  emblem?: boolean;
+  image?: string;
+  /** Human text (the creating ability's description). */
+  text: string;
+  /** SVar names. */
+  statics: string[];
+  triggers: string[];
+  /** RememberObjects$ (card iids and player ids). */
+  remembered: string[];
+  /** ForgetOnMoved$ / ExileOnMoved$: zone the remembered cards must stay in; the effect ends when none is left there. */
+  watchZone?: string;
+  turn: number;
+}
+
+/** Copy-effect exceptions (copiable values, engine/copy.ts). */
+export interface CopyExtra {
+  name?: string;
+  addTypes?: string[];
+  power?: number;
+  toughness?: number;
+  keywords?: string[];
+  nonLegendary?: boolean;
+  /** The copy effect ends at cleanup (Saheeli, Sublime Artificer). */
+  until?: 'eot';
+}
+
+/** An Animate effect on a permanent (engine/animate.ts). Applied by faceOf(); ends per `until`. */
+export interface Animation {
+  id: string;
+  controller: string;
+  until: EffectDuration;
+  hostIid?: string;
+  /** Turn it was created (for "until your next turn"). */
+  turn: number;
+  power?: number;
+  toughness?: number;
+  /** Card types and subtypes added (Types$). */
+  addTypes?: string[];
+  removeTypes?: string[];
+  removeCardTypes?: boolean;
+  removeCreatureTypes?: boolean;
+  allCreatureTypes?: boolean;
+  /** New colors (OverwriteColors$) or added colors, as WUBRG letters. */
+  colors?: string[];
+  overwriteColors?: boolean;
+  keywords?: string[];
+  removeKeywords?: string[];
+  removeAllAbilities?: boolean;
+  /** Abilities / triggers / statics granted from a card script's SVars. */
+  grant?: { cardId: string; face: number; abilities?: string[]; triggers?: string[]; statics?: string[] };
+}
+
+/** Choices made for a permanent as it entered (Plague Engineer, Phyrexian Revoker, True-Name Nemesis ...). */
+export interface Chosen { type?: string; color?: string; name?: string; player?: string }
 
 /** A question the engine needs a player to answer (e.g. "Pay {3}?" for Mana Leak). */
 export interface Pending {

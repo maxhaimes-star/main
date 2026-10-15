@@ -1,5 +1,5 @@
 import type { TokenData } from '../cards.ts';
-import type { AutoCont, AutoInfo, CastInfo, DelayedTrigger, Pending, QueuedTrigger, TargetRef, TimedEffect, TurnInfo } from '../engine/types.ts';
+import type { Animation, AutoCont, AutoInfo, CastInfo, Chosen, CopyExtra, DelayedTrigger, Pending, QueuedTrigger, TargetRef, TimedEffect, TurnInfo } from '../engine/types.ts';
 
 export const STEPS = [
   'untap', 'upkeep', 'draw', 'main1',
@@ -50,8 +50,21 @@ export interface CardInstance {
   /** Combat. */
   attacking?: string; // defending player id or planeswalker iid
   blocking?: string; // attacker iid
-  /** Copy of another card (Clone effects). */
+  /**
+   * Copy of another card (Clone effects): the copied card's cube id. faceOf() shows the copied face and the engine
+   * uses the copied card's script (engine/script.ts scriptRef). Cleared when it leaves the battlefield.
+   */
   copyOf?: string;
+  /** Copy of a token that has no card: the copied token's data. */
+  copyToken?: TokenData;
+  /** Face of the copied card (1 = it copied a transformed permanent). */
+  copyFace?: number;
+  /** Exceptions of the copy effect ("except it's an artifact", "except it has haste") — copiable values. */
+  copyExtra?: CopyExtra;
+  /** Animate effects ("becomes a 2/2 creature until end of turn"), engine/animate.ts. faceOf() applies them. */
+  animations?: Animation[];
+  /** Choices made as it entered the battlefield (ChooseType / ChooseColor / NameCard / ChoosePlayer). */
+  chosen?: Chosen;
   /** Keywords granted until end of turn (Pump KW$ etc.). Cleared at cleanup. */
   tempKeywords?: string[];
   /** How it was cast (kicked, evoked, flashback...). Kept while on the stack and when it resolves onto the battlefield. */

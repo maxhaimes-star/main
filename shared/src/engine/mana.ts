@@ -15,7 +15,8 @@ import type { CardInstance, GameAction, GameState, ViewCard } from '../game/type
 import { isHidden } from '../game/types.ts';
 import { parseCost } from './costs.ts';
 import { type CountState, evalCount } from './counts.ts';
-import { getScript, parseAbility } from './script.ts';
+import { parseAbility, scriptFaceOf } from './script.ts';
+import { activateRestriction } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 
 const BASIC: Record<string, string> = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' };
@@ -48,7 +49,7 @@ function amountOf(raw: string | undefined, ab: ParsedAbility, state: CountState,
 function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
   const out: Planned[] = [];
   const name = cardName(c, lookup);
-  const face = getScript(c.cardId ?? '')?.[c.transformed ? 1 : 0];
+  const face = scriptFaceOf(c); // a copy: the copied card's mana abilities
   let scripted = false;
   face?.abilities.forEach((line, index) => {
     if (!/^\s*AB\$\s*Mana\b/.test(line)) return;
@@ -102,7 +103,7 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
 /** Mana options of a permanent (empty = no scripted / basic-type mana ability: fall back to manual tapping). */
 export function manaOptionsFor(state: CountState, iid: string, lookup: Lookup = getCard): ManaOption[] {
   const c = state.cards[iid] as CardInstance | ViewCard | undefined;
-  if (!c || isHidden(c) || c.zone !== 'battlefield' || !c.cardId || c.faceDown) return [];
+  if (!c || isHidden(c) || c.zone !== 'battlefield' || !(c.cardId || c.copyOf) || c.faceDown) return [];
   return plan(state, c, lookup).map(({ id, label, produces, sideEffects }) => ({ id, label, produces, sideEffects }));
 }
 
@@ -113,6 +114,8 @@ export function activateMana(state: GameState, ctx: Ctx, pid: string, a: Extract
   if (c.controller !== pid) return 'Not your permanent';
   const opt = plan(state, c, ctx.lookup).find((o) => o.id === a.option);
   if (!opt) return 'No such mana ability';
+  const banned = activateRestriction(state, c.iid, pid, ctx.lookup, true);
+  if (banned) return banned;
   const name = cardName(c, ctx.lookup);
   if (opt.tap && c.tapped) return `${name} is already tapped`;
   const me = player(state, pid);
