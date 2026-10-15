@@ -18,7 +18,8 @@
  *  - counterAmount   (Event$ AddCounter -> ReplaceCounter, "that many plus one")
  */
 import { cardName, type Lookup } from '../game/rules.ts';
-import { type Ctx, emit, log, moveCard, moveHooks, type MoveOpts, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
+import { type Ctx, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
+import { moveHooks, type MoveOpts } from '../game/hooks.ts';
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import { getScript, parseParams, SCRIPTS, scriptRef, isRoomCard } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';

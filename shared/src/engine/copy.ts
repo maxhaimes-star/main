@@ -16,7 +16,8 @@
 import cubeJson from '../../data/cube.json' with { type: 'json' };
 import type { CardData, Color, TokenData } from '../cards.ts';
 import { cardName, faceOf } from '../game/rules.ts';
-import { type Ctx, emit, log, moveHooks, randomId } from '../game/state.ts';
+import { type Ctx, emit, log, randomId } from '../game/state.ts';
+import { moveHooks } from '../game/hooks.ts';
 import type { CardInstance, GameEvent, GameState, StackItem, Zone } from '../game/types.ts';
 import type { StepApi } from './ext.ts';
 import './replacements.ts'; // installs moveHooks.before first; the ETB-replacement hook below wraps it
