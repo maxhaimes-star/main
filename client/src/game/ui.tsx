@@ -6,6 +6,8 @@ import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 
 export interface MenuItem { label: string; onClick?: () => void; disabled?: boolean; hint?: string; sub?: MenuItem[] }
 
+export interface PickOption { value: string; label: string; detail?: string; disabled?: string }
+
 export interface TargetMode {
   kind: 'target';
   label: string;
@@ -35,6 +37,10 @@ export interface GameCtx {
   askText: (label: string, dflt?: string) => Promise<string | null>;
   /** Charm-style mode picker: resolves to the chosen option values, or null if cancelled. */
   pickModes: (label: string, options: { value: string; label: string }[], min: number, max: number) => Promise<string[] | null>;
+  /** Pick one of several options (cast options ...): resolves to the option value, or null if cancelled. */
+  pickOption: (title: string, options: PickOption[]) => Promise<string | null>;
+  /** Split `total` among targets (divided damage): resolves to key -> amount, or null if cancelled. */
+  divide: (title: string, total: number | undefined, targets: { key: string; label: string }[], validate: (d: Record<string, number>) => string | null) => Promise<Record<string, number> | null>;
   openZone: (pid: string, zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand') => void;
   openTokens: () => void;
   menuFor: (iid: string) => MenuItem[];
@@ -208,6 +214,49 @@ export function ModesModal({ label, options, min, max, onDone }: { label: string
         ))}
       </div>
       <div className="row"><button className="primary" disabled={sel.length < min || sel.length > max} onClick={() => onDone(sel)}>OK</button><button onClick={() => onDone(null)}>Cancel</button></div>
+    </Modal>
+  );
+}
+
+export function OptionsModal({ title, options, onDone }: { title: string; options: PickOption[]; onDone: (v: string | null) => void }) {
+  return (
+    <Modal title={title} onClose={() => onDone(null)}>
+      <div className="opt-list">
+        {options.map((o) => (
+          <button key={o.value} className={`opt-item ${o.disabled ? 'disabled' : ''}`} disabled={!!o.disabled} onClick={() => onDone(o.value)}>
+            <b>{o.label}</b>
+            {o.detail && <span className="opt-detail">{o.detail}</span>}
+            {o.disabled && <span className="opt-why">{o.disabled}</span>}
+          </button>
+        ))}
+      </div>
+      <div className="row"><button onClick={() => onDone(null)}>Cancel</button></div>
+    </Modal>
+  );
+}
+
+export function DivideModal({ title, total, targets, validate, onDone }: {
+  title: string; total: number | undefined; targets: { key: string; label: string }[]; validate: (d: Record<string, number>) => string | null; onDone: (v: Record<string, number> | null) => void;
+}) {
+  const [vals, setVals] = useState<Record<string, number>>(() => {
+    const v: Record<string, number> = {};
+    targets.forEach((t, i) => { v[t.key] = total != null ? Math.floor(total / targets.length) + (i < total % targets.length ? 1 : 0) : 1; });
+    return v;
+  });
+  const sum = Object.values(vals).reduce((a, b) => a + b, 0);
+  const err = validate(vals);
+  return (
+    <Modal title={title} onClose={() => onDone(null)}>
+      <p className="muted">Divide {total ?? 'the damage'} among the targets{total != null ? ` (${sum}/${total})` : ''}.</p>
+      <div className="divide-list">
+        {targets.map((t) => (
+          <label key={t.key}>{t.label}
+            <input type="number" min={1} value={vals[t.key]} onChange={(e) => setVals({ ...vals, [t.key]: Math.trunc(Number(e.target.value)) || 0 })} />
+          </label>
+        ))}
+      </div>
+      {err && <p className="muted divide-err">{err}</p>}
+      <div className="row"><button className="primary" disabled={!!err} onClick={() => onDone(vals)}>OK</button><button onClick={() => onDone(null)}>Cancel</button></div>
     </Modal>
   );
 }

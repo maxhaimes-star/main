@@ -1,6 +1,6 @@
 import {
-  activatedAbilitiesOf, activeStatics, effectiveCost, faceManaCost, isAutomatable, isValidTarget, spellAbility, targetSpecs,
-  type ActiveStatic, type GameView, type ParsedAbility, type TargetRef, type TargetSpec,
+  activatedAbilitiesOf, activeStatics, castOptions, divisionError, effectiveCost, flatten, faceManaCost, isAutomatable, isValidTarget, spellAbility, targetSpecs,
+  type ActiveStatic, type CastOption, type GameView, type ParsedAbility, type TargetRef, type TargetSpec,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
 
@@ -55,3 +55,34 @@ export function costNote(g: GameView, iid: string, face: number, me: string | nu
     return `Cost: ${eff} (printed ${printed}${names.length ? '; ' + names.join(', ') : ''})`;
   });
 }
+
+export function safeCastOptions(g: GameView, iid: string, face?: number): CastOption[] {
+  return safe(() => castOptions(g as never, iid, face, getCard)) ?? [];
+}
+
+/** One-line description of a cast option: "Alt: <label> {cost}, extra; extra". */
+export function optionText(o: CastOption): string {
+  return [o.cost, ...o.extra].filter(Boolean).join(' + ') || 'free';
+}
+
+/** For DividedAsYouChoose$ abilities: which target spec is divided and the total (undefined = unknown). */
+export function dividedInfo(ab: ParsedAbility, modes: string[] | undefined, x: number): { spec: number; total?: number } | undefined {
+  return safe(() => {
+    let k = 0;
+    for (const step of flatten(ab, modes)) {
+      if (!step.params.ValidTgts) continue;
+      const raw = step.params.DividedAsYouChoose;
+      if (raw) {
+        let total: number | undefined;
+        if (/^\d+$/.test(raw)) total = parseInt(raw, 10);
+        else if (step.svars?.[raw] === 'Count$xPaid') total = x;
+        return { spec: k, total };
+      }
+      k++;
+    }
+    return undefined;
+  });
+}
+
+export const safeDivisionError = (ab: ParsedAbility, modes: string[] | undefined, targets: TargetRef[][], division: Record<string, number>, x: number): string | null =>
+  safe(() => divisionError(ab, modes, targets, division, x)) ?? null;

@@ -3,10 +3,10 @@ import {
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { AUTO_LABEL, autoStatus, castStatus, costNote, safeActivated, safeSpecs, safeSpell } from './engine.ts';
+import { AUTO_LABEL, autoStatus, castStatus, dividedInfo, optionText, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
-type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'setMode' | 'opp' | 'target'> & { mode: Mode };
+type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'pickOption' | 'divide' | 'setMode' | 'opp' | 'target'> & { mode: Mode };
 
 const MANA_NAMES: Record<string, string> = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green', C: 'Colorless' };
 
@@ -88,7 +88,23 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
 export async function castWithX(base: Base, iid: string, face?: number, manual?: boolean) {
   const c = visible(base.g, iid);
   const card = c?.cardId ? getCard(c.cardId) : undefined;
-  const cost = face != null && card?.faces ? card.faces[face].manaCost : card?.manaCost ?? '';
+  let cost = face != null && card?.faces ? card.faces[face].manaCost : card?.manaCost ?? '';
+  let costOption: string | undefined;
+  if (!manual && c) {
+    const opts = safeCastOptions(base.g, iid, face);
+    const avail = opts.filter((o) => !o.unavailable);
+    let chosen = avail.length === 1 ? avail[0] : undefined;
+    if (avail.length > 1) {
+      const id = await base.pickOption(`Cast ${card?.name ?? 'spell'}`, opts.map((o) => ({ value: o.id, label: o.label, detail: optionText(o), disabled: o.unavailable })));
+      if (!id) return;
+      chosen = opts.find((o) => o.id === id);
+    }
+    if (chosen) {
+      if (chosen.id !== 'normal') costOption = chosen.id;
+      if (chosen.id !== 'normal' && chosen.id !== 'kicked' && /\{X\}/.test(chosen.cost)) cost = chosen.cost;
+      else if (chosen.id !== 'normal' && chosen.id !== 'kicked') cost = chosen.cost || '';
+    }
+  }
   let x: number | undefined;
   if (/\{X\}/.test(cost)) {
     const v = await base.ask('Value of X', 1);
@@ -112,7 +128,28 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
       targets = t;
     }
   }
-  base.act({ t: 'cast', iid, face, x, ...(targets ? { targets } : {}), ...(modes ? { modes } : {}), ...(manual ? { manual: true } : {}) });
+  let division: Record<string, number> | undefined;
+  if (sa && targets) {
+    const d = await askDivision(base, sa.ability, modes, targets, x ?? 0, card?.name ?? 'spell');
+    if (d === null) return;
+    division = d;
+  }
+  base.act({ t: 'cast', iid, face, x, ...(costOption ? { costOption } : {}), ...(division ? { division } : {}), ...(targets ? { targets } : {}), ...(modes ? { modes } : {}), ...(manual ? { manual: true } : {}) });
+}
+
+/** DividedAsYouChoose$: ask how to split the damage. undefined = nothing to divide, null = cancelled. */
+async function askDivision(base: Base, ab: Parameters<typeof dividedInfo>[0], modes: string[] | undefined, targets: TargetRef[][], x: number, title: string): Promise<Record<string, number> | undefined | null> {
+  const info = dividedInfo(ab, modes, x);
+  if (!info) return undefined;
+  const list = targets[info.spec] ?? [];
+  if (list.length < 2) return undefined;
+  const entries = list.map((t) => {
+    if (t.kind === 'card') { const v = visible(base.g, t.iid); return { key: t.iid, label: v ? faceOf(v, getCard).name : 'Card' }; }
+    if (t.kind === 'player') return { key: t.pid, label: base.g.players.find((p) => p.pid === t.pid)?.name ?? 'Player' };
+    return { key: t.id, label: 'Spell' };
+  });
+  const r = await base.divide(`Divide damage: ${title}`, info.total, entries, (d) => safeDivisionError(ab, modes, targets, d, x));
+  return r;
 }
 
 async function activateScripted(base: Base, iid: string, c: CardInstance, entry: ReturnType<typeof safeActivated>[number], label: string) {
@@ -129,7 +166,13 @@ async function activateScripted(base: Base, iid: string, c: CardInstance, entry:
     if (!t) return;
     targets = t;
   }
-  base.act({ t: 'activate', iid, text: entry.ability.description || label, ability: entry.index, ...(targets ? { targets } : {}), ...(x != null ? { x } : {}) });
+  let division: Record<string, number> | undefined;
+  if (targets) {
+    const d = await askDivision(base, entry.ability, undefined, targets, x ?? 0, label);
+    if (d === null) return;
+    division = d;
+  }
+  base.act({ t: 'activate', iid, text: entry.ability.description || label, ability: entry.index, ...(division ? { division } : {}), ...(targets ? { targets } : {}), ...(x != null ? { x } : {}) });
 }
 
 const short = (t: string, n = 80) => (t.length > n ? t.slice(0, n) + '…' : t);

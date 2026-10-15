@@ -4,9 +4,9 @@ import {
 } from '@ojb/shared';
 import type { RoomProps } from '../Room.tsx';
 import { CardBack, CardImage, getCard, PreviewPanel, setPreview } from '../cards.tsx';
-import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal } from './ui.tsx';
+import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
-import { castStatus, AUTO_LABEL, costNote, legalTarget, safeStatics } from './engine.ts';
+import { castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
@@ -50,6 +50,10 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const [prompt, setPrompt] = useState<PromptState>(null);
   const [modes, setModes] = useState<{ label: string; options: { value: string; label: string }[]; min: number; max: number; resolve: (v: string[] | null) => void } | null>(null);
   const pickModes = useCallback((label: string, options: { value: string; label: string }[], min: number, max: number) => new Promise<string[] | null>((resolve) => setModes({ label, options, min, max, resolve })), []);
+  const [picker, setPicker] = useState<{ title: string; options: PickOption[]; resolve: (v: string | null) => void } | null>(null);
+  const pickOption = useCallback((title: string, options: PickOption[]) => new Promise<string | null>((resolve) => setPicker({ title, options, resolve })), []);
+  const [dividing, setDividing] = useState<{ title: string; total: number | undefined; targets: { key: string; label: string }[]; validate: (d: Record<string, number>) => string | null; resolve: (v: Record<string, number> | null) => void } | null>(null);
+  const divide = useCallback((title: string, total: number | undefined, targets: { key: string; label: string }[], validate: (d: Record<string, number>) => string | null) => new Promise<Record<string, number> | null>((resolve) => setDividing({ title, total, targets, validate, resolve })), []);
   const [zone, setZone] = useState<{ pid: string; zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand' } | null>(null);
   const [tokens, setTokens] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -62,7 +66,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   // Static restrictions (Teferi, Ensnaring Bridge ...) come back as errors mentioning "force": offer to override.
   const act = useCallback(async (action: GameAction): Promise<string | null> => {
     const err = await rawAct(action);
-    if (err && /force/i.test(err) && (action.t === 'cast' || action.t === 'declareAttacker' || action.t === 'declareBlocker') && !(action as { force?: boolean }).force) {
+    if (err && /force/i.test(err) && (action.t === 'cast' || action.t === 'activate' || action.t === 'declareAttacker' || action.t === 'declareBlocker') && !(action as { force?: boolean }).force) {
       const msg = err.replace(/\s*\((?:cast with|use) force to override\)\.?/i, '').replace(/[.\s]+$/, '');
       const yes = await new Promise<boolean>((resolve) => setForceAsk({ error: msg, resolve }));
       if (!yes) return err;
@@ -106,7 +110,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     else setMode({ ...mode, chosen });
   };
 
-  const base = { g, me, act, ask, askText, pickModes, setMode, opp, mode, target };
+  const base = { g, me, act, ask, askText, pickModes, pickOption, divide, setMode, opp, mode, target };
   const menuFor = (iid: string) => menuForImpl(base, iid);
   const defaultAction = (iid: string) => defaultActionImpl(base, iid, menuFor, (items, title) => {
     const el = document.querySelector(`[data-iid="${iid}"]`)?.getBoundingClientRect();
@@ -114,7 +118,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   });
 
   const ctx: GameCtx = {
-    g, me, self, opp, act, openMenu, mode, setMode, ask, askText, pickModes,
+    g, me, self, opp, act, openMenu, mode, setMode, ask, askText, pickModes, pickOption, divide,
     openZone: (pid, z) => setZone({ pid, zone: z }), openTokens: () => setTokens(true), menuFor, defaultAction,
     target, pickTarget, isLegal, cast: (iid, face) => { castWithX(base, iid, face); }, toast, hoverTargets, setHoverTargets,
   };
@@ -164,6 +168,8 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
         {tokens && <TokenModal onClose={() => setTokens(false)} />}
         {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
         {modes && <ModesModal {...modes} onDone={(v) => { modes.resolve(v); setModes(null); }} />}
+        {picker && <OptionsModal {...picker} onDone={(v) => { picker.resolve(v); setPicker(null); }} />}
+        {dividing && <DivideModal {...dividing} onDone={(v) => { dividing.resolve(v); setDividing(null); }} />}
         {prompt && <Prompt label={prompt.label} initial={prompt.initial} numeric={prompt.numeric} onDone={(v) => { prompt.resolve(v); setPrompt(null); }} />}
         {mode && mode.kind !== 'target' && mode.kind !== 'attackPW' && (
           <div className="mode-hint">
@@ -395,10 +401,11 @@ function HandCard({ iid }: { iid: string }) {
   if (!c || isHidden(c)) return <div className="hcard"><CardBack /></div>;
   const face = faceOf(c, getCard);
   const st = castStatus(c.cardId, 0);
+  const altHints = c.owner === me ? safeCastOptions(g, iid, 0).filter((o) => o.id !== 'normal' && !o.unavailable).map((o) => `${o.label}: ${optionText(o)}`) : [];
   return (
     <div className={`hcard ${c.revealedTo.length ? 'revealed' : ''}`} data-iid={iid} draggable
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); }}
-      onMouseEnter={() => setPreview({ face, extra: [costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined })}
+      onMouseEnter={() => setPreview({ face, extra: [costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined, ...altHints].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined })}
       onClick={() => defaultAction(iid)}
       onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
       <CardImage face={face} />
@@ -613,14 +620,14 @@ function PendingChoices() {
             <p>{mine.prompt}</p>
             <div className="row">
               {tg && <button className="primary" onClick={() => startTargeting(mine)}>Choose targets for {tg.label}</button>}
-              {mine.options.map((o) => <button key={o.value} className="primary" onClick={() => act({ t: 'choose', id: mine.id, value: o.value })}>{o.label}</button>)}
+              {mine.options.map((o) => <PendingOption key={o.value} o={o} onClick={() => act({ t: 'choose', id: mine.id, value: o.value })} />)}
             </div>
           </div>
         </div>
       )}
       {targetingThis && mine.options.length > 0 && (
         <div className="mode-hint target-hint pending-skip" onClick={(e) => e.stopPropagation()}>
-          {mine.options.map((o) => <button key={o.value} className="tiny" onClick={() => act({ t: 'choose', id: mine.id, value: o.value })}>{o.label}</button>)}
+          {mine.options.map((o) => <PendingOption key={o.value} tiny o={o} onClick={() => act({ t: 'choose', id: mine.id, value: o.value })} />)}
         </div>
       )}
       {others.map((p) => (
@@ -628,6 +635,21 @@ function PendingChoices() {
       ))}
     </>
   );
+}
+
+/** A pending answer: a small card image (hover preview) when the value is a visible card, else a text button. */
+function PendingOption({ o, onClick, tiny }: { o: { value: string; label: string }; onClick: () => void; tiny?: boolean }) {
+  const { g } = useGame();
+  const c = g.cards[o.value];
+  if (c && !isHidden(c)) {
+    const face = faceOf(c, getCard);
+    return (
+      <button className="pend-card" title={o.label} onMouseEnter={() => setPreview({ face })} onClick={onClick}>
+        <CardImage face={face} /><span>{o.label}</span>
+      </button>
+    );
+  }
+  return <button className={tiny ? 'tiny' : 'primary'} onClick={onClick}>{o.label}</button>;
 }
 
 function CombatPanel() {

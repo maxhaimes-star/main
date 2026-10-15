@@ -327,3 +327,17 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .ae-item { padding: 3px 0; border-top: 1px solid rgba(128,128,128,.25); }
 .ae-badge { background: #8a6d1d; color: #fff; border-radius: 3px; padding: 0 4px; font-size: 10px; }
 .force-ask { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+
+/* cast option picker / divide / pending cards */
+.opt-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.opt-item { display: flex; flex-direction: column; align-items: flex-start; text-align: left; gap: 2px; padding: 8px 10px; }
+.opt-item.disabled { opacity: .5; cursor: not-allowed; }
+.opt-detail { font-size: 12px; opacity: .8; }
+.opt-why { font-size: 12px; color: #e88; }
+.divide-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.divide-list label { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.divide-list input { width: 64px; }
+.divide-err { color: #e88; }
+.pending .row { flex-wrap: wrap; }
+.pend-card { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 92px; padding: 3px; font-size: 11px; }
+.pend-card img, .pend-card .tcard-text { width: 100%; }
