@@ -291,6 +291,16 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
       else if (sv === 'Count$xPaid') n = c.castInfo?.x ?? 0;
       if (n) counters.push([counterKind(m[1]), n]);
     }
+    // Compleated: two fewer loyalty counters for each {P} paid with life (2 life each).
+    if (k === 'Compleated' && c.castInfo?.phyrexianLife) {
+      const fewer = c.castInfo.phyrexianLife;
+      afters.push(() => {
+        const inst = state.cards[c.iid];
+        if (inst?.zone !== 'battlefield') return;
+        inst.counters.loyalty = Math.max(0, (inst.counters.loyalty ?? 0) - fewer);
+        log(state, ctx, controller, `${nm} enters with ${fewer} fewer loyalty counters (compleated — life was paid for Phyrexian mana).`);
+      });
+    }
     // Fading N / Vanishing N: it enters with N fade / time counters (the upkeep part is engine/kwtriggers.ts).
     const fv = /^(Fading|Vanishing):(\d+)/.exec(k);
     if (fv) counters.push([fv[1] === 'Fading' ? 'fade' : 'time', parseInt(fv[2], 10)]);

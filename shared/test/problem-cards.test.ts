@@ -241,3 +241,27 @@ describe('Gideon, Battle-Forged (+2)', () => {
     expect(g.cards[gid].counters.loyalty).toBe(3); // dealt 2 damage
   });
 });
+
+describe('Nissa, Ascended Animist (compleated)', () => {
+  it('enters with 7 loyalty when paid with mana, 3 when both {G/P} were paid with life', () => {
+    const { g, ctx } = setup(['nissa_ascended_animist'], [], 'basic_forest');
+    lands(g, 'a', 'basic_forest', 5);
+    const n = toHand(g, ctx, 'a', 'nissa_ascended_animist');
+    act(g, ctx, 'a', { t: 'cast', iid: n });
+    drain(g, ctx);
+    expect(g.cards[n].zone).toBe('battlefield');
+    expect(g.players[0].life).toBe(16);
+    expect(g.cards[n].counters.loyalty).toBe(3);
+    expect(logText(g)).toMatch(/4 fewer loyalty counters/);
+  });
+
+  it('full mana: 7 loyalty', () => {
+    const { g, ctx } = setup(['nissa_ascended_animist'], [], 'basic_forest');
+    lands(g, 'a', 'basic_forest', 7);
+    const n = toHand(g, ctx, 'a', 'nissa_ascended_animist');
+    act(g, ctx, 'a', { t: 'cast', iid: n });
+    drain(g, ctx);
+    expect(g.players[0].life).toBe(20);
+    expect(g.cards[n].counters.loyalty).toBe(7);
+  });
+});

@@ -214,6 +214,8 @@ export interface CastInfo {
   colorsSpent?: string[];
   /** X paid (permanents keep it: ravenous). */
   x?: number;
+  /** Life paid for Phyrexian mana symbols (Compleated: two fewer loyalty counters per {P} paid with life). */
+  phyrexianLife?: number;
   /** Multikicker: times kicked; Replicate: times replicated (engine/castkw.ts). */
   timesKicked?: number;
   replicated?: number;
