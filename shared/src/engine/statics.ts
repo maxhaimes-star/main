@@ -459,11 +459,11 @@ function computed(st: StaticsState, lookup: Lookup): Computed {
   return result;
 }
 
-/** Active Continuous statics with AddAbility$ and the permanents they affect (engine/grants.ts). */
+/** Active Continuous statics with AddAbility$ / AddTrigger$ and the permanents they affect (engine/grants.ts). */
 export function abilityGrants(st: StaticsState, lookup: Lookup): { s: StaticAbility; iids: string[] }[] {
   const ev = new Evaluator(st, lookup, true);
   return computed(st, lookup).statics
-    .filter((s) => s.modes.includes('Continuous') && !!s.params.AddAbility && (!s.params.AffectedZone || s.params.AffectedZone === 'Battlefield') && ev.active(s) === true)
+    .filter((s) => s.modes.includes('Continuous') && (!!s.params.AddAbility || !!s.params.AddTrigger) && (!s.params.AffectedZone || s.params.AffectedZone === 'Battlefield') && ev.active(s) === true)
     .map((s) => ({ s, iids: affectedCards(st, ev, s).map((c) => c.iid) }));
 }
 
@@ -481,6 +481,8 @@ const CONT_HANDLED_KEYS = new Set([
   'Mode', 'Affected', 'AffectedDefined', 'AddPower', 'AddToughness', 'SetPower', 'SetToughness', 'CharacteristicDefining',
   'AddKeyword', 'RemoveKeyword', 'AddType', 'RemoveType', 'RemoveCardTypes', 'Condition', 'IsPresent', 'PresentCompare', 'PresentZone',
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone', 'AddAbility',
+  // granted triggered abilities (Kaldra Compleat, Nadu): grants.ts foreignTriggers, detected by triggers.ts
+  'AddTrigger',
 ]);
 const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated', 'CantGainLife', 'CastWithFlash',
   // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)

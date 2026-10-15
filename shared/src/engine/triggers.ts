@@ -17,6 +17,7 @@ import { checkTargets } from './play.ts';
 import { answerResolveTargets, lkiOf } from './resolve.ts';
 import { chainOf, describe, getScript, isAutomatable, parseParams, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
 import { extraTriggerHosts, grantedTriggers } from './effects.ts';
+import { foreignTriggers } from './grants.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { uniqueVar } from './unique.ts';
@@ -579,10 +580,12 @@ function detect(state: GameState, ctx: Ctx) {
             found.push({ controller: c.controller, q: queueFor(state, ctx, host, -1, kt.params, hit, kt.line) });
           }
         }
-        if (!host.id && !host.effect && !c.animations) continue;
+        // Triggers other permanents grant it (Kaldra Compleat, Nadu): engine/grants.ts.
+        const foreign = host.effect || host.lki ? [] : foreignTriggers(state, c.iid, ctx.lookup);
+        if (!host.id && !host.effect && !c.animations && !foreign.length) continue;
         // The card's T: lines (a copy: the copied card's), triggers granted by animate effects, or an effect's triggers.
         const own = host.effect ? host.effect.triggers : host.id ? triggersOf(host.id, host.face) : [];
-        for (const t of [...own, ...(host.effect ? [] : grantedTriggers(c))] as { index: number; params: Record<string, string>; ref?: { cardId: string; face: number } }[]) {
+        for (const t of [...own, ...(host.effect ? [] : grantedTriggers(c)), ...foreign] as { index: number; params: Record<string, string>; ref?: { cardId: string; face: number } }[]) {
           const p = t.params;
           if (p.Static === 'True') {
             const ch = host.id ? triggerChain(host.id, host.face, p.Execute) : undefined;

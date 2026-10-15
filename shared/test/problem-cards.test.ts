@@ -376,3 +376,36 @@ describe('Walk-In Closet // Forgotten Cellar (Room)', () => {
     expect(abilitiesOfInstance(g.cards[room]).some((a) => a.ability.api === '_Unlock')).toBe(false);
   });
 });
+
+describe('granted triggers (S:AddTrigger)', () => {
+  it('Kaldra Compleat: the equipped creature exiles a creature it deals combat damage to', () => {
+    const { g, ctx } = setup(['kaldra_compleat', 'stoneforge_mystic'], ['goblin_guide']);
+    const kaldra = put(g, ctx, 'a', 'kaldra_compleat');
+    const mine = put(g, ctx, 'a', 'stoneforge_mystic');
+    g.cards[kaldra].attachedTo = mine;
+    const theirs = put(g, ctx, 'b', 'goblin_guide');
+    g.cards[theirs].tempKeywords = ['Indestructible'];
+    expect(effectivePT(g.cards[mine], getCard, g)).toEqual([6, 7]);
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: mine, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    passUntil(g, ctx, () => g.step === 'blockers' && g.priority === 'b');
+    act(g, ctx, 'b', { t: 'declareBlocker', iid: theirs, attacker: mine });
+    act(g, ctx, 'b', { t: 'confirmBlockers' });
+    passUntil(g, ctx, () => g.cards[theirs].zone !== 'battlefield' || g.step === 'main2');
+    expect(g.cards[theirs].zone).toBe('exile');
+  });
+
+  it('Nadu, Winged Wisdom: a creature you control becoming a target reveals the top card (land onto the battlefield)', () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'lightning_bolt', 'basic_mountain']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    lands(g, 'a', 'basic_mountain', 1);
+    const bolt = toHand(g, ctx, 'a', 'lightning_bolt');
+    const before = g.battlefield.length;
+    act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: [[{ kind: 'card', iid: nadu }]] });
+    drain(g, ctx);
+    expect(logText(g)).toMatch(/Nadu, Winged Wisdom's trigger/);
+    expect(g.battlefield.length).toBe(before + 1); // an Island from the top
+    expect(g.cards[nadu].zone).toBe('battlefield');
+  });
+});
