@@ -1,6 +1,18 @@
 import type { Deck, Match, Player, RoomSettings, RoomState } from './room.ts';
 import type { GameAction, GameView } from './game/types.ts';
 import type { AuctionState, DraftState } from './room.ts';
+import type { CardData, TokenData } from './cards.ts';
+import type { ForgeFace } from './engine/types.ts';
+
+/**
+ * Server -> client 'cards' event, sent before a 'room' view that references cards the client hasn't
+ * got (anything outside the built-in cube). The client registers them (registerCards/registerScripts).
+ */
+export interface CardPayload {
+  cards: Record<string, CardData>;
+  scripts: Record<string, ForgeFace[]>;
+  tokens?: Record<string, TokenData>;
+}
 
 /** What a client sends. */
 export type ClientMsg =
@@ -13,6 +25,8 @@ export type ClientMsg =
   | { t: 'passLot' }
   | { t: 'bid'; amount: number }
   | { t: 'saveDeck'; deck: Omit<Deck, 'ready'>; ready: boolean }
+  /** Constructed: submit a pasted deck list (validated against the room's format). */
+  | { t: 'submitDeck'; text: string }
   | { t: 'createMatch'; players: [string, string]; bestOf: number }
   | { t: 'game'; matchId: string; action: GameAction }
   | { t: 'sideboard'; matchId: string; main: string[]; side: string[] }
@@ -57,6 +71,8 @@ export interface RoomView {
   chat: RoomState['chat'];
   serverNow: number;
   cubeSize: number;
+  /** The server has the full card database (set events, imported cubes, constructed). */
+  carddb?: boolean;
 }
 
 export type { DraftState };

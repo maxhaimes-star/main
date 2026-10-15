@@ -42,6 +42,19 @@ export function registerCardDbRoutes(app: Express) {
     const ids = String(req.query.ids ?? '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 1000);
     return cardsByIds(ids);
   }));
+  // CubeCobra list proxy (browsers can't fetch it cross-origin). Plain text, one card per line.
+  app.get('/api/cubecobra/:id', async (req, res) => {
+    const id = String(req.params.id ?? '');
+    if (!/^[\w-]{1,64}$/.test(id)) return res.status(400).json({ error: 'Bad cube id' });
+    try {
+      const r = await fetch(`https://cubecobra.com/cube/api/cubelist/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(10000) });
+      const text = r.ok ? (await r.text()).slice(0, 200_000) : '';
+      if (!text.trim() || /<html/i.test(text)) return res.status(404).json({ error: 'CubeCobra cube not found' });
+      res.json({ text });
+    } catch {
+      res.status(502).json({ error: 'Could not reach CubeCobra' });
+    }
+  });
   app.post('/api/decks/validate', guard((req) => {
     const { format, text } = (req.body ?? {}) as { format?: string; text?: string };
     if (!text) throw new Error('Missing deck text');

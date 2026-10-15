@@ -12,7 +12,7 @@ import { slugify } from '@ojb/shared/src/cards.ts';
 import type { ForgeFace } from '@ojb/shared/src/engine/types.ts';
 import {
   type BoosterCard, type CardDbMeta, type FormatData, type Rarity, type SearchRow, type SetData,
-  type SetSummary, shardOf,
+  type SetSummary, CARDDB_SHARDS, shardOf,
 } from '@ojb/shared/src/carddb-types.ts';
 import { generateBooster } from '@ojb/shared/src/boosters.ts';
 import { type DeckLine, type ParsedDeck, type ResolvedEntry, checkLegality, parseDeckList } from '@ojb/shared/src/decklist.ts';
@@ -28,6 +28,8 @@ export function setCardDbDir(dir: string) {
   cache.clear();
   cardShards.clear();
   scriptShards.clear();
+  cardMemo.clear();
+  scriptMemo.clear();
   printingsIdx = undefined;
 }
 
@@ -46,18 +48,51 @@ export function carddbMeta(): CardDbMeta {
 
 // ------------------------------------------------------------ cards
 
+/**
+ * Parsed shards are kept in a small LRU (memory: the host has 512MB; all 64 card + 64 script shards
+ * parsed would be ~150MB). Cards actually used by rooms are kept by the shared card registry
+ * (cube.ts registerCards / engine registerScripts), so evicted shards are rarely re-read.
+ */
+const MAX_SHARDS = Number(process.env.CARDDB_MAX_SHARDS ?? 16);
 const cardShards = new Map<number, Record<string, CardData>>();
 const scriptShards = new Map<number, Record<string, ForgeFace[]>>();
+function readShard<T>(kind: string, n: number): T {
+  return JSON.parse(fs.readFileSync(path.join(DIR, kind, `${n}.json`), 'utf8')) as T;
+}
 function shard<T>(map: Map<number, T>, kind: string, id: string): T {
   const n = shardOf(id);
   let s = map.get(n);
-  if (!s) { s = JSON.parse(fs.readFileSync(path.join(DIR, kind, `${n}.json`), 'utf8')) as T; map.set(n, s); }
+  if (s) { map.delete(n); map.set(n, s); return s; } // refresh LRU position
+  s = readShard<T>(kind, n);
+  map.set(n, s);
+  while (map.size > MAX_SHARDS) map.delete(map.keys().next().value!);
   return s;
+}
+
+/** Visit every card once, one shard at a time, without caching (full-text scans). */
+export function forEachCard(fn: (c: CardData) => void) {
+  for (let n = 0; n < CARDDB_SHARDS; n++) {
+    const s = cardShards.get(n) ?? readShard<Record<string, CardData>>('cards', n);
+    for (const c of Object.values(s)) fn(c);
+  }
+}
+
+/** Per-card memo on top of the shard LRU (random lookups across many shards would thrash it). */
+const MEMO_MAX = 20000;
+const cardMemo = new Map<string, CardData | null>();
+const scriptMemo = new Map<string, ForgeFace[] | null>();
+function memo<T>(m: Map<string, T | null>, id: string, load: () => T | undefined): T | undefined {
+  const hit = m.get(id);
+  if (hit !== undefined) return hit ?? undefined;
+  const v = load();
+  if (m.size >= MEMO_MAX) m.clear();
+  m.set(id, v ?? null);
+  return v;
 }
 
 export function getCardById(id: string): CardData | undefined {
   if (!carddbAvailable()) return undefined;
-  return shard(cardShards, 'cards', id)[id];
+  return memo(cardMemo, id, () => shard(cardShards, 'cards', id)[id]);
 }
 export function cardsByIds(ids: string[]): Record<string, CardData> {
   const out: Record<string, CardData> = {};
@@ -67,10 +102,14 @@ export function cardsByIds(ids: string[]): Record<string, CardData> {
 /** Forge rules scripts for the engine (ScriptData.cards entry). */
 export function getScript(id: string): ForgeFace[] | undefined {
   if (!carddbAvailable()) return undefined;
-  return shard(scriptShards, 'scripts', id)[id];
+  return memo(scriptMemo, id, () => shard(scriptShards, 'scripts', id)[id]);
 }
 export function getToken(script: string): TokenData | undefined {
-  return loadJson<Record<string, TokenData>>('tokens.json')[script];
+  return tokenTable()[script];
+}
+/** Every Forge token script (small; kept in memory). */
+export function tokenTable(): Record<string, TokenData> {
+  return loadJson<Record<string, TokenData>>('tokens.json');
 }
 
 /** Card id for a name (exact card or face name, case-insensitive, accents optional). */
@@ -238,7 +277,9 @@ export function searchCards(query: string, filters: SearchFilters = {}): { total
   });
   if (f.oracle) {
     const o = f.oracle.toLowerCase();
-    rows = rows.filter((r) => getCardById(r[0])?.oracle.toLowerCase().includes(o));
+    const hits = new Set<string>();
+    forEachCard((c) => { if (c.oracle.toLowerCase().includes(o)) hits.add(c.id); });
+    rows = rows.filter((r) => hits.has(r[0]));
   }
   if (text) rows = [...rows].sort((a, b) => Number(!a[1].toLowerCase().startsWith(text)) - Number(!b[1].toLowerCase().startsWith(text)) || a[1].localeCompare(b[1]));
   const offset = f.offset ?? 0;

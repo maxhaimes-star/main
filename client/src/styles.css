@@ -363,3 +363,23 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .revealed-pick .rv { width: 120px; border-radius: 6px; padding: 0; border: 2px solid transparent; background: none; cursor: pointer; }
 .revealed-pick .rv.legal { border-color: #5fd08a; }
 .revealed-pick .rv.illegal { opacity: .4; filter: grayscale(.6); cursor: not-allowed; }
+
+/* ---------- card database events (set picker, cube import, constructed) ---------- */
+.set-packs { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 16px; margin: 12px 0; align-items: end; }
+.set-packs small { grid-column: 1 / -1; }
+.set-picker { width: 100%; }
+.cube-choice { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.cobra-row { display: flex; gap: 8px; margin-bottom: 6px; }
+.cobra-row input { flex: 1; }
+.custom-list > input { width: 100%; margin-bottom: 6px; }
+.deck-import { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); gap: 12px; margin: 8px 0 16px; }
+.deck-import textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; min-height: 320px; }
+.deck-check { display: flex; flex-direction: column; gap: 8px; }
+.deck-check ul.errors { margin: 0; padding-left: 18px; max-height: 280px; overflow: auto; }
+.deck-check pre.error { white-space: pre-wrap; margin: 0; }
+@media (max-width: 700px) { .deck-import { grid-template-columns: 1fr; } }
+.card-search input { width: 100%; }
+.search-results { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; margin: 6px 0 16px; }
+.search-hit { text-align: left; padding: 4px 8px; }
+.count-badge { position: absolute; top: 4px; right: 4px; background: rgba(0,0,0,.75); color: #fff; border-radius: 6px; padding: 0 6px; font-weight: 700; font-size: 13px; }
+.deck-preview .cube-card { position: relative; }

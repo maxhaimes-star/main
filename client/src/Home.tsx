@@ -32,7 +32,7 @@ export function Home() {
     <div className="home">
       <div className="home-card">
         <h1>🍊 OJB Cube</h1>
-        <p className="muted">Draft, auction or sealed with the {CUBE.name} cube ({CUBE.list.length} cards), then play your decks against friends anywhere.</p>
+        <p className="muted">Draft, auction or sealed with the {CUBE.name} cube ({CUBE.list.length} cards), your own imported cube, or real boosters from any set — or bring constructed decks — then play against friends anywhere.</p>
         <label>Your name<input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Max" maxLength={24} /></label>
         <div className="home-cols">
           <div>

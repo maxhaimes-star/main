@@ -73,6 +73,12 @@ export function startDraft(room: RoomState, list: string[], rng: Rng, lookup: Ca
   const all = makePacks(list, n * packs, packSize, rng, lookup, colorBalance);
   const unopened: string[][][] = [];
   for (let r = 0; r < packs; r++) unopened.push(all.slice(r * n, (r + 1) * n));
+  startDraftWithPacks(room, unopened, now);
+}
+
+/** Start a draft from ready-made packs: unopened[round][seat] (e.g. set boosters). */
+export function startDraftWithPacks(room: RoomState, unopened: string[][][], now: number) {
+  const n = room.players.length;
   const draft: DraftState = {
     round: 0,
     queues: Array.from({ length: n }, () => []),
@@ -231,6 +237,11 @@ export function startSealed(room: RoomState, list: string[], rng: Rng, lookup: C
   const { sealedPacks, sealedPackSize, colorBalance } = room.settings;
   const packs = makePacks(list, n * sealedPacks, sealedPackSize, rng, lookup, colorBalance);
   finishPools(room, (seat) => packs.slice(seat * sealedPacks, (seat + 1) * sealedPacks).flat());
+}
+
+/** Sealed from ready-made pools, one per seat (e.g. set boosters). */
+export function startSealedWithPools(room: RoomState, pools: string[][]) {
+  finishPools(room, (seat) => pools[seat] ?? []);
 }
 
 function finishPools(room: RoomState, poolForSeat: (seat: number) => string[]) {

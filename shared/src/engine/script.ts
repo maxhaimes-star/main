@@ -15,6 +15,15 @@ export function getScript(cardId: string): ForgeFace[] | undefined {
   return SCRIPTS.cards[cardId];
 }
 
+/**
+ * Scripts for cards outside the built-in cube (card database): the server registers them when it
+ * loads cards for a room, the client when the server sends them. Existing entries are kept.
+ */
+export function registerScripts(cards: Record<string, ForgeFace[]>, tokens?: Record<string, ScriptData['tokens'][string]>) {
+  for (const [id, faces] of Object.entries(cards)) if (faces && !SCRIPTS.cards[id]) SCRIPTS.cards[id] = faces;
+  for (const [id, t] of Object.entries(tokens ?? {})) if (t && !SCRIPTS.tokens[id]) SCRIPTS.tokens[id] = t;
+}
+
 /** The parts of a CardInstance that decide which script it uses. */
 type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[] };
 

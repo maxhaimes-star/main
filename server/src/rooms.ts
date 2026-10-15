@@ -3,9 +3,15 @@ import {
   type ClientMsg, type DraftView, type Match, type MatchView, type Player, type RoomState, type RoomView,
   applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, emptyDeck,
   finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, placeBid, skipCard, seatedPlayers, startAuction, startDraft,
-  startSealed, viewFor, type Color, type RoomSettings, type Deck,
+  startSealed, viewFor, type Color, type RoomSettings, type Deck, startDraftWithPacks, startSealedWithPools,
+  CONSTRUCTED_FORMATS, type CardPayload,
 } from '@ojb/shared';
-import { CUBE, getCard } from '@ojb/shared/src/cube.ts';
+import { CUBE, getCard, isCubeCard } from '@ojb/shared/src/cube.ts';
+import { carddbAvailable, formatLegality, getCardById, resolveDeck } from './carddb.ts';
+import { cardPayload, checkBoosterSet, ensureCards, installCardDb, setBooster } from './roomcards.ts';
+
+// Make card-database cards resolvable everywhere (getCard / engine scripts) when the DB is built.
+installCardDb();
 
 export const rng = () => crypto.randomBytes(4).readUInt32BE() / 2 ** 32;
 const id = (n = 8) => crypto.randomBytes(n).toString('base64url').slice(0, n);
@@ -96,7 +102,8 @@ export class Rooms {
       case 'updateSettings': {
         if (!isHost) return 'Only the host can change settings';
         if (s.phase !== 'lobby') return 'The event already started';
-        s.settings = sanitizeSettings({ ...s.settings, ...msg.settings }, s.players.filter((p) => !p.isBot).length);
+        const listChanged = Array.isArray(msg.settings?.customList);
+        s.settings = sanitizeSettings({ ...s.settings, ...msg.settings }, s.players.filter((p) => !p.isBot).length, listChanged ? undefined : s.settings.customList);
         return null;
       }
       case 'kick': {
@@ -120,6 +127,7 @@ export class Rooms {
         s.pools = {};
         s.decks = {};
         s.matches = [];
+        delete s.prints;
         return null;
       }
       case 'pick': {
@@ -156,6 +164,16 @@ export class Rooms {
         s.decks[pid] = { main, side: leftover, basics, ready: !!msg.ready };
         return null;
       }
+      case 'submitDeck': {
+        if (!me) return 'Only players can submit decks';
+        if (s.settings.mode !== 'constructed' || s.phase !== 'deckbuilding') return 'Deck lists are for constructed events';
+        const r = this.importDeck(s, String(msg.text ?? ''));
+        if ('error' in r) return r.error;
+        s.pools[pid] = [...r.deck.main, ...r.deck.side];
+        s.decks[pid] = r.deck;
+        s.prints = { ...(s.prints ?? {}), ...r.prints };
+        return null;
+      }
       case 'createMatch': {
         const [a, b] = msg.players;
         if (a === b) return 'Pick two different players';
@@ -167,6 +185,12 @@ export class Rooms {
           if (!s.decks[p] || deckSize(s.decks[p]) < 1) return `${pl.name} hasn't built a deck yet`;
         }
         if (s.matches.some((m) => !m.winner && (m.players.includes(a) || m.players.includes(b)))) return 'One of those players is already in a match';
+        if (s.settings.mode === 'constructed') {
+          for (const p of [a, b]) {
+            const errs = this.constructedErrors(s, s.decks[p]);
+            if (errs.length) return `${s.players.find((x) => x.id === p)?.name}'s deck is not legal: ${errs.slice(0, 3).join(' ')}`;
+          }
+        }
         const match: Match = {
           id: id(8), players: [a, b], wins: { [a]: 0, [b]: 0 }, bestOf: [1, 3, 5].includes(msg.bestOf) ? msg.bestOf : 3,
           game: null, gameNumber: 0, sideboarding: false, readyForNext: [], winner: null,
@@ -218,14 +242,46 @@ export class Rooms {
       let b = 0;
       while (players.length < seats) players.push({ id: `bot_${id(6)}`, name: BOT_NAMES[b++ % BOT_NAMES.length], seat: 0, isBot: true, connected: true });
     }
+    if (s.settings.mode === 'constructed') {
+      if (!carddbAvailable()) return 'Constructed needs the card database, which this server does not have';
+      s.players = humans.map((p, i) => ({ ...p, seat: i }));
+      s.pools = {};
+      s.decks = {};
+      s.phase = 'deckbuilding';
+      return null;
+    }
     if (players.length < 2 && s.settings.mode !== 'sealed') return 'Need at least 2 seats (turn on bots or invite friends)';
+    if (s.settings.source === 'set' && s.settings.mode !== 'auction') {
+      const err = this.checkSets(s.settings.setCodes);
+      if (err) return err;
+    }
     // Random seating, like a real draft table.
     const order = players.map((p) => ({ p, r: rng() })).sort((x, y) => x.r - y.r).map((x, i) => ({ ...x.p, seat: i }));
     s.players = order;
     const list = cubeList(s, CUBE.list);
     const n = order.length;
     try {
-      if (s.settings.mode === 'draft') {
+      if (s.settings.source === 'set' && s.settings.mode === 'draft') {
+        const prints: Record<string, string> = {};
+        const rounds = s.settings.setCodes.map((code) => order.map(() => {
+          const b = setBooster(code, rng);
+          for (const [k, v] of Object.entries(b.prints)) prints[k] ??= v;
+          return b.ids;
+        }));
+        s.prints = prints;
+        s.settings = { ...s.settings, packs: rounds.length, packSize: Math.max(...rounds[0].map((p) => p.length)) };
+        startDraftWithPacks(s, rounds, now);
+      } else if (s.settings.source === 'set' && s.settings.mode === 'sealed') {
+        const prints: Record<string, string> = {};
+        const codes = s.settings.setCodes;
+        const pools = order.map(() => Array.from({ length: s.settings.sealedPacks }, (_, i) => {
+          const b = setBooster(codes[i % codes.length], rng);
+          for (const [k, v] of Object.entries(b.prints)) prints[k] ??= v;
+          return b.ids;
+        }).flat());
+        s.prints = prints;
+        startSealedWithPools(s, pools);
+      } else if (s.settings.mode === 'draft') {
         if (n * s.settings.packs * s.settings.packSize > list.length) return `Not enough cards: ${n} × ${s.settings.packs} × ${s.settings.packSize} > ${list.length}`;
         startDraft(s, list, rng, getCard, now);
       } else if (s.settings.mode === 'sealed') {
@@ -246,7 +302,57 @@ export class Rooms {
     if (s.phase === 'deckbuilding' && s.players.some((p) => p.isBot && !s.decks[p.id]?.ready)) finishPoolsWithBots(s, getCard);
   }
 
+  private checkSets(codes: string[]): string | null {
+    if (!carddbAvailable()) return 'Set events need the card database, which this server does not have';
+    if (!codes.length) return 'Choose a set';
+    for (const c of codes) { const e = checkBoosterSet(c); if (e) return e; }
+    return null;
+  }
+
+  /** Resolve + validate a pasted deck list for the room's constructed format. */
+  importDeck(s: RoomState, text: string): { error: string } | { deck: Deck; prints: Record<string, string> } {
+    if (!carddbAvailable()) return { error: 'Card database not available' };
+    const r = resolveDeck(text);
+    if (r.errors.length) return { error: r.errors.slice(0, 5).join('\n') };
+    if (!r.entries.length) return { error: 'The deck list is empty' };
+    const deck: Deck = { ...emptyDeck(), ready: true };
+    const prints: Record<string, string> = {};
+    const basicColor: Record<string, Color> = { plains: 'W', island: 'U', swamp: 'B', mountain: 'R', forest: 'G' };
+    for (const e of r.entries) {
+      if (e.set && e.num && !isCubeCard(e.id)) prints[e.id] ??= `${e.set}:${e.num}`;
+      const basic = basicColor[e.id];
+      if (basic && e.section !== 'side') { deck.basics[basic] += e.count; continue; }
+      const target = e.section === 'side' ? deck.side : deck.main;
+      for (let i = 0; i < e.count; i++) target.push(e.id);
+    }
+    ensureCards([...deck.main, ...deck.side]);
+    const errs = this.constructedErrors(s, deck);
+    if (errs.length) return { error: errs.slice(0, 6).join('\n') };
+    return { deck, prints };
+  }
+
+  constructedErrors(s: RoomState, deck: Deck | undefined): string[] {
+    if (!deck) return ['No deck'];
+    const format = s.settings.format;
+    const total = deckSize(deck);
+    if (format === 'Freeform') return total < 1 ? ['The deck is empty'] : [];
+    const names: Record<Color, string> = { W: 'plains', U: 'island', B: 'swamp', R: 'mountain', G: 'forest' };
+    const entries = [
+      ...countIds(deck.main).map(([id, count]) => ({ id: id.replace(/^basic_/, ''), count, section: 'main' as const })),
+      ...countIds(deck.side).map(([id, count]) => ({ id, count, section: 'side' as const })),
+      ...(Object.entries(deck.basics) as [Color, number][]).filter(([, n]) => n > 0).map(([c, count]) => ({ id: names[c], count, section: 'main' as const })),
+    ];
+    return formatLegality(entries, format);
+  }
+
+  /** Card data the socket hasn't been sent yet for this view (see roomcards.ts). */
+  cardsFor(rec: RoomRecord, view: RoomView, sent: Set<string>): CardPayload | null {
+    if (!carddbAvailable()) return null;
+    return cardPayload(view, rec.state.prints, sent);
+  }
+
   private startGame(s: RoomState, match: Match, starting: string, now: number) {
+    ensureCards([...match.decks[match.players[0]].main, ...match.decks[match.players[0]].side, ...match.decks[match.players[1]].main, ...match.decks[match.players[1]].side]);
     match.gameNumber++;
     match.sideboarding = false;
     match.readyForNext = [];
@@ -309,7 +415,7 @@ export class Rooms {
       phase: s.phase, draft, auction: s.auction,
       pool: s.pools[pid] ?? [], deck: s.decks[pid] ?? null,
       decksReady: Object.fromEntries(Object.entries(s.decks).map(([k, d]) => [k, d.ready])),
-      matches, chat: s.chat, serverNow: Date.now(), cubeSize: cubeList(s, CUBE.list).length,
+      matches, chat: s.chat, serverNow: Date.now(), cubeSize: cubeList(s, CUBE.list).length, carddb: carddbAvailable(),
       ...(spectators.length ? { spectators } : {}),
     } as RoomView;
   }
@@ -317,6 +423,12 @@ export class Rooms {
 
 function cleanName(n: unknown): string {
   return String(n ?? '').replace(/\s+/g, ' ').trim().slice(0, 24) || 'Player';
+}
+
+function countIds(ids: string[]): [string, number][] {
+  const m = new Map<string, number>();
+  for (const id of ids) m.set(id, (m.get(id) ?? 0) + 1);
+  return [...m];
 }
 
 function deckSize(d: Deck) {
@@ -337,11 +449,24 @@ function clamp(v: unknown, lo: number, hi: number, dflt: number) {
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
 }
 
-export function sanitizeSettings(x: RoomSettings, humans: number): RoomSettings {
+/** Valid ids of an imported list: cube cards, plus any database card when the DB is built. */
+function cleanList(list: unknown): string[] | undefined {
+  if (!Array.isArray(list)) return undefined;
+  const db = carddbAvailable();
+  return list.filter((c): c is string => typeof c === 'string' && (isCubeCard(c) || (db && !!getCardById(c)))).slice(0, 2000);
+}
+
+/** `keepList`: an already-validated custom list to keep as is (skips re-checking every id). */
+export function sanitizeSettings(x: RoomSettings, humans: number, keepList?: string[]): RoomSettings {
   const d = DEFAULT_SETTINGS;
-  const validIds = new Set(CUBE.cards.map((c) => c.id));
+  const codes = Array.isArray(x.setCodes) ? x.setCodes.filter((c) => typeof c === 'string' && /^[A-Za-z0-9]{2,6}$/.test(c)).map((c) => c.toUpperCase()).slice(0, 12) : [];
+  const customList = keepList ?? cleanList(x.customList);
   return {
-    mode: (['draft', 'auction', 'sealed'] as const).includes(x.mode) ? x.mode : d.mode,
+    mode: (['draft', 'auction', 'sealed', 'constructed'] as const).includes(x.mode) ? x.mode : d.mode,
+    source: x.source === 'set' ? 'set' : 'cube',
+    setCodes: codes,
+    format: (CONSTRUCTED_FORMATS as readonly string[]).includes(x.format) ? x.format : d.format,
+    bestOf: [1, 3, 5].includes(Number(x.bestOf)) ? Number(x.bestOf) : d.bestOf,
     seats: clamp(x.seats, Math.max(1, humans), 8, d.seats),
     fillWithBots: !!x.fillWithBots,
     packs: clamp(x.packs, 1, 5, d.packs),
@@ -357,6 +482,7 @@ export function sanitizeSettings(x: RoomSettings, humans: number): RoomSettings 
     auctionPackSize: clamp(x.auctionPackSize, 3, 30, d.auctionPackSize),
     auctionPoolSize: clamp(x.auctionPoolSize, 0, 90, d.auctionPoolSize),
     colorBalance: !!x.colorBalance,
-    customList: Array.isArray(x.customList) ? x.customList.filter((c) => validIds.has(c)).slice(0, 2000) : undefined,
+    customList,
+    ...(customList?.length && x.customListName ? { customListName: String(x.customListName).slice(0, 80) } : {}),
   };
 }

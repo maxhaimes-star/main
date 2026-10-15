@@ -4,6 +4,7 @@ import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
 import { Curve, PoolSummary } from './Draft.tsx';
 import { download } from './net.ts';
+import { Constructed } from './Constructed.tsx';
 
 type DeckState = { main: string[]; basics: Record<Color, number> };
 
@@ -29,7 +30,13 @@ export function suggestBasics(main: string[], total = 40): Record<Color, number>
   return out;
 }
 
-export function Deckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id: string) => void }) {
+export function Deckbuilder(props: RoomProps & { onWatch: (id: string) => void }) {
+  const isPlayer = props.view.players.some((p) => p.id === props.view.me);
+  if (props.view.settings.mode === 'constructed' && isPlayer) return <Constructed {...props} />;
+  return <LimitedDeckbuilder {...props} />;
+}
+
+function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id: string) => void }) {
   const pool = view.pool;
   const isPlayer = !!view.players.find((p) => p.id === view.me);
   const [deck, setDeck] = useState<DeckState>(() => ({ main: view.deck?.main ?? [], basics: view.deck?.basics ?? { W: 0, U: 0, B: 0, R: 0, G: 0 } }));
@@ -122,8 +129,8 @@ export function Deckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
   );
 }
 
-function MatchList({ view, send, onWatch }: { view: RoomProps['view']; send: RoomProps['send']; onWatch: (id: string) => void }) {
-  const [bestOf, setBestOf] = useState(3);
+export function MatchList({ view, send, onWatch }: { view: RoomProps['view']; send: RoomProps['send']; onWatch: (id: string) => void }) {
+  const [bestOf, setBestOf] = useState(view.settings.bestOf ?? 3);
   const humans = view.players.filter((p) => !p.isBot && p.id !== view.me);
   const name = (pid: string) => view.players.find((p) => p.id === pid)?.name ?? '?';
   const iAmPlayer = view.players.some((p) => p.id === view.me);

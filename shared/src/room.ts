@@ -1,7 +1,9 @@
 import type { Color } from './cards.ts';
 import type { GameState } from './game/types.ts';
 
-export type Mode = 'draft' | 'auction' | 'sealed';
+export type Mode = 'draft' | 'auction' | 'sealed' | 'constructed';
+/** Where draft/sealed packs come from: the cube list (OJ cube or an imported list) or real set boosters. */
+export type PackSource = 'cube' | 'set';
 export type RoomPhase = 'lobby' | 'drafting' | 'auction' | 'deckbuilding';
 
 export interface RoomSettings {
@@ -34,7 +36,20 @@ export interface RoomSettings {
   colorBalance: boolean;
   /** Optional custom card list (card ids); defaults to the full cube list. */
   customList?: string[];
+  /** Name of the imported cube list (display only). */
+  customListName?: string;
+  // Card database sources
+  /** Draft/sealed packs from the cube list or from set boosters. */
+  source: PackSource;
+  /** Set codes for set boosters: draft = one per round (pack 1, 2, 3…); sealed = cycled over the packs. */
+  setCodes: string[];
+  /** Constructed format name (Standard, Pioneer, Modern, Legacy, Vintage, Pauper, Freeform). */
+  format: string;
+  /** Default match length. */
+  bestOf: number;
 }
+
+export const CONSTRUCTED_FORMATS = ['Standard', 'Pioneer', 'Modern', 'Legacy', 'Vintage', 'Pauper', 'Freeform'] as const;
 
 export const DEFAULT_SETTINGS: RoomSettings = {
   mode: 'draft',
@@ -53,6 +68,10 @@ export const DEFAULT_SETTINGS: RoomSettings = {
   auctionPackSize: 30,
   auctionPoolSize: 0,
   colorBalance: true,
+  source: 'cube',
+  setCodes: [],
+  format: 'Standard',
+  bestOf: 3,
 };
 
 export interface Player {
@@ -150,6 +169,8 @@ export interface RoomState {
   pools: Record<string, string[]>;
   decks: Record<string, Deck>;
   matches: Match[];
+  /** Printing per card id for set events ("DMU:94"), so images show the right art. */
+  prints?: Record<string, string>;
   chat: ChatMessage[];
   createdAt: number;
   updatedAt: number;
