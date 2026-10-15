@@ -15,7 +15,7 @@
     "typecheck": "tsc -p shared && tsc -p server && tsc -p client",
     "build-cube": "tsx scripts/build-cube.ts",
     "crop-pdf": "python3 scripts/crop_pdf.py",
-    "e2e": "node e2e/smoke.mjs && node e2e/auction.mjs"
+    "e2e": "node e2e/smoke.mjs && node e2e/auction.mjs && node e2e/engine2.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.7",
