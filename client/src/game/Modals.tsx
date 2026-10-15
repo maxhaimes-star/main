@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { NumberField } from '../NumberField.tsx';
 import { type CardInstance, faceOf, isHidden, type TokenData, type Color, multisetDiff } from '@ojb/shared';
 import { CardBack, CardImage, CubeCard, getCard, setPreview, tokenToFace } from '../cards.tsx';
 import { Modal, useGame } from './ui.tsx';
@@ -131,7 +132,7 @@ export function TokenModal({ onClose }: { onClose: () => void }) {
   );
   return (
     <Modal title="Create tokens" onClose={onClose} wide>
-      <label>How many? <input type="number" min={1} max={50} value={count} onChange={(e) => setCount(Number(e.target.value) || 1)} /></label>
+      <label>How many? <NumberField min={1} max={50} value={count} onCommit={setCount} /></label>
       {fromCards.length > 0 && <><h4>From your cards</h4><div className="zone-grid">{fromCards.map((t, i) => <Tok key={i} t={t} />)}</div></>}
       <h4>Common</h4>
       <div className="zone-grid">{COMMON_TOKENS.map((t) => <Tok key={t.name} t={t} />)}</div>

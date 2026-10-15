@@ -8,6 +8,7 @@ import { Deckbuilder } from './Deckbuilder.tsx';
 import { GameScreen } from './game/GameScreen.tsx';
 import { navigate } from './App.tsx';
 import { Chat } from './Chat.tsx';
+import { useCardRegistry } from './cards.tsx';
 
 export interface RoomProps { view: RoomView; send: Send; skew: number }
 
@@ -18,6 +19,7 @@ export function Room({ roomId }: { roomId: string }) {
   const { view, send, fatal, connected, toast, clockSkew } = useRoom(roomId, seat?.token ?? null);
   const [watching, setWatching] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string[]>([]);
+  useCardRegistry(); // re-render when card data for non-cube cards arrives
 
   useEffect(() => {
     if (view) document.title = `${view.name} · OJB Cube`;

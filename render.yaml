@@ -4,7 +4,7 @@ services:
     name: ojb-cube
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci && npm run build-carddb && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:

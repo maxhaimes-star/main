@@ -1,7 +1,9 @@
 import type { Color } from './cards.ts';
 import type { GameState } from './game/types.ts';
 
-export type Mode = 'draft' | 'auction' | 'sealed';
+export type Mode = 'draft' | 'auction' | 'sealed' | 'constructed';
+/** Where draft/sealed packs come from: the cube list (OJ cube or an imported list) or real set boosters. */
+export type PackSource = 'cube' | 'set';
 export type RoomPhase = 'lobby' | 'drafting' | 'auction' | 'deckbuilding';
 
 export interface RoomSettings {
@@ -19,18 +21,35 @@ export interface RoomSettings {
   sealedPackSize: number;
   // Auction
   auctionBudget: number;
-  /** Seconds a lot stays open after the latest bid. */
+  /** Smallest allowed bid (also the smallest opening bid). */
+  auctionMinBid: number;
+  /** Packs per player; total packs = players x this. */
+  auctionPacksPerPlayer: number;
+  /** Seconds a lot stays open after the latest bid (backstop; 0 = no timer). */
   auctionTimer: number;
   /** Seconds the nominator has to choose which card goes up next. */
   nominateTimer: number;
   auctionPackSize: number;
-  /** Cards each player should end with; also the hard cap per pool. */
+  /** Hard cap on cards per pool; 0 = no cap. */
   auctionPoolSize: number;
   // Shared
   colorBalance: boolean;
   /** Optional custom card list (card ids); defaults to the full cube list. */
   customList?: string[];
+  /** Name of the imported cube list (display only). */
+  customListName?: string;
+  // Card database sources
+  /** Draft/sealed packs from the cube list or from set boosters. */
+  source: PackSource;
+  /** Set codes for set boosters: draft = one per round (pack 1, 2, 3…); sealed = cycled over the packs. */
+  setCodes: string[];
+  /** Constructed format name (Standard, Pioneer, Modern, Legacy, Vintage, Pauper, Freeform). */
+  format: string;
+  /** Default match length. */
+  bestOf: number;
 }
+
+export const CONSTRUCTED_FORMATS = ['Standard', 'Pioneer', 'Modern', 'Legacy', 'Vintage', 'Pauper', 'Freeform'] as const;
 
 export const DEFAULT_SETTINGS: RoomSettings = {
   mode: 'draft',
@@ -41,12 +60,18 @@ export const DEFAULT_SETTINGS: RoomSettings = {
   pickTimer: 75,
   sealedPacks: 6,
   sealedPackSize: 15,
-  auctionBudget: 100,
-  auctionTimer: 10,
-  nominateTimer: 20,
-  auctionPackSize: 15,
-  auctionPoolSize: 45,
+  auctionBudget: 200,
+  auctionMinBid: 2,
+  auctionPacksPerPlayer: 2,
+  auctionTimer: 20,
+  nominateTimer: 30,
+  auctionPackSize: 30,
+  auctionPoolSize: 0,
   colorBalance: true,
+  source: 'cube',
+  setCodes: [],
+  format: 'Standard',
+  bestOf: 3,
 };
 
 export interface Player {
@@ -98,12 +123,16 @@ export interface AuctionState {
   lot: null | {
     cardId: string;
     bids: Bid[];
-    deadline: number;
+    /** Backstop deadline, or null when the bid timer is off. */
+    deadline: number | null;
     nominatedBy: string;
+    /** Players who passed since the last bid. */
+    passes: string[];
   };
   budgets: Record<string, number>;
   pools: Record<string, string[]>;
   /** Recent results for the feed. */
+  /** pid null = unsold (skipped and discarded). */
   results: { cardId: string; pid: string | null; amount: number }[];
   done: boolean;
 }
@@ -140,6 +169,8 @@ export interface RoomState {
   pools: Record<string, string[]>;
   decks: Record<string, Deck>;
   matches: Match[];
+  /** Printing per card id for set events ("DMU:94"), so images show the right art. */
+  prints?: Record<string, string>;
   chat: ChatMessage[];
   createdAt: number;
   updatedAt: number;

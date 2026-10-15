@@ -565,18 +565,6 @@ export function landPlaysAllowed(st: StaticsState, pid: string, lookup: Lookup):
   return n;
 }
 
-/** Maximum hand size of `pid` (7; "no maximum hand size" statics: Infinity). */
-export function maxHandSize(st: StaticsState, pid: string, lookup: Lookup): number {
-  for (const { s } of active(st, lookup, 'Continuous')) {
-    const p = s.params;
-    if (!p.SetMaxHandSize || !p.Affected) continue;
-    const mine = s.controller === pid;
-    if ((/^You\b/.test(p.Affected) && !mine) || (/^Opponent\b/.test(p.Affected) && mine)) continue;
-    return p.SetMaxHandSize === 'Unlimited' ? Infinity : parseInt(p.SetMaxHandSize, 10) || 7;
-  }
-  return 7;
-}
-
 /** Untap-step limits on a player ("players can't untap more than one land", Winter Orb / Static Orb): type -> max. */
 export function untapLimits(st: StaticsState, pid: string, lookup: Lookup): { valid: string; max: number }[] {
   const out: { valid: string; max: number }[] = [];
@@ -822,4 +810,67 @@ export function staticsDefineToughness(st: StaticsState, iid: string, lookup: Lo
   const own = staticsOfCard(c, lookup).filter((s) => s.modes.includes('Continuous') && (s.params.SetToughness || s.params.AddToughness)
     && (s.params.AffectedDefined === 'Self' || /^Card\.Self$/.test(s.params.Affected ?? '') || (s.params.CharacteristicDefining === 'True' && !s.params.Affected)));
   return own.length > 0 && own.every((s) => staticGaps(s).length === 0);
+}
+
+// ------------------------------------------------------------------ player statics (strict mode, engine/strict.ts)
+
+function affectsPlayer(s: StaticAbility, pid: string): boolean {
+  const a = s.params.Affected ?? '';
+  if (/^You\b/.test(a)) return s.controller === pid;
+  if (/^Opponent\b/.test(a)) return s.controller !== pid;
+  return /^Player\b/.test(a);
+}
+
+/** Extra land plays per turn from statics (Exploration, Dryad of the Ilysian Grove ...); Infinity for Fastbond. */
+export function extraLandPlays(st: StaticsState, pid: string, lookup: Lookup): number {
+  let n = 0;
+  for (const { s } of active(st, lookup, 'Continuous')) {
+    const v = s.params.AdjustLandPlays;
+    if (!v || !affectsPlayer(s, pid)) continue;
+    if (v === 'Unlimited') return Infinity;
+    n += parseInt(v, 10) || 0;
+  }
+  return n;
+}
+
+/** Maximum hand size (7, Infinity with "no maximum hand size" statics). */
+export function maxHandSize(st: StaticsState, pid: string, lookup: Lookup): number {
+  let max = 7;
+  for (const { s } of active(st, lookup, 'Continuous')) {
+    const v = s.params.SetMaxHandSize;
+    if (!v || !affectsPlayer(s, pid)) continue;
+    if (v === 'Unlimited') return Infinity;
+    const k = parseInt(v, 10);
+    if (!Number.isNaN(k)) max = k;
+  }
+  return max;
+}
+
+/**
+ * A "you may play / cast that card" permission (MayPlay$ True statics: Crucible of Worlds, Courser of Kruphix,
+ * impulse draw, Bolas's Citadel ...) letting `pid` play `iid` from its current zone, or null.
+ * `remembered`: objects permanents remembered (state.remembered), for Card.IsRemembered. Unknown conditions allow it.
+ */
+export function mayPlayPermission(st: StaticsState, iid: string, pid: string, lookup: Lookup, remembered?: Record<string, string[]>): { source: string; free: boolean } | null {
+  const c = visible(st, iid);
+  if (!c) return null;
+  const zoneName = c.zone.charAt(0).toUpperCase() + c.zone.slice(1);
+  for (const { s, ev } of active(st, lookup, 'Continuous')) {
+    const p = s.params;
+    if (p.MayPlay !== 'True') continue;
+    if (!(p.AffectedZone ?? '').split(',').includes(zoneName)) continue;
+    const who = p.MayPlayPlayer === 'CardOwner' ? c.owner : s.controller;
+    if (who !== pid) continue;
+    let valid = p.Affected ?? 'Card';
+    if (/TopLibrary/.test(valid)) {
+      const lib = st.players.find((x) => x.pid === c.owner)?.zones.library ?? [];
+      if (c.zone !== 'library' || lib[0] !== iid) continue;
+      valid = valid.replace(/\+TopLibrary|TopLibrary\+|\.TopLibrary(?=,|$)/g, '');
+    }
+    const env = ev.env(s);
+    if (!env.remembered && remembered?.[s.sourceIid]) env.remembered = remembered[s.sourceIid];
+    if (matchCard(c, valid, { ...env, controller: pid }) === false) continue;
+    return { source: srcName(st, s, lookup), free: p.MayPlayWithoutManaCost === 'True' };
+  }
+  return null;
 }

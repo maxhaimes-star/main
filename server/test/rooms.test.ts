@@ -38,6 +38,31 @@ describe('rooms', () => {
     expect(m.game!.startingPlayer).toBe(host.pid);
   });
 
+  it('games are rules-enforced; a player at 0 life loses and the match records the win', () => {
+    const rooms = new Rooms();
+    const host = rooms.create('Test', 'Max');
+    const friend = rooms.join(host.roomId, 'Sam')!;
+    const rec = rooms.rooms.get(host.roomId)!;
+    rooms.handle(rec, host.pid, { t: 'updateSettings', settings: { mode: 'sealed', seats: 2, sealedPacks: 3 } });
+    rooms.handle(rec, host.pid, { t: 'start' });
+    for (const p of [host.pid, friend.pid]) {
+      rooms.handle(rec, p, { t: 'saveDeck', deck: { main: rec.state.pools[p].slice(0, 23), side: [], basics: { W: 0, U: 0, B: 0, R: 17, G: 0 } }, ready: true });
+    }
+    rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, friend.pid], bestOf: 3 });
+    const m = rec.state.matches[0];
+    const g = m.game!;
+    expect(g.strict).toBe(true);
+    rooms.handle(rec, host.pid, { t: 'game', matchId: m.id, action: { t: 'keep' } });
+    rooms.handle(rec, friend.pid, { t: 'game', matchId: m.id, action: { t: 'keep' } });
+    expect(rooms.handle(rec, host.pid, { t: 'game', matchId: m.id, action: { t: 'life', pid: friend.pid, delta: -20 } })).toMatch(/fix mode/);
+    g.players.find((p) => p.pid === friend.pid)!.life = 0; // e.g. after damage
+    expect(rooms.handle(rec, host.pid, { t: 'game', matchId: m.id, action: { t: 'setStops', own: ['main1'], opp: [] } })).toBeNull();
+    expect(g.phase).toBe('over');
+    expect(g.winner).toBe(host.pid);
+    expect(m.wins[host.pid]).toBe(1);
+    expect(m.sideboarding).toBe(true);
+  });
+
   it('fills a draft with bots and drafts to completion via ticks', () => {
     const rooms = new Rooms();
     const host = rooms.create('Test', 'Max');

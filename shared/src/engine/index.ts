@@ -52,9 +52,9 @@ export { levelOf, levelStatsOf } from './keyword-play.ts';
 export { cantBeCountered, damagePrevented, replacementGap, replacementsOf } from './replacements.ts';
 export { HANDLED_KEYWORDS, keywordGap } from './mechanics.ts';
 export { anyColorCost, bestPermission, mayPlayFrom, playPermissions, topCardVisible, type PlayPermission } from './permissions.ts';
-export { landPlaysAllowed, maxHandSize, untapLimits } from './statics.ts';
+export { landPlaysAllowed, untapLimits } from './statics.ts';
 export { playerKeywords, protectionsOf } from './protection.ts';
-export { canPayMana, manaSources, payMana, planManaPayment } from './paycost.ts';
+export { canPayMana, payMana, planManaPayment } from './paycost.ts';
 export { processTriggers, queuedTriggers, triggerSupport, SUPPORTED_MODES, MAX_TRIGGERS_PER_ACTION } from './triggers.ts';
 export {
   activateRestriction, activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,
@@ -62,6 +62,13 @@ export {
 } from './statics.ts';
 
 export { controls, sagaOf, uniqueTriggerSupport } from './turns.ts';
+// Strict rules enforcement (state.strict / state.fixMode): Arena-style legality checks and auto-pay.
+export {
+  abilityUsability, attackError, autoPayPreview, blockError, blockersError, castability, castManaCost, isLandCard, isStrict, fixModeOn,
+  landPlayError, landPlaysLeft, manaSources, MANUAL_ACTIONS, planAutoPay, priorityError, summoningSick,
+} from './strict.ts';
+export { extraLandPlays, maxHandSize, mayPlayPermission } from './statics.ts';
+export { solveMana, parseRequirements, type PayResult, type PaySource } from '../game/manapay.ts';
 export { UNIQUE_APIS, uniqueReason } from './unique-support.ts';
 
 export interface EngineCtx { rng: Rng; lookup: Lookup; now: number }

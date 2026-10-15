@@ -7,7 +7,7 @@ function board(cardId: string, seed: number) {
   const ctx: Ctx = { rng: seeded(seed), lookup: getCard, now: 0 };
   const filler = ['goblin_guide', 'questing_beast', 'thalia_guardian_of_thraben', 'lightning_bolt', 'counterspell'];
   const deck = (x: string[]) => [...x, ...filler, ...Array(40 - x.length - filler.length).fill('basic_mountain')];
-  const g = createGame('g', [{ pid: 'a', name: 'A', deck: deck([cardId]), side: [] }, { pid: 'b', name: 'B', deck: deck([]), side: [] }], 'a', ctx);
+  const g = createGame('g', [{ pid: 'a', name: 'A', deck: deck([cardId]), side: [] }, { pid: 'b', name: 'B', deck: deck([]), side: [] }], 'a', ctx, { strict: false });
   applyAction(g, 'a', { t: 'keep' }, ctx); applyAction(g, 'b', { t: 'keep' }, ctx);
   for (const pid of ['a', 'b']) {
     const p = g.players.find((x) => x.pid === pid)!;

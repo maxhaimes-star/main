@@ -1,9 +1,46 @@
-import { useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { type CardData, type Face, type TokenData, faceOf, tokenFace } from '@ojb/shared';
-import { CUBE, getCard } from '@ojb/shared/src/cube.ts';
-import type { CardInstance } from '@ojb/shared';
+import { CUBE, cardRegistryVersion, getCard, onCardsRegistered, registerCards, setCardResolver } from '@ojb/shared/src/cube.ts';
+import type { CardInstance, CardPayload } from '@ojb/shared';
+import { registerScripts } from '@ojb/shared/src/engine/script.ts';
 
 export { getCard };
+
+// ------------------------------------------------------------- cards outside the built-in cube
+
+/** Register card data the server sent with a room view (database cards + their rules scripts). */
+export function receiveCards(p: CardPayload) {
+  registerScripts(p.scripts ?? {}, p.tokens);
+  registerCards(p.cards ?? {});
+}
+
+// Unknown ids (e.g. an imported cube list in the lobby) are fetched in batches from /api/cards.
+const queued = new Set<string>();
+const requested = new Set<string>();
+let timer: ReturnType<typeof setTimeout> | null = null;
+setCardResolver((id) => {
+  if (requested.has(id) || !id) return undefined;
+  queued.add(id);
+  requested.add(id);
+  timer ??= setTimeout(flushFetch, 30);
+  return undefined;
+});
+async function flushFetch() {
+  timer = null;
+  const ids = [...queued];
+  queued.clear();
+  for (let i = 0; i < ids.length; i += 200) {
+    try {
+      const res = await fetch(`/api/cards?ids=${encodeURIComponent(ids.slice(i, i + 200).join(','))}`);
+      if (res.ok) registerCards(await res.json() as Record<string, CardData>);
+    } catch { /* offline: cards stay as id placeholders */ }
+  }
+}
+
+/** Re-render when new card data arrives. */
+export function useCardRegistry(): number {
+  return useSyncExternalStore(onCardsRegistered, cardRegistryVersion);
+}
 
 // ------------------------------------------------------------- hover preview store
 
@@ -170,6 +207,39 @@ export function PreviewPanel() {
         )}
         {p.extra && <div className="pt-extra">{p.extra}</div>}
       </div>
+    </div>
+  );
+}
+
+
+const PV_TARGETS = '.tcard, .hcard, .stack-item, .zcard, .rv, .pend-card, .zone, .ae-item, .revealed-top, .cube-card';
+
+/** Arena-style large card preview floating next to the cursor (hover any card on the table). */
+export function HoverPreview() {
+  const p = usePreview();
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const over = (e.target as Element | null)?.closest?.(PV_TARGETS);
+      setPos(over ? { x: e.clientX, y: e.clientY } : null);
+    };
+    const hide = () => setPos(null);
+    window.addEventListener('mousemove', move);
+    window.addEventListener('dragstart', hide);
+    window.addEventListener('mousedown', hide);
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('dragstart', hide); window.removeEventListener('mousedown', hide); };
+  }, []);
+  if (!p || !pos) return null;
+  const w = Math.min(300, Math.max(220, innerHeight * 0.36));
+  const h = w * 88 / 63;
+  const right = pos.x < innerWidth / 2;
+  const left = right ? Math.min(pos.x + 28, innerWidth - w - 8) : Math.max(8, pos.x - 28 - w);
+  const top = Math.max(8, Math.min(pos.y - h / 2, innerHeight - h - 8 - (p.extra ? 60 : 0)));
+  return (
+    <div className="hover-preview" style={{ left, top, width: w }}>
+      <CardImage face={p.face} large className="hp-img" />
+      {p.backFace && <CardImage face={p.backFace} className="hp-back" />}
+      {p.extra && <div className="hp-extra">{p.extra}</div>}
     </div>
   );
 }

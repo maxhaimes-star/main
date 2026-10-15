@@ -1,18 +1,12 @@
-// End-to-end smoke test: two browsers draft (with 2 bots), build decks and start a game.
-// Usage: start the server (npm run build && npm start), then: node e2e/smoke.mjs [baseUrl] [outDir]
-import { chromium } from 'playwright';
+// End-to-end smoke test: two browsers draft (with 2 bots), build decks, export, start a (strict) game, play a land, pass turns.
+// Detailed gameplay rules are covered by strict.mjs / engine2.mjs.
+// Usage: node e2e/smoke.mjs [baseUrl] [outDir]
 import fs from 'node:fs';
+import { assert, browser, errors, BASE, OUT, newPage, passUntil, settle, shot, step, handLands, toastText } from './lib.mjs';
 
-const BASE = process.argv[2] ?? 'http://localhost:3001';
-const OUT = process.argv[3] ?? 'test-results';
-fs.mkdirSync(OUT, { recursive: true });
-const exe = process.env.CHROME_PATH ?? (fs.existsSync('/opt/pw-browsers/chromium-1194/chrome-linux/chrome') ? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' : undefined);
-const browser = await chromium.launch({ executablePath: exe });
-const mk = async () => { const c = await browser.newContext({ viewport: { width: 1440, height: 900 } }); const p = await c.newPage(); p.on('pageerror', (e) => console.error('PAGE ERROR', e.message)); return p; };
-const A = await mk();
-const B = await mk();
-const shot = (p, n) => p.screenshot({ path: `${OUT}/${n}.png` });
-const step = (s) => console.log('·', s);
+const A = await newPage();
+const B = await newPage();
+A.setDefaultTimeout(30000); B.setDefaultTimeout(30000);
 
 step('host creates room');
 await A.goto(BASE);
@@ -31,7 +25,7 @@ await A.waitForTimeout(400);
 await shot(A, '01-lobby');
 
 step('start draft (4 seats: 2 humans + 2 bots)');
-await A.getByRole('button', { name: /Start booster draft/ }).click();
+await A.getByRole('button', { name: /Start cube draft/i }).click();
 await A.getByText(/Pack 1\/3/).waitFor();
 await shot(A, '02-draft');
 
@@ -51,7 +45,7 @@ step('drafted 45 cards each');
 
 async function build(p, name) {
   for (let i = 0; i < 23; i++) {
-    await p.locator('.db-main > .pool-summary .pool-stack').first().locator('.cube-card').last().click();
+    await p.locator('.db-main > .pool-summary .pool-stack').first().locator('.cube-card').last().click({ force: true });
   }
   await p.getByRole('button', { name: /Suggest lands/ }).click();
   await p.getByLabel('Deck ready').check();
@@ -64,7 +58,7 @@ await build(B, 'sam');
 step('export XMage deck');
 const [dl] = await Promise.all([A.waitForEvent('download'), A.getByRole('button', { name: 'XMage (.dck)' }).click()]);
 const dck = fs.readFileSync(await dl.path(), 'utf8');
-if (!/^NAME:/.test(dck) || dck.split('\n').length < 10) throw new Error('bad .dck export');
+assert(/^NAME:/.test(dck) && dck.split('\n').length >= 10, 'bad .dck export');
 fs.writeFileSync(`${OUT}/max.dck`, dck);
 
 step('start match');
@@ -74,80 +68,47 @@ await shot(A, '04-mulligan');
 await A.getByRole('button', { name: /^Keep/ }).click();
 await B.getByRole('button', { name: /^Keep/ }).click();
 await A.locator('.center-bar').waitFor();
+await B.locator('.center-bar').waitFor();
 await A.waitForTimeout(500);
 
-// Whoever is active plays a land and passes.
 const active = (await A.locator('.player-area.bottom.active').count()) ? A : B;
 const other = active === A ? B : A;
 step(`active player is ${active === A ? 'Max' : 'Sam'}`);
-const land = active.locator('.hand .hcard').filter({ has: active.locator('img[alt="Plains"], img[alt="Island"], img[alt="Swamp"], img[alt="Mountain"], img[alt="Forest"], .text-card.basic') });
+
+step('strict mode: manual tools are hidden, hand hint says mana is paid automatically');
+assert((await active.getByRole('button', { name: 'Tokens' }).count()) === 0, 'Tokens button must be hidden in strict mode');
+assert(/paid automatically/.test(await active.locator('.hand-hint').innerText()), 'hand hint should describe strict play');
+assert(await active.getByRole('button', { name: 'Fix board', exact: true }).count() === 1, 'Fix board button available');
+
+step('play a land (one per turn)');
 const handBefore = await active.locator('.hand .hcard').count();
-if (await land.count()) {
-  await land.first().click();
-  await active.waitForTimeout(400);
-  if ((await active.locator('.hand .hcard').count()) !== handBefore - 1) throw new Error('land was not played');
-  // tap it for mana
-  await active.locator('.player-area.bottom .bf-row.lands .tcard').first().click();
-  await active.waitForTimeout(300);
-  if (!(await active.locator('.player-area.bottom .mana-pool .pip').count())) throw new Error('tapping the land did not add mana');
-  if (!(await active.locator('.player-area.bottom .bf-row.lands .tcard.tapped').count())) throw new Error('land did not tap');
+let played = false;
+for (const basic of ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest']) {
+  const land = handLands(active, basic);
+  if (await land.count()) { await land.first().click(); played = true; break; }
 }
+await active.waitForTimeout(500);
+if (played) {
+  assert((await active.locator('.hand .hcard').count()) === handBefore - 1, 'land was not played');
+  assert((await active.locator('.player-area.bottom .bf-row.lands .tcard').count()) === 1, 'land should be on the battlefield');
+  assert(/1\/1/.test(await active.locator('.land-plays').innerText()), 'land counter should read 1/1');
+} else step('(note) no basic land in the opening hand, skipping land play');
 await shot(active, '05-game-active');
 await shot(other, '06-game-other');
 
-step('scry 2 via library menu');
-await active.locator('.player-area.bottom .zone.lib').click();
-await active.getByText('Scry X…').click();
-await active.locator('.prompt input').fill('2');
-await active.locator('.prompt').getByRole('button', { name: 'OK', exact: true }).click();
-await active.getByText(/Scry \(2\)/).waitFor();
-await shot(active, '07-scry');
-await active.getByRole('button', { name: 'Done' }).click();
-
-step('make a token');
-await active.locator('.player-area.bottom').getByRole('button', { name: 'Tokens' }).click();
-await active.locator('.modal .zone-grid .zcard').first().click();
-await active.waitForTimeout(400);
-
 step('opponent hand is hidden');
-const oppHandImgs = await other.locator('.player-area.top .hcard img').count();
-if (oppHandImgs) throw new Error('opponent hand visible');
+assert((await other.locator('.player-area.top .hcard img').count()) === 0, 'opponent hand visible');
 
-step('pass priority to next turn');
-for (let i = 0; i < 6; i++) {
-  for (const p of [active, other]) {
-    const ok = p.locator('button.ok');
-    if (await ok.count()) { await ok.click(); await p.waitForTimeout(250); }
-  }
-  if (await other.locator('.player-area.bottom.active').count()) break;
-}
-await active.waitForTimeout(500);
+step('pass priority to the next turn');
+const pages = [active, other];
+await passUntil(pages, async () => (await other.locator('.player-area.bottom.active').count()) > 0, 'other player turn', 60);
+await settle(active, 500);
 await shot(other, '08-next-turn');
 const log = await A.locator('.log-entries').innerText();
 fs.writeFileSync(`${OUT}/game-log.txt`, log);
-console.log(log.split('\n').slice(-12).join('\n'));
-if (!(await other.locator('.player-area.bottom.active').count())) throw new Error('turn did not pass to the other player');
-step('combat: new active player makes a 3/3 and attacks');
-const atk = other, def = active;
-await atk.locator('.player-area.bottom').getByRole('button', { name: 'Tokens' }).click();
-await atk.locator('.modal .zcard').filter({ has: atk.locator('img[alt="Beast"], .text-card:has-text("Beast")') }).first().click();
-await atk.waitForTimeout(300);
-// pass to declare attackers
-for (let i = 0; i < 4 && !(await atk.locator('.phase.current', { hasText: 'Attackers' }).count()); i++) {
-  await atk.locator('button.ok').click(); await atk.waitForTimeout(300);
-}
-await atk.locator('.player-area.bottom .bf-row.creatures .tcard').first().click();
-await atk.waitForTimeout(300);
-await shot(atk, '09-attack');
-await atk.locator('button.ok', { hasText: 'Attack with 1' }).click();
-await def.locator('button.ok', { hasText: 'Confirm blocks' }).click();
-await def.locator('.combat-panel').waitFor();
-await shot(def, '09b-damage');
-for (const p of [atk, def]) { const ok = p.locator('button.ok'); if (await ok.count()) { await ok.click(); await p.waitForTimeout(300); } }
-for (const p of [atk, def]) { const ok = p.locator('button.ok', { hasText: 'Confirm damage' }); if (await ok.count()) { await ok.click(); await p.waitForTimeout(300); } }
-await def.waitForTimeout(500);
-const lifeText = await def.locator('.player-area.bottom .life-num').innerText();
-console.log('defender life', lifeText);
-if (lifeText.trim() !== '17') throw new Error('combat damage not applied');
+console.log(log.split('\n').slice(-8).join('\n'));
+assert(/Land plays|Lands: 0\/1/.test(await other.locator('.land-plays').innerText()), 'new active player has a fresh land drop');
+
 await browser.close();
+if (errors.length) { console.log('page errors:', errors.join('; ')); console.log('SMOKE FAILED'); process.exit(1); }
 console.log('E2E OK');

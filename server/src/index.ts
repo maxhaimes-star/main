@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Server, type Socket } from 'socket.io';
 import type { ClientMsg } from '@ojb/shared';
 import { type RoomRecord, Rooms } from './rooms.ts';
+import { registerCardDbRoutes } from './carddb-routes.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3001);
@@ -64,6 +65,7 @@ app.get('/api/rooms/:id', (req, res) => {
   res.json({ id: rec.state.id, name: rec.state.name, phase: rec.state.phase, players: rec.state.players.map((p) => p.name) });
 });
 app.get('/healthz', (_req, res) => res.send('ok'));
+registerCardDbRoutes(app);
 
 if (fs.existsSync(CLIENT_DIST)) {
   app.use(express.static(CLIENT_DIST, { maxAge: '1h', index: false }));
@@ -74,13 +76,22 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: true }, pingInterval: 10000, pingTimeout: 20000 });
 
 // socket id -> {roomId, pid}
-const sockets = new Map<string, { roomId: string; pid: string; socket: Socket }>();
+// `sent`: card ids whose data this socket already has (see roomcards.ts cardPayload).
+const sockets = new Map<string, { roomId: string; pid: string; socket: Socket; sent: Set<string> }>();
 
 function broadcast(roomId: string) {
   const rec = rooms.rooms.get(roomId);
   if (!rec) return;
-  for (const { roomId: r, pid, socket } of sockets.values()) {
-    if (r === roomId) socket.emit('room', rooms.view(rec, pid));
+  for (const { roomId: r, pid, socket, sent } of sockets.values()) {
+    if (r !== roomId) continue;
+    const view = rooms.view(rec, pid);
+    try {
+      const cards = rooms.cardsFor(rec, view, sent);
+      if (cards) socket.emit('cards', cards);
+    } catch (e) {
+      console.error('card payload failed', e);
+    }
+    socket.emit('room', view);
   }
 }
 
@@ -101,7 +112,7 @@ io.on('connection', (socket) => {
     return;
   }
   const rid = auth.rec.state.id;
-  sockets.set(socket.id, { roomId: rid, pid: auth.pid, socket });
+  sockets.set(socket.id, { roomId: rid, pid: auth.pid, socket, sent: new Set() });
   setConnected(rid, auth.pid);
   broadcast(rid);
 

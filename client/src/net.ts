@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { ClientMsg, RoomView } from '@ojb/shared';
+import type { CardPayload, ClientMsg, RoomView } from '@ojb/shared';
+import { receiveCards } from './cards.tsx';
 
 const KEY = (roomId: string) => `ojb:seat:${roomId}`;
 
@@ -49,6 +50,7 @@ export function useRoom(roomId: string, token: string | null) {
     sock.current = s;
     s.on('connect', () => setConnected(true));
     s.on('disconnect', () => setConnected(false));
+    s.on('cards', (p: CardPayload) => receiveCards(p));
     s.on('room', (v: RoomView) => {
       setView(v);
       setClockSkew(v.serverNow - Date.now());
