@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { NumberField } from '../NumberField.tsx';
 import { effectivePT, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
 import { isStrict, summoningSickNoHaste } from './engine.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
@@ -261,7 +262,7 @@ export function DivideModal({ title, total, targets, validate, onDone }: {
       <div className="divide-list">
         {targets.map((t) => (
           <label key={t.key}>{t.label}
-            <input type="number" min={1} value={vals[t.key]} onChange={(e) => setVals({ ...vals, [t.key]: Math.trunc(Number(e.target.value)) || 0 })} />
+            <NumberField min={0} value={vals[t.key]} onCommit={(n) => setVals((v) => ({ ...v, [t.key]: n }))} />
           </label>
         ))}
       </div>

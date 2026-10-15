@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { NumberField } from './NumberField.tsx';
 import { cubeToText, type RoomSettings } from '@ojb/shared';
 import { CUBE } from '@ojb/shared/src/cube.ts';
 import type { RoomProps } from './Room.tsx';
@@ -27,8 +28,8 @@ export function Lobby({ view, send }: RoomProps) {
   const num = (label: string, key: keyof RoomSettings, min: number, max: number, hint?: string) => (
     <label className="setting">
       <span>{label}{hint && <small className="muted"> {hint}</small>}</span>
-      <input type="number" min={min} max={max} value={s[key] as number} disabled={!isHost}
-        onChange={(e) => set({ [key]: Number(e.target.value) } as Partial<RoomSettings>)} />
+      <NumberField min={min} max={max} value={s[key] as number} disabled={!isHost}
+        onCommit={(n) => set({ [key]: n } as Partial<RoomSettings>)} />
     </label>
   );
 
