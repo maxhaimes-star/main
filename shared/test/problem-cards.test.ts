@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
+  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, matchCard, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -434,5 +434,28 @@ describe('Lightning, Army of One (stagger)', () => {
     drain(g, ctx);
     expect(logText(g)).toMatch(/Lightning Bolt deals 3 damage to Goblin Guide/);
     expect(g.cards[gg].zone).toBe('graveyard');
+  });
+});
+
+describe('Grist, the Hunger Tide', () => {
+  it("is a 1/1 Insect creature card outside the battlefield, a planeswalker (not a creature) on it", () => {
+    const { g, ctx } = setup(['grist_the_hunger_tide', 'grist_the_hunger_tide'], [], 'basic_forest');
+    const [g1, g2] = g.players[0].zones.library.filter((i) => g.cards[i].cardId === 'grist_the_hunger_tide');
+    moveCard(g, ctx, g1, 'graveyard');
+    const f = faceOf(g.cards[g1], getCard);
+    expect(f.types).toContain('Creature');
+    expect(f.types).toContain('Planeswalker');
+    expect(f.typeLine).toMatch(/Insect/);
+    expect(f.power).toBe('1');
+    expect(matchCard(g.cards[g1], 'Creature', { controller: 'a', lookup: getCard })).toBe(true);
+    moveCard(g, ctx, g2, 'battlefield', { controller: 'a' });
+    expect(isCreature(g.cards[g2], getCard, g)).toBe(false);
+    expect(g.cards[g2].counters.loyalty).toBe(3);
+    // -5: each opponent loses life equal to the number of creature cards in your graveyard (Grist counts)
+    g.cards[g2].counters.loyalty = 5;
+    const minus5 = activatedAbilitiesOf('grist_the_hunger_tide', 0).find((a) => a.loyalty === -5)!;
+    act(g, ctx, 'a', { t: 'activate', iid: g2, ability: minus5.index, text: '' });
+    drain(g, ctx);
+    expect(g.players[1].life).toBe(18); // Grist itself died (0 loyalty) before the ability resolved: two creature cards
   });
 });

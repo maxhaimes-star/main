@@ -482,7 +482,7 @@ const CONT_HANDLED_KEYS = new Set([
   'AddKeyword', 'RemoveKeyword', 'AddType', 'RemoveType', 'RemoveCardTypes', 'Condition', 'IsPresent', 'PresentCompare', 'PresentZone',
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone', 'AddAbility',
   // granted triggered abilities (Kaldra Compleat, Nadu): grants.ts foreignTriggers, detected by triggers.ts
-  'AddTrigger',
+  'AddTrigger', 'ExcludeZone',
 ]);
 const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated', 'CantGainLife', 'CastWithFlash',
   // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)
@@ -515,6 +515,8 @@ export function staticGaps(s: Pick<StaticAbility, 'params' | 'svars' | 'modes'> 
       const PERM_KEYS = new Set(['MayPlay', 'MayPlayLimit', 'MayPlayWithoutManaCost', 'MayPlayIgnoreColor', 'MayPlayIgnoreType', 'MayPlayAltManaCost', 'MayPlayPlayer', 'ValidAfterStack', 'MayLookAt', 'AdjustLandPlays', 'SetMaxHandSize', 'Duration']);
       for (const k of Object.keys(p)) if (!CONT_HANDLED_KEYS.has(k) && !((permission || playerRule) && PERM_KEYS.has(k))) gaps.push(k);
       if (outside && !permission) gaps.push(`AffectedZone$ ${p.AffectedZone}`);
+      // ExcludeZone$ Battlefield on Card.Self: a characteristic outside the battlefield (outsideBattlefieldChars, rules.ts faceOf).
+      if (p.ExcludeZone && !(p.ExcludeZone === 'Battlefield' && p.Affected === 'Card.Self' && !!p.AddType)) gaps.push('ExcludeZone');
       if (p.Affected && PLAYER_AFFECTED.test(p.Affected) && !playerRule) gaps.push('player effect');
       if (p.Affected && /ChosenPlayer|ChosenCard|Remembered|ExiledWith|TopLibrary/.test(p.Affected) && !permission) gaps.push(`Affected$ ${p.Affected}`);
       if (p.AffectedDefined && !['Self', 'Equipped', 'Enchanted'].includes(p.AffectedDefined)) gaps.push(`AffectedDefined$ ${p.AffectedDefined}`);
@@ -548,6 +550,27 @@ export function parseStatic(line: string, svars: Record<string, string> = {}): P
 }
 
 // ------------------------------------------------------------------ public queries
+
+const outsideCache = new Map<string, { types: string[]; subtypes: string[]; power?: string; toughness?: string } | null>();
+
+/**
+ * "As long as CARDNAME isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types" (Grist):
+ * S:Mode$ Continuous | Affected$ Card.Self | ExcludeZone$ Battlefield | AddType$ ... | SetPower$ / SetToughness$.
+ * game/rules.ts faceOf applies it to the card in every other zone.
+ */
+export function outsideBattlefieldChars(cardId: string, face: number): { types: string[]; subtypes: string[]; power?: string; toughness?: string } | undefined {
+  const key = `${cardId}|${face}`;
+  if (outsideCache.has(key)) return outsideCache.get(key) ?? undefined;
+  let out: { types: string[]; subtypes: string[]; power?: string; toughness?: string } | null = null;
+  for (const line of getScript(cardId)?.[face]?.statics ?? []) {
+    const p = parseParams(line).params;
+    if (p.Mode !== 'Continuous' || p.Affected !== 'Card.Self' || p.ExcludeZone !== 'Battlefield' || !p.AddType) continue;
+    const added = p.AddType.split('&').map((t) => t.trim()).filter(Boolean);
+    out = { types: added.filter((t) => CARD_TYPES.includes(t)), subtypes: added.filter((t) => !CARD_TYPES.includes(t)), power: p.SetPower, toughness: p.SetToughness };
+  }
+  outsideCache.set(key, out);
+  return out ?? undefined;
+}
 
 /** Condition$ / IsPresent$ / CheckSVar$ of a static line of a card not (necessarily) on the battlefield (alternative costs). */
 export function staticLineActive(st: StaticsState, line: string, svars: Record<string, string>, sourceIid: string, controller: string, lookup: Lookup): Tri {

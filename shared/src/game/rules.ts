@@ -1,7 +1,7 @@
 import { type CardData, type CardFace, type TokenData, parseManaSymbols } from '../cards.ts';
 import type { CardInstance, GameState, ViewCard } from './types.ts';
 import { isHidden } from './types.ts';
-import { type StaticsState, staticMods } from '../engine/statics.ts';
+import { outsideBattlefieldChars, type StaticsState, staticMods } from '../engine/statics.ts';
 import { layerFace } from '../engine/layers.ts';
 import { poolAfter, poolSources, solveMana } from './manapay.ts';
 
@@ -65,6 +65,15 @@ export function faceOf(inst: CardInstance, lookup: Lookup): Face {
   else if (inst.copyOf && inst.zone === 'battlefield') f = printedFace({ ...inst, cardId: inst.copyOf, token: undefined, transformed: inst.copyFace === 1, castAs: undefined }, lookup, !!inst.token);
   else f = printedFace(inst, lookup, !!inst.token);
   if (inst.castInfo?.bestowed && (inst.zone === 'stack' || inst.zone === 'battlefield')) f = bestowedFace(f);
+  if (inst.zone !== 'battlefield' && inst.cardId && !inst.token && !inst.faceDown) {
+    // Grist: "as long as it isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types"
+    const ex = outsideBattlefieldChars(inst.cardId, inst.transformed ? 1 : 0);
+    if (ex) {
+      const [head, sub] = f.typeLine.split(/\s+[—-]\s+/);
+      const typeLine = `${[...head.split(/\s+/), ...ex.types.filter((t) => !head.includes(t))].join(' ')} — ${[...(sub ? sub.split(/\s+/) : []), ...ex.subtypes].join(' ')}`;
+      f = { ...f, types: [...new Set([...f.types, ...ex.types])], typeLine, ...(ex.power != null ? { power: ex.power } : {}), ...(ex.toughness != null ? { toughness: ex.toughness } : {}) };
+    }
+  }
   return inst.copyExtra || inst.animations?.length ? layerFace(f, inst) : f;
 }
 
