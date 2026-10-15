@@ -18,7 +18,7 @@ export function Countdown({ deadline, skew, total }: { deadline: number | null; 
   );
 }
 
-export function PoolSummary({ ids, onClick, title }: { ids: string[]; onClick?: (id: string, index: number) => void; title?: string }) {
+export function PoolSummary({ ids, onClick, title, tapLabel }: { ids: string[]; onClick?: (id: string, index: number) => void; title?: string; tapLabel?: string }) {
   const cards = ids.map((id, i) => ({ id, i, c: getCard(id)! })).filter((x) => x.c);
   const groups = new Map<string, typeof cards>();
   for (const x of cards) {
@@ -34,7 +34,7 @@ export function PoolSummary({ ids, onClick, title }: { ids: string[]; onClick?: 
           <div className={`pool-group-title b-${b}`}>{b} ({groups.get(b)!.length})</div>
           <div className="pool-stack">
             {groups.get(b)!.sort((x, y) => x.c.cmc - y.c.cmc || x.c.name.localeCompare(y.c.name)).map((x) => (
-              <CubeCard key={`${x.id}-${x.i}`} id={x.id} onClick={onClick ? () => onClick(x.id, x.i) : undefined} />
+              <CubeCard key={`${x.id}-${x.i}`} id={x.id} onClick={onClick ? () => onClick(x.id, x.i) : undefined} tapLabel={tapLabel} />
             ))}
           </div>
         </div>
@@ -82,14 +82,14 @@ export function Draft({ view, send, skew }: RoomProps) {
         </div>
         {d.pack ? (
           <>
-            <p className="muted">Click a card to select it, then click again (or double-click) to pick. {d.queued > 0 && <b>{d.queued} more pack(s) waiting for you.</b>}</p>
+            <p className="muted"><span className="hide-touch">Click a card to select it, then click again (or double-click) to pick.</span><span className="show-touch">Tap a card to zoom in, then tap Pick.</span> {d.queued > 0 && <b>{d.queued} more pack(s) waiting for you.</b>}</p>
             <div className="card-grid">
               {d.pack.map((id, i) => (
                 <CubeCard key={`${id}-${i}`} id={id} className={sel === id ? 'selected' : ''}
-                  onClick={() => (sel === id ? pick(id) : setSel(id))} />
+                  onClick={() => (sel === id ? pick(id) : setSel(id))} tapLabel="Pick" tapAction={() => pick(id)} />
               ))}
             </div>
-            {sel && <button className="primary big" onClick={() => pick(sel)}>Pick {getCard(sel)?.name}</button>}
+            {sel && <div className="sticky-actions"><button className="primary big" onClick={() => pick(sel)}>Pick {getCard(sel)?.name}</button></div>}
           </>
         ) : (
           <div className="center-msg">Waiting for the next pack… {players.filter((p) => d.waiting[p.seat] > 0).map((p) => p.name).join(', ') && `(still picking: ${players.filter((p) => d.waiting[p.seat] > 0).map((p) => p.name).join(', ')})`}</div>

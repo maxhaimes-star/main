@@ -49,12 +49,12 @@ export function Auction({ view, send, skew }: RoomProps) {
                 </div>
                 <Countdown deadline={a.lot.deadline} skew={skew} total={st.auctionTimer * 1000} />
                 {me && (
-                  <div className="bid-buttons">
+                  <div className="bid-buttons sticky-actions">
                     {[1, 2, 5, 10].map((inc) => {
                       const amt = (high?.amount ?? 0) + inc;
                       return <button key={inc} className={inc === 1 ? 'primary' : ''} disabled={!canBid || amt > budget} onClick={() => bid(amt)}>Bid {amt}</button>;
                     })}
-                    <input type="number" placeholder="amount" value={custom} min={minBid} max={budget} onChange={(e) => setCustom(e.target.value)}
+                    <input type="number" inputMode="numeric" placeholder="amount" value={custom} min={minBid} max={budget} onChange={(e) => setCustom(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter' && custom) bid(Number(custom)); }} />
                     <button disabled={!canBid || !custom} onClick={() => bid(Number(custom))}>Bid</button>
                     <button className="pass-btn" disabled={isHigh || iPassed} onClick={() => send({ t: 'passLot' })}>{iPassed ? 'Passed' : 'Pass'}</button>
@@ -76,8 +76,8 @@ export function Auction({ view, send, skew }: RoomProps) {
                   {picked && (
                     <div className="nominate-panel">
                       <h3>{getCard(picked)?.name}</h3>
-                      <div className="bid-buttons">
-                        <input type="number" value={openAt} min={st.auctionMinBid} max={budget} onChange={(e) => setOpenAt(e.target.value)} />
+                      <div className="bid-buttons sticky-actions">
+                        <input type="number" inputMode="numeric" value={openAt} min={st.auctionMinBid} max={budget} onChange={(e) => setOpenAt(e.target.value)} />
                         <button className="primary" disabled={!(Number(openAt) >= st.auctionMinBid && Number(openAt) <= budget)}
                           onClick={() => send({ t: 'nominate', cardId: picked, amount: Number(openAt) })}>Open at ${openAt || '?'}</button>
                         <button className="skip-btn" onClick={() => send({ t: 'skipLot', cardId: picked })}>Skip (discard)</button>
@@ -94,7 +94,7 @@ export function Auction({ view, send, skew }: RoomProps) {
         <h3>Open pack</h3>
         <div className="card-grid">
           {a.open.map((id, i) => (
-            <CubeCard key={`${id}-${i}`} id={id} className={`${myTurn ? 'clickable' : ''} ${picked === id ? 'selected' : ''}`} onClick={myTurn ? () => setPicked(id) : undefined}
+            <CubeCard key={`${id}-${i}`} id={id} className={`${myTurn ? 'clickable' : ''} ${picked === id ? 'selected' : ''}`} onClick={myTurn ? () => setPicked(id) : undefined} tapLabel="Choose this card"
               title={myTurn ? 'Select this card' : undefined} />
           ))}
         </div>

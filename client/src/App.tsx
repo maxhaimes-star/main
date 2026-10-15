@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Home } from './Home.tsx';
 import { Room } from './Room.tsx';
+import { SheetHost } from './sheet.tsx';
 
 function useRoute() {
   const [path, setPath] = useState(location.pathname);
@@ -20,6 +21,5 @@ export function navigate(to: string) {
 export function App() {
   const path = useRoute();
   const m = /^\/r\/([a-z0-9]+)/i.exec(path);
-  if (m) return <Room roomId={m[1].toLowerCase()} />;
-  return <Home />;
+  return <>{m ? <Room roomId={m[1].toLowerCase()} /> : <Home />}<SheetHost /></>;
 }

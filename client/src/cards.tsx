@@ -3,6 +3,8 @@ import { type CardData, type Face, type TokenData, faceOf, tokenFace } from '@oj
 import { CUBE, cardRegistryVersion, getCard, onCardsRegistered, registerCards, setCardResolver } from '@ojb/shared/src/cube.ts';
 import type { CardInstance, CardPayload } from '@ojb/shared';
 import { registerScripts } from '@ojb/shared/src/engine/script.ts';
+import { isTouch } from './touch.ts';
+import { showSheet, type SheetItem } from './sheet.tsx';
 
 export { getCard };
 
@@ -148,15 +150,29 @@ export function CardBack({ className, style, label }: { className?: string; styl
   return <div className={`card-img card-back ${className ?? ''}`} style={style}><span>{label ?? '🍊'}</span></div>;
 }
 
-/** Simple clickable cube card (draft, deckbuilder). */
-export function CubeCard({ id, onClick, className, children, title }: { id: string; onClick?: (e: React.MouseEvent) => void; className?: string; children?: ReactNode; title?: string }) {
+/**
+ * Simple clickable cube card (draft, deckbuilder). On touch devices a tap opens the zoom sheet (large image) instead:
+ * `tapLabel` names the sheet's button (running `tapAction`, default: the card's onClick); without it the sheet is zoom-only.
+ */
+export function CubeCard({ id, onClick, className, children, title, tapLabel, tapAction, tapItems }: {
+  id: string; onClick?: (e: React.MouseEvent) => void; className?: string; children?: ReactNode; title?: string;
+  tapLabel?: string; tapAction?: () => void; tapItems?: SheetItem[];
+}) {
   const card = getCard(id);
   if (!card) return <div className="cube-card missing">{id}</div>;
   const face = cardFace(card);
+  const click = (e: React.MouseEvent) => {
+    if (isTouch()) {
+      const items: SheetItem[] = tapItems ?? (onClick ? [{ label: tapLabel ?? 'Select', primary: true, onClick: () => (tapAction ? tapAction() : onClick(e)) }] : []);
+      showSheet({ face, backFace: backFaceOf(card), items });
+      return;
+    }
+    onClick?.(e);
+  };
   return (
     <div
       className={`cube-card ${className ?? ''}`}
-      onClick={onClick}
+      onClick={onClick || isTouch() ? click : undefined}
       title={title}
       onMouseEnter={() => setPreview({ face, backFace: backFaceOf(card) })}
     >
@@ -219,6 +235,7 @@ export function HoverPreview() {
   const p = usePreview();
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
+    if (isTouch()) return; // phones have no hover: cards open a bottom sheet instead
     const move = (e: MouseEvent) => {
       const over = (e.target as Element | null)?.closest?.(PV_TARGETS);
       setPos(over ? { x: e.clientX, y: e.clientY } : null);

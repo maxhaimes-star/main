@@ -83,19 +83,19 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <Curve cards={mainCards} />
           <label className="ready"><input type="checkbox" checked={ready} onChange={(e) => setReady(e.target.checked)} /> Deck ready</label>
         </div>
-        <p className="muted">Click cards in your pool to add them; click cards in your deck to take them out.</p>
+        <p className="muted"><span className="hide-touch">Click cards in your pool to add them; click cards in your deck to take them out.</span><span className="show-touch">Tap a card to zoom, then Add to / Remove from deck.</span></p>
         <div className="db-columns">
           {columns.map((col) => (
             <div key={col.label} className="db-col">
               <div className="db-col-title">{col.label} <small>({col.cards.length})</small></div>
               {col.cards.sort((x, y) => Number(y.c.types.includes('Creature')) - Number(x.c.types.includes('Creature')) || x.c.name.localeCompare(y.c.name)).map(({ c, i }) => (
-                <CubeCard key={`${c.id}-${i}`} id={c.id} onClick={() => toSide(i)} className="stacked" />
+                <CubeCard key={`${c.id}-${i}`} id={c.id} onClick={() => toSide(i)} className="stacked" tapLabel="Remove from deck" />
               ))}
             </div>
           ))}
           <div className="db-col">
             <div className="db-col-title">Lands <small>({landCol.length + basicsCount})</small></div>
-            {landCol.map(({ c, i }) => <CubeCard key={`${c.id}-${i}`} id={c.id} onClick={() => toSide(i)} className="stacked" />)}
+            {landCol.map(({ c, i }) => <CubeCard key={`${c.id}-${i}`} id={c.id} onClick={() => toSide(i)} className="stacked" tapLabel="Remove from deck" />)}
           </div>
         </div>
         <div className="basics">
@@ -111,7 +111,7 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <button onClick={() => setDeck((d) => ({ ...d, basics: suggestBasics(d.main) }))}>Suggest lands (to 40)</button>
           <button onClick={() => setDeck((d) => ({ ...d, basics: { W: 0, U: 0, B: 0, R: 0, G: 0 } }))}>Clear</button>
         </div>
-        <PoolSummary ids={side} title="Pool / sideboard" onClick={(id) => toMain(id)} />
+        <PoolSummary ids={side} title="Pool / sideboard" onClick={(id) => toMain(id)} tapLabel="Add to deck" />
       </div>
       <div className="side">
         <PreviewPanel />

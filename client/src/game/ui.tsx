@@ -3,6 +3,7 @@ import { NumberField } from '../NumberField.tsx';
 import { effectivePT, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
 import { isStrict, summoningSickNoHaste } from './engine.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
+import { isTouch, useLongPress } from '../touch.ts';
 
 // ---------------------------------------------------------------- context
 
@@ -43,6 +44,10 @@ export interface GameCtx {
   pickOption: (title: string, options: PickOption[]) => Promise<string | null>;
   /** Split `total` among targets (divided damage): resolves to key -> amount, or null if cancelled. */
   divide: (title: string, total: number | undefined, targets: { key: string; label: string }[], validate: (d: Record<string, number>) => string | null) => Promise<Record<string, number> | null>;
+  /** Touch: open the bottom sheet (large image + actions) for a card. */
+  showCardSheet: (iid: string) => void;
+  /** Touch: single tap opens the sheet, double-tap runs the default action. */
+  tapCard: (iid: string) => void;
   openZone: (pid: string, zone: 'graveyard' | 'exile' | 'sideboard' | 'command' | 'hand') => void;
   openTokens: () => void;
   menuFor: (iid: string) => MenuItem[];
@@ -70,8 +75,9 @@ export const useGame = () => useContext(Ctx);
 // ---------------------------------------------------------------- card on the table
 
 export function TableCard({ iid, small, attachments }: { iid: string; small?: boolean; attachments?: string[] }) {
-  const { g, me, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets, payPreview } = useGame();
+  const { g, me, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets, payPreview, tapCard } = useGame();
   const c = g.cards[iid];
+  const lp = useLongPress((x, y) => { const cc = g.cards[iid]; if (cc) openMenu(x, y, menuFor(iid), isHidden(cc) ? undefined : faceOf(cc, getCard).name); });
   if (!c) return null;
   const hidden = isHidden(c);
   const face = !hidden ? faceOf(c, getCard) : null;
@@ -97,12 +103,19 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
     <div
       className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || hoverTargets.includes(iid) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''} ${payPreview.includes(iid) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''}`}
       data-iid={iid}
-      draggable={!hidden || c.faceDown}
+      draggable={!isTouch() && (!hidden || c.faceDown)}
+      {...lp.props}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); e.dataTransfer.effectAllowed = 'move'; }}
       onMouseEnter={() => face && !c.faceDown ? setPreview({ face, extra: describe(c) }) : face ? setPreview({ face, extra: 'Face down (only you can see this). ' + describe(c) }) : undefined}
       onMouseLeave={(e) => { e.stopPropagation(); setPreview(null); }}
-      onClick={(e) => { e.stopPropagation(); if (targeting) pickTarget({ kind: 'card', iid }); else defaultAction(iid); }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openMenu(e.clientX, e.clientY, menuFor(iid), face?.name); }}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (lp.consumed()) return;
+        if (targeting) pickTarget({ kind: 'card', iid });
+        else if (isTouch() && !mode) tapCard(iid);
+        else defaultAction(iid);
+      }}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!isTouch()) openMenu(e.clientX, e.clientY, menuFor(iid), face?.name); }}
     >
       {attachments?.map((a, i) => (
         <div key={a} className="attachment" style={{ top: `${-14 * (i + 1)}px` }}><TableCard iid={a} small /></div>
@@ -128,7 +141,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
   );
 }
 
-function describe(c: ViewCard): string {
+export function describe(c: ViewCard): string {
   if (isHidden(c)) return '';
   const parts: string[] = [];
   const ctr = Object.entries(c.counters).map(([k, v]) => `${v}× ${k}`);
@@ -155,11 +168,11 @@ export function ContextMenu({ x, y, items, title, onClose }: { x: number; y: num
     setPos({ x: Math.max(4, Math.min(x, innerWidth - r.width - 8)), y: Math.max(4, Math.min(y, innerHeight - r.height - 8)) });
   }, [x, y]);
   useEffect(() => {
-    const close = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
+    const close = (e: Event) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    setTimeout(() => window.addEventListener('mousedown', close), 0);
+    setTimeout(() => { window.addEventListener('mousedown', close); window.addEventListener('touchstart', close); }, 0);
     window.addEventListener('keydown', esc);
-    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc); };
+    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('touchstart', close); window.removeEventListener('keydown', esc); };
   }, [onClose]);
   return (
     <div ref={ref} className="ctx-menu" style={{ left: pos.x, top: pos.y }}>
