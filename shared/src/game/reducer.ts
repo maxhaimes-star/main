@@ -17,7 +17,7 @@ import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
 import { enforceAttackRequirements, enforceBlockRestrictions, takeExtraCombat } from '../engine/combat-rules.ts';
 import { noteTapped } from '../engine/manatriggers.ts';
 import {
-  answerStrictPending, attackError, blockError, blockersError, castManaCost, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
+  answerStrictPending, attackError, blockError, blockersError, castHelp, castManaCost, reduceGeneric, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
   isLandCard, landPlayError, planAutoPay, strictActionError, summoningSick,
 } from '../engine/strict.ts';
 import { maxHandSize, mayPlayPermission } from '../engine/statics.ts';
@@ -678,7 +678,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         // Rules-enforced: the mana must be paid — pool first, then untapped sources (Arena-style auto-pay).
         if (c.zone !== 'hand' && !['flashback', 'escape', 'madness'].includes(prep.plan.def.id) && mayPlayPermission(state, c.iid, pid, ctx.lookup, state.remembered)?.free) prep.plan.mana = '';
         const cost = castManaCost(state, pid, c, a.face, prep.plan.mana, { delve: prep.plan.def.delve, x: prep.plan.x, faceDown: !!a.faceDown }, ctx.lookup);
-        strictPay = planAutoPay(state, pid, cost, prep.plan.x, ctx.lookup);
+        strictPay = planAutoPay(state, pid, cost, prep.plan.x, ctx.lookup, undefined, a.faceDown ? undefined : castHelp(c, a.face));
         if (!strictPay && !fixModeOn(state)) return `Not enough mana to cast ${a.faceDown ? 'that' : cardName(c, ctx.lookup)} (${cost || '{0}'})`;
         if (prep.plan.def.delve) {
           // Delve: mana is paid after the exile choices (engine/costs.ts finishCosts auto-taps then).
@@ -703,7 +703,10 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         c.castAs = undefined;
       }
       const face = faceOf(c, ctx.lookup);
-      if (strictPay) executeAutoPay(state, ctx, pid, strictPay);
+      if (strictPay) {
+        const helped = executeAutoPay(state, ctx, pid, strictPay, castHelp(c, a.face)); // Improvise / Convoke taps pay generic mana
+        if (helped) prep.plan.mana = reduceGeneric(prep.plan.mana, helped, prep.plan.x);
+      }
       const payment = payCastMana(state, me, c, prep.plan, ctx.lookup); // cost option + static cost changes (Thalia ...)
       const paid = payment.note;
       const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid: c.iid, controller: pid, text: a.faceDown ? 'Face-down spell' : face.name, x: a.x };

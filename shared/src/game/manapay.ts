@@ -53,8 +53,11 @@ export function parseRequirements(cost: string, x = 0): { reqs: Req[]; generic: 
 
 const MAX_NODES = 20000;
 
-/** Find a payment. `maxLife`: life that may be paid for Phyrexian symbols. */
-export function solveMana(cost: string, x: number, sources: PaySource[], maxLife = Infinity): PayResult | null {
+/**
+ * Find a payment. `maxLife`: life that may be paid for Phyrexian symbols. `maxHelp`: how many "helper" units
+ * (produces '*': an artifact / creature tapped for Improvise, Convoke or Waterbend — generic mana only) may be used.
+ */
+export function solveMana(cost: string, x: number, sources: PaySource[], maxLife = Infinity, maxHelp = Infinity): PayResult | null {
   const parsed = parseRequirements(cost, x);
   if (!parsed) return null;
   const { reqs, generic } = parsed;
@@ -85,8 +88,10 @@ export function solveMana(cost: string, x: number, sources: PaySource[], maxLife
         .map((s) => ({ s, o: [...s.options].sort((a, b) => a.penalty - b.penalty || b.produces.length - a.produces.length)[0] }))
         .filter((e) => e.o && e.o.produces.length > 0)
         .sort((a, b) => a.o.penalty - b.o.penalty || (flex.get(a.s.key)! - flex.get(b.s.key)!) || b.o.produces.length - a.o.produces.length);
+      let helped = 0;
       for (const { s, o } of free) {
         if (need <= 0) break;
+        if (o.produces === '*') { if (helped >= maxHelp) continue; helped++; }
         extra.push({ key: s.key, option: o });
         need -= o.produces.length;
       }

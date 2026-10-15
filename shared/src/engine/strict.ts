@@ -22,7 +22,8 @@ import { isHidden } from '../game/types.ts';
 import { castOptions } from './costs.ts';
 import { activateMana, manaPlansFor } from './mana.ts';
 import { stateBasedActions } from './resolve.ts';
-import { abilityAt, abilityLine, scriptRef } from './script.ts';
+import { abilityAt, abilityLine, getScript, scriptRef } from './script.ts';
+import { noteTapped } from './manatriggers.ts';
 import { activateRestriction, adjustCost, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
 import { activationError, castTimingError } from './timing.ts';
 
@@ -104,21 +105,87 @@ export function manaSources(state: AnyState, pid: string, lookup: Lookup = getCa
   return out;
 }
 
-/** Plan paying `cost` (pool first, then untapped sources). null = can't be paid. */
-export function planAutoPay(state: AnyState, pid: string, cost: string, x: number, lookup: Lookup = getCard, exclude: Set<string> = new Set()): PayResult | null {
+/**
+ * Permanents that may be tapped to help pay generic mana: Improvise (artifacts), Convoke (creatures), Waterbend
+ * (artifacts and creatures, up to the waterbend amount). Each tapped one pays for {1}.
+ */
+export interface PayHelp { artifacts?: boolean; creatures?: boolean; max?: number; label: string }
+
+/** Improvise / Convoke on the card being cast (script K: lines). */
+export function castHelp(c: CardInstance, face?: number): PayHelp | undefined {
+  const ref = c.cardId ? { cardId: c.cardId, face: face ?? 0 } : undefined;
+  const kws = ref ? getScript(ref.cardId)?.[ref.face]?.keywords ?? [] : [];
+  const improvise = kws.includes('Improvise'), convoke = kws.includes('Convoke');
+  if (!improvise && !convoke) return undefined;
+  return { artifacts: improvise, creatures: convoke, label: improvise && convoke ? 'improvise / convoke' : improvise ? 'improvise' : 'convoke' };
+}
+
+/** Waterbend<N> in an ability cost: N generic mana that untapped artifacts / creatures may help pay. */
+export function waterbendOf(cost: string): number {
+  let n = 0;
+  for (const m of cost.matchAll(/\bWaterbend<(\d+)>/g)) n += parseInt(m[1], 10);
+  return n;
+}
+
+const HELP_OPTION = 'help';
+
+function helpSources(state: AnyState, pid: string, help: PayHelp, lookup: Lookup, exclude: Set<string>, sources: PaySource[]): PaySource[] {
+  const byKey = new Map(sources.map((s) => [s.key, s]));
+  const out = sources.map((s) => ({ ...s, options: [...s.options] }));
+  const outByKey = new Map(out.map((s) => [s.key, s]));
+  for (const iid of state.battlefield) {
+    if (exclude.has(iid)) continue;
+    const c = visibleCard(state, iid);
+    if (!c || c.controller !== pid || c.tapped) continue;
+    const creature = isCreature(c, lookup, state as StaticsState);
+    const artifact = faceOf(c, lookup).types.includes('Artifact');
+    if (!((help.artifacts && artifact) || (help.creatures && creature))) continue;
+    const opt = { id: HELP_OPTION, produces: '*', penalty: creature ? 4 : 2 };
+    if (byKey.has(iid)) outByKey.get(iid)!.options.push(opt);
+    else out.push({ key: iid, options: [opt] });
+  }
+  return out;
+}
+
+/** Plan paying `cost` (pool first, then untapped sources; `help`: Improvise / Convoke / Waterbend). null = can't be paid. */
+export function planAutoPay(state: AnyState, pid: string, cost: string, x: number, lookup: Lookup = getCard, exclude: Set<string> = new Set(), help?: PayHelp): PayResult | null {
   const p = state.players.find((q) => q.pid === pid);
   if (!p) return null;
   if (!parseManaSymbols(cost).length) return { picks: [], lifePaid: 0, spent: [] };
-  return solveMana(cost, x, [...poolSources(p.manaPool), ...manaSources(state, pid, lookup, exclude)], p.life);
+  let sources = [...poolSources(p.manaPool), ...manaSources(state, pid, lookup, exclude)];
+  if (help && (help.max ?? 1) > 0) sources = helpSources(state, pid, help, lookup, exclude, sources);
+  return solveMana(cost, x, sources, p.life, help?.max ?? Infinity);
 }
 
-/** Activate the mana abilities a plan picked (mana goes to the pool; the caller then pays from the pool). */
-export function executeAutoPay(state: GameState, ctx: Ctx, pid: string, plan: PayResult) {
+/**
+ * Activate the mana abilities a plan picked (mana goes to the pool; the caller then pays from the pool).
+ * Permanents tapped to help (Improvise / Convoke / Waterbend) are tapped here: returns how many generic mana they paid,
+ * which the caller removes from the cost before paying the rest from the pool (reduceGeneric).
+ */
+export function executeAutoPay(state: GameState, ctx: Ctx, pid: string, plan: PayResult, help?: PayHelp): number {
+  let helped = 0;
+  const names: string[] = [];
   for (const pk of plan.picks) {
     if (pk.pool) continue;
+    if (pk.option === HELP_OPTION) {
+      const c = state.cards[pk.key];
+      if (!c || c.tapped || c.zone !== 'battlefield') continue;
+      c.tapped = true;
+      noteTapped(state, c.iid, pid);
+      names.push(cardName(c, ctx.lookup));
+      helped++;
+      continue;
+    }
     const err = activateMana(state, ctx, pid, { t: 'activateMana', iid: pk.key, option: pk.option });
     if (err) log(state, ctx, pid, `Auto-pay: ${err}`);
   }
+  if (helped) log(state, ctx, pid, `${player(state, pid).name} taps ${names.join(', ')} (${help?.label ?? 'help'}: pays {${helped}}).`);
+  return helped;
+}
+
+/** Remove up to `n` generic mana from a cost (X counts as generic = x). */
+export function reduceGeneric(mana: string, n: number, x: number): string {
+  return n > 0 ? reduceGenericBy(mana, n, x) : mana;
 }
 
 /** Tap sources for `cost` if the pool doesn't cover it. Returns false if it can't be paid. */
@@ -183,7 +250,7 @@ export function autoPayPreview(state: AnyState, pid: string, iid: string, face?:
   const free = c.zone !== 'hand' ? mayPlayPermission(state as StaticsState, iid, pid, lookup, asGame(state).remembered)?.free : false;
   const delve = opt.extra.some((e) => /^Delve/.test(e));
   const cost = free ? '' : castManaCost(state, pid, c, face, opt.cost, { delve, x: x ?? 0 }, lookup);
-  const plan = planAutoPay(state, pid, cost, x ?? 0, lookup);
+  const plan = planAutoPay(state, pid, cost, x ?? 0, lookup, undefined, castHelp(c, face));
   if (!plan) return { ok: false, taps: [], reason: 'Not enough mana', cost };
   return { ok: true, taps: plan.picks.filter((p) => !p.pool).map((p) => ({ iid: p.key, mana: p.produces })), cost, ...(plan.lifePaid ? { life: plan.lifePaid } : {}) };
 }
@@ -251,6 +318,7 @@ function abilityCost(cost: string, x: number): AbilityCost {
   for (const tok of cost.match(/\S+<[^>]*>|\S+/g) ?? []) {
     let m: RegExpExecArray | null;
     if (/^(\d+|[WUBRGCSX]|[WUBRG2]\/[WUBRGP])$/.test(tok)) out.mana += `{${tok === 'X' ? x : tok}}`;
+    else if ((m = /^Waterbend<(\d+)>$/.exec(tok))) out.mana += `{${m[1]}}`;
     else if (tok === 'T') out.tap = true;
     else if (tok === 'Q') out.untap = true;
     else if ((m = /^SubCounter<(\d+|X)\/([A-Za-z0-9]+)>$/.exec(tok))) {
@@ -272,7 +340,8 @@ export function abilityPayment(state: AnyState, pid: string, c: CardInstance, co
   if (!parsed.mana) return { plan: null, mana: '' };
   const mana = adjustCost(state as StaticsState, c, pid, parsed.mana, 'Ability', lookup).cost;
   const exclude = new Set(parsed.tap || /\bSac<1\/(CARDNAME|Self|NICKNAME)>/.test(cost) ? [c.iid] : []);
-  const plan = planAutoPay(state, pid, mana, x, lookup, exclude);
+  const wb = waterbendOf(cost);
+  const plan = planAutoPay(state, pid, mana, x, lookup, exclude, wb ? { artifacts: true, creatures: true, max: wb, label: 'waterbend' } : undefined);
   if (!plan) return { error: 'Not enough mana' };
   return { plan, mana };
 }

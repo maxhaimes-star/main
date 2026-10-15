@@ -12,7 +12,7 @@ import { activateRestriction, adjustCost } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 import { isUniqueCost, payUniqueCosts, uniqueActivationError, uniqueCostError } from './turns.ts';
-import { abilityPayment, executeAutoPay } from './strict.ts';
+import { abilityPayment, executeAutoPay, reduceGeneric, waterbendOf } from './strict.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
 type ActivateAction = Extract<GameAction, { t: 'activate' }>;
@@ -130,8 +130,9 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const num = (v: string) => (v === 'X' ? x : parseInt(v, 10) || 0);
 
   // ---- plan costs (validate first, then pay)
-  // Waterbend {N}: paid as generic mana (tapping artifacts / creatures for it isn't offered).
-  const cost = (ab.params.Cost ?? '').replace(/\bWaterbend<(\d+)>/g, '$1');
+  // Waterbend {N}: N generic mana; in strict mode untapped artifacts / creatures may help pay it (engine/strict.ts).
+  const rawCost = ab.params.Cost ?? '';
+  const cost = rawCost.replace(/\bWaterbend<(\d+)>/g, '$1');
   const tokens = cost.match(/\S+<[^>]*>|\S+/g) ?? [];
   let mana = '';
   let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false, discardSelf = false;
@@ -163,7 +164,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   // Strict mode (engine/strict.ts): {T} needs no summoning sickness; mana is auto-paid (pool, then untapped sources).
   let strictPlan: import('../game/manapay.ts').PayResult | null = null;
   if (state.strict) {
-    const pay = abilityPayment(state, pid, c, cost, x, ctx.lookup);
+    const pay = abilityPayment(state, pid, c, rawCost, x, ctx.lookup);
     if ('error' in pay) { if (!(state.fixMode?.on && a.force)) return pay.error; }
     else strictPlan = pay.plan;
   }
@@ -174,9 +175,11 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (tap) c.tapped = true;
   if (untap) c.tapped = false;
   if (mana) {
-    if (strictPlan) executeAutoPay(state, ctx, pid, strictPlan);
+    const wb = waterbendOf(rawCost);
+    const helped = strictPlan ? executeAutoPay(state, ctx, pid, strictPlan, { label: 'waterbend' }) : 0;
     const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
     if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
+    if (helped) mana = reduceGeneric(mana, Math.min(helped, wb), x);
     const paid = payFromPool(mana, me.manaPool, x);
     if (paid) { me.manaPool = paid.pool; if (paid.lifePaid) { me.life -= paid.lifePaid; notes.push(`paid ${paid.lifePaid} life`); } }
     else notes.push('mana not deducted');

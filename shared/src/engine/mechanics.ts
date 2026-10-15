@@ -11,6 +11,8 @@ export const HANDLED_KEYWORDS = new Set([
   'Cycling', 'TypeCycling', 'Equip', 'Reconfigure', 'Level up', 'Crew', 'Ninjutsu', 'Chapter', 'Hideaway',
   'ETBReplacement', 'etbCounter', 'Enchant',
   'Flashback', 'Evoke', 'Overload', 'Kicker', 'Escape', 'Dash', 'Buyback', 'Delve', 'Surge',
+  // Strict auto-pay taps untapped artifacts for generic mana (engine/strict.ts castHelp).
+  'Improvise',
   // Triggered keywords synthesized as triggers (engine/kwtriggers.ts), rebound (resolve.ts).
   ...TRIGGER_KEYWORDS,
   // Splice onto Arcane: the cube's only Arcane spell is Through the Breach itself, so there is nothing to splice onto.
