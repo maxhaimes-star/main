@@ -74,7 +74,9 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
   const pt = !hidden && isCreature ? effectivePT(c, getCard, g) : null;
   const basePT = face && face.power != null ? `${face.power}/${face.toughness}` : null;
   const ptChanged = pt && basePT !== `${pt[0]}/${pt[1]}`;
-  const counters = Object.entries(c.counters);
+  const isSaga = !!face && /\bSaga\b/.test(face.typeLine ?? '');
+  const lore = isSaga ? c.counters.lore ?? 0 : 0;
+  const counters = Object.entries(c.counters).filter(([k, v]) => !(isSaga && k === 'lore' && v > 0));
   const damage = isHidden(c) ? 0 : c.damage;
   const lethal = pt && damage > 0 && damage >= pt[1];
   const targeting = mode?.kind === 'target';
@@ -99,6 +101,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
       {hidden || c.faceDown ? <CardBack label={c.faceDown && !hidden ? '↓' : undefined} /> : <CardImage face={face!} />}
       {c.faceDown && !hidden && <div className="facedown-peek">{face!.name}</div>}
       <div className="overlays">
+        {lore > 0 && <div className="saga-chapter" title={`${lore} lore counter${lore === 1 ? '' : 's'}`}>Chapter {lore}</div>}
         {counters.length > 0 && (
           <div className="counters">{counters.map(([k, v]) => <span key={k} className={`ctr ctr-${k.replace(/[^a-z]/gi, '')}`}>{k === 'loyalty' ? '◆' : `${k} `}{v}</span>)}</div>
         )}

@@ -9,6 +9,9 @@ import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl }
 import { castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 
+/** Actions never performed on behalf of a controlled player (see engine/turns.ts NEVER_ROUTED); also allowed while controlled. */
+const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom']);
+
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
 
 export function GameScreen({ view, send, match, onLeave }: RoomProps & { match: MatchView; onLeave?: () => void }) {
@@ -42,7 +45,13 @@ export function GameScreen({ view, send, match, onLeave }: RoomProps & { match: 
 }
 
 function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & { match: MatchView; g: GameView; onLeave?: () => void }) {
-  const me = g.me;
+  const realMe = g.me;
+  const cb = g.controlledBy?.active ? g.controlledBy : null;
+  const controlling = !!cb && !!realMe && cb.by === realMe; // Mindslaver: I make this player's decisions
+  const controlled = !!cb && !!realMe && cb.pid === realMe; // my turn is being controlled
+  const [actAsOn, setActAsOn] = useState(true);
+  const actAs = controlling && actAsOn ? cb!.pid : null;
+  const me = actAs ?? realMe;
   const self = me ?? g.players[0].pid;
   const opp = g.players.find((p) => p.pid !== self)!.pid;
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; title?: string } | null>(null);
@@ -62,7 +71,11 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const toast = useCallback((msg: string) => { setToastMsg(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToastMsg(null), 2200); }, []);
 
   const [forceAsk, setForceAsk] = useState<{ error: string; resolve: (yes: boolean) => void } | null>(null);
-  const rawAct = useCallback((action: GameAction) => send({ t: 'game', matchId: match.id, action }) as Promise<string | null>, [send, match.id]);
+  const rawAct = useCallback(async (action: GameAction): Promise<string | null> => {
+    if (controlled && !FREE_ACTIONS.has(action.t)) return `${g.players.find((p) => p.pid === cb!.by)?.name ?? 'Someone'} controls your turn`;
+    const a = actAs && !FREE_ACTIONS.has(action.t) && !action.as ? { ...action, as: actAs } as GameAction : action;
+    return send({ t: 'game', matchId: match.id, action: a }) as Promise<string | null>;
+  }, [send, match.id, actAs, controlled, cb, g.players]);
   // Static restrictions (Teferi, Ensnaring Bridge ...) come back as errors mentioning "force": offer to override.
   const act = useCallback(async (action: GameAction): Promise<string | null> => {
     const err = await rawAct(action);
@@ -146,6 +159,19 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     <Ctx.Provider value={ctx}>
       <div className={`table ${mode ? `mode-${mode.kind}` : ''}`} onClick={() => mode && mode.kind !== 'target' && setMode(null)}>
         <div className="table-main">
+          {controlling && cb && (
+            <div className="control-banner">
+              <b>You control {g.players.find((p) => p.pid === cb.pid)?.name}'s turn (Mindslaver)</b>
+              <label><input type="checkbox" checked={actAsOn} onChange={(e) => setActAsOn(e.target.checked)} /> Acting as {g.players.find((p) => p.pid === cb.pid)?.name}</label>
+              <span className="small">{actAsOn ? 'You see and play their hand and permanents.' : 'Showing your own side; actions are yours.'}</span>
+            </div>
+          )}
+          {controlled && cb && (
+            <div className="control-banner controlled">
+              <b>Your turn is controlled by {g.players.find((p) => p.pid === cb.by)?.name}</b>
+              <span className="small">You can only chat or concede.</span>
+            </div>
+          )}
           <PlayerArea pid={opp} top />
           <CenterBar okRef={okRef} match={match} onLeave={onLeave} />
           <PlayerArea pid={self} />
@@ -422,6 +448,10 @@ function CenterBar({ okRef, match, onLeave }: { okRef: React.MutableRefObject<()
   const name = (pid: string) => g.players.find((p) => p.pid === pid)?.name ?? '?';
   const attackers = g.battlefield.filter((id) => g.cards[id].attacking).length;
   const mePlayer = g.players.find((p) => p.pid === me);
+  // Extra turns (engine/turns.ts): the turn that follows is taken from the END of extraTurns (LIFO); nextNormalTurn is set
+  // while extra turns interrupt the regular rotation, i.e. the current turn is an extra one unless that player is due anyway.
+  const queued = (g.extraTurns ?? []).slice().reverse();
+  const extra = !!g.nextNormalTurn;
 
   let okLabel = 'Pass';
   if (g.stack.length) okLabel = 'Resolve';
@@ -445,6 +475,8 @@ function CenterBar({ okRef, match, onLeave }: { okRef: React.MutableRefObject<()
     <div className="center-bar">
       <div className="turn-info">
         <b>Turn {g.turn}</b> · {name(g.activePlayer)}
+        {extra && <span className="extra-badge" title="This turn is an extra turn">Extra turn</span>}
+        {queued.map((pid, i) => <div key={i} className="muted small">Next: extra turn for {name(pid)}</div>)}
         <div className="muted small">Game {match.gameNumber} · {match.wins[match.players[0]]}–{match.wins[match.players[1]]}</div>
         {onLeave && <button className="tiny" onClick={onLeave}>Stop watching</button>}
       </div>
