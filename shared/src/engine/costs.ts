@@ -19,6 +19,7 @@ import { getScript, parseParams, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard } from './targets.ts';
 import { adjustCost, castRestriction } from './statics.ts';
 import { castTimingError } from './timing.ts';
+import { autoTapFor } from './strict.ts';
 import type { AutoInfo, CastInfo, CastOption, TargetRef } from './types.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
@@ -368,6 +369,7 @@ function finishCosts(state: GameState, ctx: Ctx, d: CostData) {
   if (!d.deferred) return;
   const me = player(state, d.pid);
   const mana = reduceGeneric(d.deferred.mana, d.delved, d.deferred.x);
+  if (state.strict && mana) autoTapFor(state, ctx, d.pid, mana); // rules-enforced: auto-pay the rest (engine/strict.ts)
   const before = { ...me.manaPool };
   const res = mana ? payFromPool(mana, me.manaPool, 0) : { pool: me.manaPool, lifePaid: 0 };
   if (res) {

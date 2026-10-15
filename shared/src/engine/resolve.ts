@@ -20,6 +20,7 @@ import { execUniqueStep, type UniqueRun, uniqueVar, answerUniquePending, type Pi
 import { isSimpleAnimate, uniqueReason } from './unique-support.ts';
 import { answerTapCost } from './turns.ts';
 import { answerExtPending, execExtStep, EXT_APIS, type StepApi } from './ext.ts';
+import { autoTapFor } from './strict.ts';
 
 // ------------------------------------------------------------------ run context
 
@@ -1240,6 +1241,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
     const item = state.stack.find((s) => s.id === data.stackId);
     if (item) {
       if (value === 'pay') {
+        if (state.strict) autoTapFor(state, ctx, pid, data.cost); // rules-enforced auto-pay (engine/strict.ts)
         const res = payFromPool(data.cost, who.manaPool);
         if (res) { who.manaPool = res.pool; if (res.lifePaid) who.life -= res.lifePaid; log(state, ctx, pid, `${who.name} pays ${data.cost}.`); }
         else log(state, ctx, pid, `${who.name} pays ${data.cost} (mana not deducted — pool did not cover it).`);

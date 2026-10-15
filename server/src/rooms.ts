@@ -245,7 +245,7 @@ export class Rooms {
     const seat = (pid: string) => ({
       pid, name: s.players.find((p) => p.id === pid)?.name ?? '?', deck: match.decks[pid].main, side: match.decks[pid].side,
     });
-    match.game = createGame(`${match.id}-${match.gameNumber}`, [seat(match.players[0]), seat(match.players[1])], starting, { rng, lookup: getCard, now });
+    match.game = createGame(`${match.id}-${match.gameNumber}`, [seat(match.players[0]), seat(match.players[1])], starting, { rng, lookup: getCard, now }, { strict: true }); // rules-enforced (Arena-style)
   }
 
   private gameOver(match: Match) {

@@ -71,7 +71,7 @@ export function drawCards(state: GameState, p: GamePlayer, n: number): number {
   let drawn = 0;
   for (let i = 0; i < n; i++) {
     const iid = p.zones.library.shift();
-    if (!iid) break;
+    if (!iid) { if (state.phase === 'playing') p.drewFromEmpty = true; break; }
     const c = state.cards[iid];
     c.zone = 'hand';
     c.revealedTo = [];

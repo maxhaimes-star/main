@@ -3,6 +3,7 @@ import type { CardInstance, GameState, ViewCard } from './types.ts';
 import { isHidden } from './types.ts';
 import { type StaticsState, staticMods } from '../engine/statics.ts';
 import { layerFace } from '../engine/layers.ts';
+import { poolAfter, poolSources, solveMana } from './manapay.ts';
 
 export type Lookup = (id: string) => CardData | undefined;
 
@@ -183,38 +184,12 @@ export function triggeredAbilities(oracle: string): string[] {
 /**
  * Try to pay a mana cost from a pool. Returns the new pool, or null if it can't be paid.
  * Phyrexian symbols are paid with colored mana when possible, otherwise 2 life (reported in lifePaid).
+ * Uses the backtracking solver (game/manapay.ts), so symbol order never makes a payable cost fail.
  */
 export function payFromPool(cost: string, pool: Record<string, number>, x = 0): { pool: Record<string, number>; lifePaid: number } | null {
-  const p = { ...pool };
-  let generic = 0;
-  let lifePaid = 0;
-  const symbols = parseManaSymbols(cost);
-  const hybrids: string[][] = [];
-  for (const s of symbols) {
-    if (/^\d+$/.test(s)) generic += parseInt(s, 10);
-    else if (s === 'X') generic += x;
-    else if (/^[WUBRGC]$/.test(s)) {
-      if ((p[s] ?? 0) > 0) p[s]--; else return null;
-    } else if (/^[WUBRG]\/P$/.test(s)) {
-      const c = s[0];
-      if ((p[c] ?? 0) > 0) p[c]--; else lifePaid += 2;
-    } else if (s.includes('/')) hybrids.push(s.split('/'));
-    else if (s === 'S') generic += 1;
-  }
-  for (const options of hybrids) {
-    const color = options.find((o) => /^[WUBRG]$/.test(o) && (p[o] ?? 0) > 0);
-    if (color) p[color]--;
-    else if (options[0] === '2') generic += 2;
-    else return null;
-  }
-  // Generic: spend colorless first, then the most plentiful color.
-  while (generic > 0) {
-    const keys = Object.keys(p).filter((k) => p[k] > 0).sort((a, b) => (a === 'C' ? -1 : b === 'C' ? 1 : p[b] - p[a]));
-    if (!keys.length) return null;
-    p[keys[0]]--;
-    generic--;
-  }
-  return { pool: p, lifePaid };
+  const r = solveMana(cost, x, poolSources(pool));
+  if (!r) return null;
+  return { pool: poolAfter(pool, r.picks), lifePaid: r.lifePaid };
 }
 
 export function opponentsOf(state: GameState, pid: string): string[] {

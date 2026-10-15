@@ -15,6 +15,13 @@ import { skipsStep, untapPrevented } from '../engine/replacements.ts';
 import { wardReminders } from '../engine/keyword-play.ts';
 import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
 import {
+  answerStrictPending, attackError, blockError, blockersError, castManaCost, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
+  isLandCard, landPlayError, planAutoPay, strictActionError, summoningSick,
+} from '../engine/strict.ts';
+import { maxHandSize, mayPlayPermission } from '../engine/statics.ts';
+import { spellAbility, targetSpecs } from '../engine/script.ts';
+import { parseRequirements } from './manapay.ts';
+import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
 } from './state.ts';
 import {
@@ -40,7 +47,8 @@ export function withBasics(lookup: (id: string) => CardData | undefined): Lookup
   return (id) => basics[id] ?? lookup(id);
 }
 
-export function createGame(id: string, seats: GameSeat[], startingPlayer: string, ctx: Ctx): GameState {
+/** opts.strict: rules enforcement (engine/strict.ts), default true. */
+export function createGame(id: string, seats: GameSeat[], startingPlayer: string, ctx: Ctx, opts: { strict?: boolean } = {}): GameState {
   const state: GameState = {
     id,
     players: [],
@@ -61,6 +69,8 @@ export function createGame(id: string, seats: GameSeat[], startingPlayer: string
     undoRequest: null,
     pending: [],
     seq: 0,
+    strict: opts.strict ?? true,
+    fixMode: { on: false, requestedBy: null },
   };
   for (const seat of seats) {
     const p: GamePlayer = {
@@ -123,7 +133,7 @@ function snapshot(state: GameState): string {
   return JSON.stringify(rest);
 }
 
-const NOT_UNDOABLE = new Set<GameAction['t']>(['chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek', 'setAutoTriggers']);
+const NOT_UNDOABLE = new Set<GameAction['t']>(['chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek', 'setAutoTriggers', 'requestFixMode', 'answerFixMode', 'endFixMode']);
 
 // ------------------------------------------------------------------ turn structure
 
@@ -185,7 +195,8 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
     case 'attackers': {
       const canAttack = state.battlefield.some((id) => {
         const c = state.cards[id];
-        return c.controller === state.activePlayer && !c.tapped && isCreature(c, ctx.lookup, state);
+        if (state.strict && c.controller === state.activePlayer && attackRestriction(state, id, ctx.lookup)) return false;
+        return c.controller === state.activePlayer && !c.tapped && isCreature(c, ctx.lookup, state) && !(state.strict && summoningSick(state, c, ctx.lookup));
       });
       if (!canAttack) { state.combat.attackersDeclared = true; log(state, ctx, null, 'No attackers.'); }
       break;
@@ -193,12 +204,26 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
     case 'blockers': {
       const any = state.battlefield.some((id) => state.cards[id].attacking);
       if (!any) { enterStep(state, ctx, 'endCombat'); return; }
+      if (state.strict) {
+        // Arena-style: no decision to make when the defender has no untapped creature.
+        const canBlock = state.battlefield.some((id) => {
+          const c = state.cards[id];
+          return c.controller !== state.activePlayer && !c.tapped && isCreature(c, ctx.lookup, state);
+        });
+        if (!canBlock) { state.combat.blockersDeclared = true; log(state, ctx, null, 'No blockers.'); }
+      }
       break;
     }
     case 'damage': {
       const any = state.battlefield.some((id) => state.cards[id].attacking);
       if (!any) { enterStep(state, ctx, 'endCombat'); return; }
       state.combat.proposal = computeCombat(state, ctx.lookup);
+      if (state.strict) {
+        // Rules-enforced: combat damage is dealt at once (first / double strike are part of the computation).
+        log(state, ctx, null, `Combat damage: ${state.combat.proposal.lines.join('; ')}.`);
+        applyCombat(state, ctx);
+        break;
+      }
       log(state, ctx, null, `Combat damage proposed: ${state.combat.proposal.lines.join('; ')}. Both players confirm (OK) to apply.`);
       break;
     }
@@ -212,11 +237,44 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       for (const p of state.players) for (const id of p.zones.hand) state.cards[id].revealedTo = [];
       for (const p of state.players) p.viewingHandOf = null;
       durationsAtCleanup(state, ctx);
-      if (active.zones.hand.length > 7) log(state, ctx, active.pid, `${active.name} has ${active.zones.hand.length} cards — discard down to 7.`);
-      startTurn(state, ctx, nextTurnPlayer(state, ctx, nextPlayer(state, state.activePlayer))); // extra turns (engine/turns.ts)
+      if (state.strict && state.phase === 'playing') {
+        if (askCleanupDiscard(state, ctx)) return; // continues in answerCleanupDiscard
+      } else if (active.zones.hand.length > 7) log(state, ctx, active.pid, `${active.name} has ${active.zones.hand.length} cards — discard down to 7.`);
+      endCleanup(state, ctx);
       return;
     }
   }
+}
+
+function endCleanup(state: GameState, ctx: Ctx) {
+  startTurn(state, ctx, nextTurnPlayer(state, ctx, nextPlayer(state, state.activePlayer))); // extra turns (engine/turns.ts)
+}
+
+/** Strict cleanup: the active player discards down to their maximum hand size (a Pending choice per card). */
+function askCleanupDiscard(state: GameState, ctx: Ctx): boolean {
+  const active = player(state, state.activePlayer);
+  const excess = active.zones.hand.length - maxHandSize(state, active.pid, ctx.lookup);
+  if (excess <= 0) return false;
+  state.pending.push({
+    id: randomId(ctx.rng), pid: active.pid, prompt: `Cleanup: discard ${excess} card${excess === 1 ? '' : 's'} (maximum hand size)`,
+    options: active.zones.hand.map((iid) => ({ value: iid, label: cardName(state.cards[iid], ctx.lookup) })),
+    data: { kind: 'cleanupDiscard' },
+  });
+  return true;
+}
+
+function answerCleanupDiscard(state: GameState, ctx: Ctx, pid: string, id: string, value: string): string | null | undefined {
+  const q = state.pending.find((p) => p.id === id);
+  if (!q || q.data.kind !== 'cleanupDiscard') return undefined;
+  if (q.pid !== pid) return 'That question is for another player';
+  const me = player(state, pid);
+  if (!me.zones.hand.includes(value)) return 'Choose a card in your hand';
+  state.pending = state.pending.filter((p) => p !== q);
+  const nm = cardName(state.cards[value], ctx.lookup);
+  moveCard(state, ctx, value, 'graveyard', { cause: 'discard' });
+  log(state, ctx, pid, `${me.name} discards ${nm} (hand size).`);
+  if (!askCleanupDiscard(state, ctx)) endCleanup(state, ctx);
+  return null;
 }
 
 function startTurn(state: GameState, ctx: Ctx, pid: string) {
@@ -238,6 +296,8 @@ function advanceStep(state: GameState, ctx: Ctx) {
 /** Auto-pass for players without a stop, so the game flows like MTGO. Puts triggered abilities on the stack first. */
 function settle(state: GameState, ctx: Ctx) {
   for (let guard = 0; guard < 60 && state.phase === 'playing'; guard++) {
+    checkStateBased(state, ctx); // strict mode only
+    if (state.phase !== 'playing') return;
     processTriggers(state, ctx);
     if (state.pending.length) return;
     const pid = state.priority;
@@ -378,6 +438,8 @@ export function applyAction(state: GameState, pid: string, action: GameAction, c
   const me = state.players.find((p) => p.pid === pid);
   if (!me) return 'You are not playing in this game';
   if (state.phase === 'over' && action.t !== 'chat') return 'The game is over';
+  const strictErr = strictActionError(state, pid, action); // rules enforcement (engine/strict.ts)
+  if (strictErr) return strictErr;
   beginAction(state);
   const before = NOT_UNDOABLE.has(action.t) ? null : snapshot(state);
   const err = reduce(state, me, action, ctx);
@@ -432,11 +494,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (state.phase !== 'playing') return 'Game has not started';
       if (state.priority !== pid) return "You don't have priority";
       if (state.pending.length) return `Waiting for ${player(state, state.pending[0].pid).name}: ${state.pending[0].prompt}`;
-      if (state.step === 'attackers' && state.activePlayer === pid && !state.combat.attackersDeclared) confirmAttackers(state, ctx);
-      if (state.step === 'blockers' && state.activePlayer !== pid && !state.combat.blockersDeclared) confirmBlockers(state, ctx, pid);
-      if (state.step === 'damage' && state.combat.proposal && !state.combat.proposal.confirmed.includes(pid)) state.combat.proposal.confirmed.push(pid);
-      passPriority(state, ctx, pid);
-      return null;
+      return doPass(state, ctx, pid);
     }
     case 'passUntilEOT': {
       me.passUntilEOT = true;
@@ -454,6 +512,20 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (state.stack.length) return 'Resolve the stack first';
       const target = STEPS.indexOf(a.step);
       if (target <= STEPS.indexOf(state.step)) return 'Can only move forward';
+      if (state.strict && !fixModeOn(state)) {
+        // Rules-enforced: pass priority step by step (the opponent can still act on their stops), like Arena's "to combat / end turn".
+        if (state.priority !== pid) return "You don't have priority";
+        if (state.pending.length) return `Waiting for ${player(state, state.pending[0].pid).name}: ${state.pending[0].prompt}`;
+        const turn = state.turn;
+        for (let guard = 0; guard < 40; guard++) {
+          if (state.phase !== 'playing' || state.turn !== turn || state.activePlayer !== pid || state.stack.length || state.pending.length || state.priority !== pid) break;
+          if (STEPS.indexOf(state.step) >= target) break;
+          const err = doPass(state, ctx, pid);
+          if (err) { if (guard === 0) return err; break; }
+          settle(state, ctx);
+        }
+        return null;
+      }
       // Walk forward through each step so turn-based actions happen.
       for (let guard = 0; guard < 15 && STEPS.indexOf(state.step) < target && state.activePlayer === pid; guard++) {
         if (state.step === 'damage' && state.combat.proposal) applyCombat(state, ctx);
@@ -465,6 +537,13 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     case 'nextTurn': {
       if (state.phase !== 'playing') return 'Game has not started';
       if (state.activePlayer !== pid) return "It's not your turn";
+      if (state.strict && !fixModeOn(state)) {
+        // Rules-enforced "end turn": pass until end of turn (end-step triggers and the opponent's stops still happen).
+        me.passUntilEOT = true;
+        log(state, ctx, pid, `${name} passes until end of turn.`);
+        if (state.priority === pid && !state.pending.length) return doPass(state, ctx, pid);
+        return null;
+      }
       if (state.stack.length) return 'Resolve the stack first';
       if (state.combat.proposal) applyCombat(state, ctx);
       log(state, ctx, pid, `${name} ends the turn.`);
@@ -559,7 +638,16 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       const c = card(state, a.iid);
       if (!c || c.owner !== pid) return 'Not your card';
       if (c.zone !== 'hand' && c.zone !== 'graveyard' && c.zone !== 'exile' && c.zone !== 'library') return 'Card must be in your hand';
+      let landBack = false;
+      if (state.strict) {
+        const front = isLandCard(c, ctx.lookup, 0);
+        landBack = !front && isLandCard(c, ctx.lookup, 1);
+        if (!front && !landBack) return `${cardName(c, ctx.lookup)} isn't a land`;
+        const err = landPlayError(state, pid, a.iid, ctx.lookup);
+        if (err && !(fixModeOn(state) && /already played/.test(err))) return err;
+      }
       moveCard(state, ctx, a.iid, 'battlefield', { controller: pid });
+      if (landBack && state.cards[a.iid]?.zone === 'battlefield') c.transformed = true; // modal DFC played as its land face
       me.landsPlayed++;
       emit(state, { t: 'landPlayed', iid: a.iid, pid });
       log(state, ctx, pid, `${name} plays ${cardName(c, ctx.lookup)}${me.landsPlayed > 1 ? ` (land #${me.landsPlayed} this turn)` : ''}.`);
@@ -570,8 +658,32 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!c) return 'No such card';
       if (!canTouch(state, pid, c)) return "You can't cast that card";
       if (c.zone === 'battlefield' || c.zone === 'stack') return 'That card is already in play';
+      let strictPay: ReturnType<typeof planAutoPay> = null;
+      if (state.strict) {
+        const fix = fixModeOn(state);
+        if (!a.faceDown && isLandCard(c, ctx.lookup, a.face ?? 0)) return `${cardName(c, ctx.lookup)} is a land — play it instead of casting it`;
+        const zoneErr = castZoneError(state, pid, c, a.costOption, ctx.lookup);
+        if (zoneErr && !fix) return zoneErr;
+        if (!a.manual && !a.faceDown && c.cardId && a.targets === undefined) {
+          const sp = spellAbility(c.cardId, a.face ?? 0);
+          if (sp && targetSpecs(sp.ability, a.modes).length) return `${cardName(c, ctx.lookup)}: choose targets`;
+        }
+      }
       const prep = planCast(state, c, pid, a, ctx); // timing, static restrictions (force overrides both), cost option, targets
       if ('error' in prep) return prep.error;
+      if (state.strict) {
+        // Rules-enforced: the mana must be paid — pool first, then untapped sources (Arena-style auto-pay).
+        if (c.zone !== 'hand' && !['flashback', 'escape', 'madness'].includes(prep.plan.def.id) && mayPlayPermission(state, c.iid, pid, ctx.lookup, state.remembered)?.free) prep.plan.mana = '';
+        const cost = castManaCost(state, pid, c, a.face, prep.plan.mana, { delve: prep.plan.def.delve, x: prep.plan.x, faceDown: !!a.faceDown }, ctx.lookup);
+        strictPay = planAutoPay(state, pid, cost, prep.plan.x, ctx.lookup);
+        if (!strictPay && !fixModeOn(state)) return `Not enough mana to cast ${a.faceDown ? 'that' : cardName(c, ctx.lookup)} (${cost || '{0}'})`;
+        if (prep.plan.def.delve) {
+          // Delve: mana is paid after the exile choices (engine/costs.ts finishCosts auto-taps then).
+          const full = castManaCost(state, pid, c, a.face, prep.plan.mana, { x: prep.plan.x }, ctx.lookup);
+          const gy = me.zones.graveyard.filter((i) => i !== c.iid).length;
+          if (gy > 0 && (parseRequirements(full, prep.plan.x)?.generic ?? 0) > 0) strictPay = null;
+        }
+      }
       const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
       const from = c.zone;
       detach(state, c);
@@ -588,6 +700,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         c.castAs = undefined;
       }
       const face = faceOf(c, ctx.lookup);
+      if (strictPay) executeAutoPay(state, ctx, pid, strictPay);
       const payment = payCastMana(state, me, c, prep.plan, ctx.lookup); // cost option + static cost changes (Thalia ...)
       const paid = payment.note;
       const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid: c.iid, controller: pid, text: a.faceDown ? 'Face-down spell' : face.name, x: a.x };
@@ -632,6 +745,11 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       return null;
     }
     case 'choose': {
+      let sp = answerStrictPending(state, ctx, pid, a.id, a.value);
+      if (sp === undefined) sp = answerCleanupDiscard(state, ctx, pid, a.id, a.value);
+      if (sp !== undefined) return sp;
+      const q = state.pending.find((p) => p.id === a.id);
+      if (state.strict && q?.pid === pid && q.data.kind === 'unless' && a.value === 'pay' && !planAutoPay(state, pid, String(q.data.cost ?? ''), 0, ctx.lookup)) return 'Not enough mana';
       const t = answerTriggerChoice(state, ctx, pid, a.id, a.value);
       if (t !== undefined) return t;
       return answerPending(state, ctx, pid, a.id, a.value);
@@ -859,6 +977,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (state.combat.attackersDeclared) return 'Attackers are already declared';
       if (a.target) {
         if (c.tapped) return 'Tapped creatures can’t attack';
+        if (state.strict && !a.force) { const e = attackError(state, pid, c.iid, a.target, ctx.lookup); if (e) return e; }
         const no = a.force ? null : attackRestriction(state, c.iid, ctx.lookup);
         if (no) return `${no} (use force to override)`;
         c.attacking = a.target;
@@ -867,6 +986,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
     case 'confirmAttackers': {
       if (state.activePlayer !== pid) return "It's not your turn";
+      if (state.strict && (state.step !== 'attackers' || state.combat.attackersDeclared)) return 'Not declaring attackers now';
       confirmAttackers(state, ctx);
       if (state.priority === pid && state.step === 'attackers') passPriority(state, ctx, pid);
       return null;
@@ -881,7 +1001,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         if (!att?.attacking) return 'That creature is not attacking';
         if (c.tapped) return 'Tapped creatures can’t block';
         const no = a.force ? null : blockRestriction(state, c.iid, a.attacker, ctx.lookup);
-        if (no) return `${no} (use force to override)`;
+        if (no) return state.strict ? no : `${no} (use force to override)`;
+        if (state.strict && !a.force) { const e = blockError(state, c.iid, a.attacker, ctx.lookup); if (e) return e; }
         if (hasKeyword(att, ctx.lookup, 'Flying', state) && !hasKeyword(c, ctx.lookup, 'Flying', state) && !hasKeyword(c, ctx.lookup, 'Reach', state)) {
           // Not enforced: just warn in the log so odd cases (e.g. effects granting reach) still work.
           log(state, ctx, pid, `Warning: ${cardName(c, ctx.lookup)} blocks a flier without flying or reach.`);
@@ -892,6 +1013,11 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
     case 'confirmBlockers': {
       if (state.activePlayer === pid) return 'Only the defending player blocks';
+      if (state.strict) {
+        if (state.step !== 'blockers' || state.combat.blockersDeclared) return 'Not declaring blockers now';
+        const e = blockersError(state, ctx.lookup);
+        if (e) return e;
+      }
       confirmBlockers(state, ctx, pid);
       if (state.priority === pid && state.step === 'blockers') passPriority(state, ctx, pid);
       return null;
@@ -942,6 +1068,36 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       }
       return null;
     }
+    case 'requestFixMode': {
+      if (!state.strict) return 'Manual tools are always available in this game';
+      if (state.fixMode?.on) return 'Fix mode is already on';
+      if (others(state, pid).length === 0) {
+        state.fixMode = { on: true, requestedBy: pid };
+        log(state, ctx, pid, `${name} turns on fix mode (manual tools enabled).`);
+        return null;
+      }
+      state.fixMode = { on: false, requestedBy: pid };
+      log(state, ctx, pid, `${name} asks to fix the board by hand (fix mode).`);
+      return null;
+    }
+    case 'answerFixMode': {
+      const req = state.fixMode?.requestedBy;
+      if (!req || state.fixMode?.on || req === pid) return 'No fix-mode request to answer';
+      if (a.accept) {
+        state.fixMode = { on: true, requestedBy: req };
+        log(state, ctx, pid, `${name} accepts: fix mode is on — manual tools are enabled until it is ended.`);
+      } else {
+        state.fixMode = { on: false, requestedBy: null };
+        log(state, ctx, pid, `${name} declines fix mode.`);
+      }
+      return null;
+    }
+    case 'endFixMode': {
+      if (!state.fixMode?.on && !state.fixMode?.requestedBy) return 'Fix mode is not on';
+      state.fixMode = { on: false, requestedBy: null };
+      log(state, ctx, pid, `${name} ends fix mode (rules enforced again).`);
+      return null;
+    }
     case 'chat': {
       const text = a.text.trim().slice(0, 300);
       if (text) log(state, ctx, pid, `${name}: ${text}`);
@@ -949,6 +1105,19 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
   }
   return 'Unknown action';
+}
+
+/** The 'pass' action: finishes a pending combat declaration, then passes priority. */
+function doPass(state: GameState, ctx: Ctx, pid: string): string | null {
+  if (state.step === 'attackers' && state.activePlayer === pid && !state.combat.attackersDeclared) confirmAttackers(state, ctx);
+  if (state.step === 'blockers' && state.activePlayer !== pid && !state.combat.blockersDeclared) {
+    const e = state.strict ? blockersError(state, ctx.lookup) : null;
+    if (e) return e;
+    confirmBlockers(state, ctx, pid);
+  }
+  if (state.step === 'damage' && state.combat.proposal && !state.combat.proposal.confirmed.includes(pid)) state.combat.proposal.confirmed.push(pid);
+  passPriority(state, ctx, pid);
+  return null;
 }
 
 function confirmAttackers(state: GameState, ctx: Ctx) {
@@ -983,7 +1152,7 @@ function undo(state: GameState, ctx: Ctx, pid: string) {
   if (!prev) return;
   const restored = JSON.parse(prev) as Omit<GameState, 'history' | 'log'>;
   const { log: logs, history } = state;
-  Object.assign(state, restored, { log: logs, history, undoRequest: null, seq: state.seq });
+  Object.assign(state, restored, { log: logs, history, undoRequest: null, seq: state.seq, fixMode: state.fixMode });
   log(state, ctx, pid, `${player(state, pid).name} undid the last action.`);
 }
 

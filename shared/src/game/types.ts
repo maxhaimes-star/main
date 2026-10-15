@@ -113,6 +113,10 @@ export interface GamePlayer {
   designations: string[];
   /** Stage 2: put this player's triggered abilities on the stack automatically (undefined = true). */
   autoTriggers?: boolean;
+  /** Strict mode: tried to draw from an empty library since the last state-based action check. */
+  drewFromEmpty?: boolean;
+  /** Strict mode: why this player lost the game (state-based action), if they did. */
+  lost?: string;
 }
 
 export interface LogEntry { at: number; pid: string | null; text: string }
@@ -176,6 +180,14 @@ export interface GameState {
    * `since` = turn number when it was set up (the controlled turn is a later one); `turn` = the controlled turn.
    */
   controlledBy?: { pid: string; by: string; active: boolean; since: number; turn?: number } | null;
+  /**
+   * Strict rules enforcement (engine/strict.ts), true for new games: illegal actions are rejected (land drops,
+   * timing, priority, mana payment with auto-pay, combat legality), state-based actions are performed and the
+   * manual table tools are only available in fix mode.
+   */
+  strict?: boolean;
+  /** "Fix board" escape hatch: manual tools (and `force`) are allowed while on. Turned on when the opponent accepts. */
+  fixMode?: { on: boolean; requestedBy: string | null };
 }
 
 /** Stage 2: something that happened during an action (engine-internal; used to detect triggers). */
@@ -266,6 +278,10 @@ type GameActionBody =
   | { t: 'requestUndo' }
   | { t: 'answerUndo'; accept: boolean }
   | { t: 'concede' }
+  /** Strict mode: ask the opponent to allow manual fixes ("Fix board"); answerFixMode accepts / declines; endFixMode ends it. */
+  | { t: 'requestFixMode' }
+  | { t: 'answerFixMode'; accept: boolean }
+  | { t: 'endFixMode' }
   | { t: 'chat'; text: string };
 
 // ------------------------------------------------------------ client view
