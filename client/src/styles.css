@@ -456,7 +456,7 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .stack-btns { position: absolute; left: 4px; top: 4px; display: flex; gap: 3px; z-index: 2; }
 
 /* hand: fanned arc along the bottom */
-.hand { flex: none; position: relative; display: flex; justify-content: center; align-items: flex-end; height: var(--hh); padding: 0 220px 0 160px; z-index: 20; background: linear-gradient(transparent, #000b 85%); }
+.hand { flex: none; position: relative; display: flex; justify-content: center; align-items: flex-end; height: var(--hh); padding: 0 380px 0 170px; z-index: 20; background: linear-gradient(transparent, #000b 85%); }
 .hcard { position: relative; width: var(--hw); flex: none; cursor: pointer; margin-left: calc(var(--hw) * var(--ov, 0.1) * -1); transform-origin: 50% 100%; transform: translateY(calc(var(--dy, 0px) + 16%)) rotate(var(--rot, 0deg)); }
 .hcard:first-of-type { margin-left: 0; }
 .hcard::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 40%; }
