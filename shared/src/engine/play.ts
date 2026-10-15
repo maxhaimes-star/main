@@ -9,6 +9,7 @@ import { isValidTarget } from './targets.ts';
 import { adjustCost } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
+import { isUniqueCost, payUniqueCosts, uniqueActivationError, uniqueCostError } from './turns.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
 type ActivateAction = Extract<GameAction, { t: 'activate' }>;
@@ -103,7 +104,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (!ab) return 'No such ability';
   const src = cardName(c, ctx.lookup);
   if (!a.force) {
-    const timing = activationError(state, c, pid, ab, a.ability!, src);
+    const timing = activationError(state, c, pid, ab, a.ability!, src) ?? uniqueActivationError(state, ctx, c, pid, ab, src);
     if (timing) return timing;
   }
   const res = checkTargets(state, ab, undefined, a.targets ?? [], pid, c.iid, ctx, src);
@@ -122,6 +123,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false, discardSelf = false;
   const counterDelta: Record<string, number> = {};
   const byHand: string[] = [];
+  const extraCosts: string[] = []; // choices paid by turns.ts (tapXType, Sac<1/Creature>, Return<1/CARDNAME> ...)
   for (const tok of tokens) {
     let m: RegExpExecArray | null;
     if (/^(\d+|[WUBRGCSX]|[WUBRG2]\/[WUBRGP])$/.test(tok)) mana += `{${tok === 'X' ? x : tok}}`;
@@ -134,12 +136,15 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
     else if ((m = /^(Add|Sub)Counter<(\d+|X)\/([A-Za-z0-9]+)(\/[^>]*)?>$/.exec(tok)) && !m[4]) {
       const k = counterKind(m[3]);
       counterDelta[k] = (counterDelta[k] ?? 0) + (m[1] === 'Add' ? 1 : -1) * num(m[2]);
-    } else byHand.push(tok);
+    } else if (isUniqueCost(tok)) extraCosts.push(tok);
+    else byHand.push(tok);
   }
   if (tap && c.tapped) return `${src} is already tapped`;
   if (untap && !c.tapped) return `${src} is not tapped`;
   if (discardSelf && c.zone !== 'hand') return `${src} must be in your hand`;
   for (const [k, d] of Object.entries(counterDelta)) if (d < 0 && (c.counters[k] ?? 0) < -d) return `${src} doesn't have enough ${k} counters`;
+  const extraErr = extraCosts.length ? uniqueCostError(state, ctx, pid, c, extraCosts, x) : null;
+  if (extraErr) return extraErr;
 
   // ---- pay
   const me = player(state, pid);
@@ -171,6 +176,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (sacSelf && c.zone === 'battlefield') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'sacrifice' }); log(state, ctx, pid, `${me.name} sacrifices ${src}.`); }
   if (exileSelf) { moveCard(state, ctx, c.iid, 'exile'); log(state, ctx, pid, `${me.name} exiles ${src}.`); }
   if (discardSelf && c.zone === 'hand') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'discard' }); log(state, ctx, pid, `${me.name} discards ${src}.`); }
+  if (extraCosts.length) payUniqueCosts(state, ctx, pid, c, item, extraCosts, x);
   afterActivation(state, ctx, pid, c, ab, item);
   return null;
 }

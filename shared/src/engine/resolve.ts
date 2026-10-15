@@ -16,6 +16,9 @@ import { answerReplacementPending, cantBeCountered, counterAmount, damagePrevent
 import { answerCostPending, type CostData } from './costs.ts';
 import { conditionTrue, type CountEnv, evalCount } from './counts.ts';
 import { addEffect } from './durations.ts';
+import { execUniqueStep, type UniqueRun, uniqueVar, answerUniquePending, type PickSpec } from './unique.ts';
+import { isSimpleAnimate, uniqueReason } from './unique-support.ts';
+import { answerTapCost } from './turns.ts';
 
 // ------------------------------------------------------------------ run context
 
@@ -185,6 +188,8 @@ function countEnv(state: GameState, ctx: Ctx, r: Run): CountEnv {
 function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefined {
   if (!supportedVar(v)) return undefined;
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
+  const uv = uniqueVar(state, ctx, r.controller, r.remembered, v);
+  if (uv !== undefined) return uv;
   const counted = evalCount(v, countEnv(state, ctx, r));
   if (counted !== undefined) return counted;
   let m = /^Number\$(-?\d+)$/.exec(v);
@@ -324,8 +329,11 @@ function moveTo(state: GameState, ctx: Ctx, r: Run, iid: string, dest: Zone, p: 
   const c = state.cards[iid];
   if (!c) return;
   if (dest === 'library') moveCard(state, ctx, iid, 'library', { position: libraryIndex(state, ctx, r, p.LibraryPosition) });
-  else if (dest === 'battlefield') moveCard(state, ctx, iid, 'battlefield', { tapped: p.Tapped === 'True', controller: p.GainControl === 'True' ? r.controller : c.zone === 'battlefield' ? c.controller : c.owner });
-  else moveCard(state, ctx, iid, dest);
+  else if (dest === 'battlefield') {
+    moveCard(state, ctx, iid, 'battlefield', { tapped: p.Tapped === 'True', controller: p.GainControl === 'True' ? r.controller : c.zone === 'battlefield' ? c.controller : c.owner });
+    // Transformed$ True: "return it to the battlefield transformed" (Fable of the Mirror-Breaker).
+    if (p.Transformed === 'True' && state.cards[iid]?.zone === 'battlefield') state.cards[iid].transformed = true;
+  } else moveCard(state, ctx, iid, dest, dest === 'exile' && p.ExileFaceDown === 'True' ? { faceDown: true } : {});
 }
 
 /** Duration$ UntilHostLeavesPlay on an exile: the host iid, 'gone' if the host already left, else undefined. */
@@ -483,6 +491,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     return 'ok';
   }
   if (cond === 'unknown') log(state, ctx, r.controller, `Check by hand: ${p.ConditionDescription ?? step.description} (condition not verified).`);
+  // Unique / hard cards (engine/unique.ts). Simple Animate is only a fallback (see the end of this function).
+  if (uniqueReason(step) !== undefined && !isSimpleAnimate(step)) {
+    const res = execUniqueStep(state, ctx, uniqueRun(state, ctx, r, i, cond === 'unknown'));
+    if (res) return res;
+  }
   const remember = (iids: string[]) => {
     if (Object.keys(p).some((k) => k.startsWith('Remember'))) {
       for (const iid of iids) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx, state);
@@ -622,6 +635,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const d = defined(state, r, i, p.Defined);
         if (!d) return bad();
         cards = d.cards;
+      } else if (!own && origins.length === 1 && origins[0] === 'stack' && !p.ChangeType && r.item.kind === 'spell' && r.item.iid) {
+        // "Exile CARDNAME" on a resolving spell (Temporal Mastery, Alrund's Epiphany, Time Spiral).
+        cards = state.cards[r.item.iid]?.zone === 'stack' ? [r.item.iid] : [];
       } else if (!own && !p.ChangeType && !p.Hidden && !p.ChangeNum && origins.length && origins.every((z) => z === 'graveyard' || z === 'battlefield' || z === 'exile')) {
         // Forge: a known-origin ChangeZone without targets / Defined$ moves the card itself (e.g. Bloodghast, Kytheon).
         cards = r.sourceIid && state.cards[r.sourceIid] ? [r.sourceIid] : [];
@@ -656,7 +672,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         if (origin === 'hand' && ownerPid !== chooserPid) log(state, ctx, r.controller, `${chooser.name} reveals their hand to ${pname(state, chooserPid)}.`);
         const where = dest === 'library' ? (p.LibraryPosition === '-1' ? `on the bottom of ${yours} library` : `on top of ${yours} library`) : `to ${dest === 'battlefield' ? 'the battlefield' : dest === 'exile' ? 'exile' : `${yours} ${dest}`}`;
         const created = startPicks(state, ctx, [{
-          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True'),
+          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True' || !/^\d+$/.test(p.ChangeNum ?? '1')),
           dest, params: p, ...(host ? { untilHost: host } : {}), label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
         return created ? 'wait' : 'ok';
@@ -697,7 +713,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         if (!ps) return bad();
         pool.push(...ps.flatMap((pid) => [...player(state, pid).zones[origin as 'hand']]));
       }
-      const ms = pool.map((x) => [x, matchCard(state.cards[x], valid, E)] as const);
+      // "Card.IsRemembered": the cards this chain remembered (Scroll Rack puts the exiled cards back).
+      const ms = valid === 'Card.IsRemembered' ? pool.map((x) => [x, r.remembered.includes(x)] as const) : pool.map((x) => [x, matchCard(state.cards[x], valid, E)] as const);
       if (ms.some(([, m]) => m === 'unknown')) return bad();
       const list = ms.filter(([, m]) => m).map(([x]) => x);
       const owners = new Set(list.map((x) => state.cards[x].owner));
@@ -923,7 +940,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         } else {
           if (!cands.length) { log(state, ctx, pid, `${pl.name} has nothing to discard.`); continue; }
           log(state, ctx, pid, `${pl.name} chooses ${n} card${n === 1 ? '' : 's'} to discard.`);
-          picks.push({ kind: 'pick', action: 'discard', chooser: pid, candidates: cands, left: Math.min(n, cands.length), optional: false, label: `${r.sourceName}: choose a card to discard` });
+          picks.push({ kind: 'pick', action: 'discard', chooser: pid, candidates: cands, left: Math.min(n, cands.length), optional: p.Optional === 'True', params: p, label: `${r.sourceName}: choose a card to discard` });
         }
       }
       return startPicks(state, ctx, picks, contAt(r, i + 1)) ? 'wait' : 'ok';
@@ -1080,7 +1097,29 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     }
   }
   if (KEYWORD_APIS.has(step.api)) { execKeywordStep(state, ctx, step, r); return 'ok'; }
+  if (isSimpleAnimate(step)) return execUniqueStep(state, ctx, uniqueRun(state, ctx, r, i, cond === 'unknown')) ?? bad();
   return bad();
+}
+
+/** The running chain as engine/unique.ts sees it. */
+function uniqueRun(state: GameState, ctx: Ctx, r: Run, i: number, uncertain: boolean): UniqueRun {
+  const step = r.steps[i];
+  return {
+    step, controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, item: r.item, remembered: r.remembered, lki: r.lki, svars: r.svars, trig: r.trig, uncertain,
+    amount: (raw, dflt) => amount(state, ctx, r, raw, dflt),
+    objects: (dflt) => objects(state, r, i, dflt),
+    defined: (value) => defined(state, r, i, value),
+    ownTargets: () => ownTargets(r, i),
+    cont: () => contAt(r, i + 1),
+    picks: (list: PickSpec[]) => startPicks(state, ctx, list, contAt(r, i + 1)),
+    remember: (iids) => {
+      for (const iid of iids) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx, state);
+      r.remembered = [...iids];
+      rememberOnCard(state, r.item, iids);
+    },
+    atEndOf: (iids, what) => atEndOf(state, ctx, r, iids, what),
+    manual: () => manual(state, ctx, r, step),
+  };
 }
 
 function counterItem(state: GameState, ctx: Ctx, item: StackItem, p: Record<string, string>, by: string, r?: Run) {
@@ -1182,6 +1221,8 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if ((pend.data as { kind?: string }).kind === 'cost') return answerCostPending(state, ctx, pid, pend.data as unknown as CostData, value);
   let ext = answerReplacementPending(state, ctx, pend, value);
   if (ext === undefined) ext = answerKeywordPending(state, ctx, pend, value);
+  if (ext === undefined) ext = answerUniquePending(state, ctx, pend, value);
+  if (ext === undefined) ext = answerTapCost(state, ctx, pend, value);
   if (ext !== undefined) return ext;
   const data = pend.data as unknown as PickData | UnlessData | ColorData;
   const who = player(state, pid);
@@ -1216,6 +1257,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
       if (data.action === 'discard') {
         moveCard(state, ctx, value, 'graveyard', { cause: 'discard' });
         log(state, ctx, pid, `${pname(state, c.owner)} discards ${nm}.`);
+        if (data.cont && Object.keys(data.params ?? {}).some((k) => k.startsWith('Remember'))) data.cont.remembered = [...data.cont.remembered, value];
       } else if (data.action === 'sacrifice') {
         moveCard(state, ctx, value, 'graveyard', { cause: 'sacrifice' });
         log(state, ctx, pid, `${who.name} sacrifices ${nm}.`);
