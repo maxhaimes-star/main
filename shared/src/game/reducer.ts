@@ -1,3 +1,4 @@
+import { bestPermission, notePermissionUse } from '../engine/permissions.ts';
 import { basicLandCard, type CardData, type Color, type TokenData } from '../cards.ts';
 import type { Rng } from '../draft.ts';
 import { computeCombat } from './combat.ts';
@@ -648,6 +649,11 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         if (!front && !landBack) return `${cardName(c, ctx.lookup)} isn't a land`;
         const err = landPlayError(state, pid, a.iid, ctx.lookup);
         if (err && !(fixModeOn(state) && /already played/.test(err))) return err;
+      }
+      if (c.zone !== 'hand') {
+        // Played with a permission (Crucible, Serra Paragon's once per turn): record it.
+        const perm = bestPermission(state, pid, a.iid, undefined, ctx.lookup);
+        if (perm) { notePermissionUse(state, perm.key); (state.remembered ??= {})[`playedWith|${a.iid}`] = [perm.key]; }
       }
       moveCard(state, ctx, a.iid, 'battlefield', { controller: pid });
       if (landBack && state.cards[a.iid]?.zone === 'battlefield') c.transformed = true; // modal DFC played as its land face

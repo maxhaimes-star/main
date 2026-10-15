@@ -76,6 +76,8 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
     if (ch?.api === 'Cleanup' && SUPPORTED_MODES.has(p.Mode)) return { detect: true, chain: true };
     // "Forget it" bookkeeping (Chrome Mox, Spell Queller): what is remembered is looked up live, so nothing to do.
     if (ch?.api === 'Pump' && !ch.sub && Object.keys(ch.params).every((k) => /^(Forget|Defined$|StackDescription$|SpellDescription$)/.test(k))) return { detect: true, chain: true };
+    // "If you do, it gains <trigger>" (Serra Paragon): applied to cards played with the host's permission (playGrants).
+    if (/MayPlaySource/.test(p.ValidSA ?? '') && (p.Mode === 'SpellCast' || p.Mode === 'LandPlayed') && ch?.api === 'Animate' && ch.params.Triggers && !ch.sub) return { detect: true, chain: true };
     return { detect: false, chain: false, reason: 'static' };
   }
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
@@ -139,13 +141,51 @@ function cmp(left: number, expr: string, right: (s: string) => number | undefine
   }
 }
 
+/**
+ * Serra Paragon: a card played with a permanent's MayPlay permission gains a trigger ("If you do, it gains 'When this
+ * permanent is put into a graveyard from the battlefield ...'"). The host's Static$ True SpellCast / LandPlayed trigger
+ * with ValidSA$ ...MayPlaySource names an Animate with Triggers$: remembered here, granted as the permanent enters.
+ */
+function playGrants(state: GameState, iid: string, permission: string | undefined, mode: 'SpellCast' | 'LandPlayed') {
+  const m = /^static\|([^|]+)\|\d+$/.exec(permission ?? '');
+  const host = m ? state.cards[m[1]] : undefined;
+  const ref = host ? scriptRef(host) : undefined;
+  const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
+  if (!ref || !f) return;
+  for (const t of triggersOf(ref.cardId, ref.face)) {
+    const p = t.params;
+    if (p.Static !== 'True' || p.Mode !== mode || !/MayPlaySource/.test(p.ValidSA ?? '') || !p.Execute) continue;
+    const ch = triggerChain(ref.cardId, ref.face, p.Execute);
+    if (ch?.api !== 'Animate' || !ch.params.Triggers) continue;
+    (state.remembered ??= {})[`playGrant|${iid}`] = [ref.cardId, String(ref.face), ...ch.params.Triggers.split(',').map((s) => s.trim())];
+  }
+}
+
+function applyPlayGrant(state: GameState, ctx: Ctx, iid: string, entered: boolean) {
+  const g = state.remembered?.[`playGrant|${iid}`];
+  if (!g) return;
+  delete state.remembered![`playGrant|${iid}`];
+  const c = state.cards[iid];
+  if (!entered || !c || c.zone !== 'battlefield') return;
+  const [cardId, face, ...triggers] = g;
+  (c.animations ??= []).push({ id: randomId(ctx.rng), controller: c.controller, until: 'permanent', turn: state.turn, grant: { cardId, face: parseInt(face, 10), triggers } });
+  const text = getScript(cardId)?.[parseInt(face, 10)]?.svars[triggers[0]];
+  const desc = text ? parseParams(text).params.TriggerDescription : undefined;
+  log(state, ctx, c.controller, `${cardName(c, ctx.lookup)} gains "${desc ?? 'a triggered ability'}".`);
+}
+
 /** This turn's history from the action's events: attackers, permanents that entered, permissions used, the city's blessing. */
 function trackTurnEvents(state: GameState, ctx: Ctx) {
   const evs = state.events ?? [];
   if (!evs.length) return;
   const ti = turnInfo(state);
   for (const ev of evs) {
-    if (ev.t === 'cast') notePermissionUse(state, state.cards[ev.iid]?.castInfo?.permission); // once-per-turn permissions (Lurrus)
+    if (ev.t === 'cast') {
+      notePermissionUse(state, state.cards[ev.iid]?.castInfo?.permission); // once-per-turn permissions (Lurrus)
+      playGrants(state, ev.iid, state.cards[ev.iid]?.castInfo?.permission, 'SpellCast');
+    } else if (ev.t === 'landPlayed') playGrants(state, ev.iid, state.remembered?.[`playedWith|${ev.iid}`]?.[0], 'LandPlayed');
+    if (ev.t === 'zone' && ev.from === 'stack') applyPlayGrant(state, ctx, ev.iid, ev.to === 'battlefield');
+    if (ev.t === 'landPlayed') applyPlayGrant(state, ctx, ev.iid, true);
     else if (ev.t === 'attacks') {
       ti.activations[`attacked|${ev.iid}`] = (ti.activations[`attacked|${ev.iid}`] ?? 0) + 1;
       const who = state.cards[ev.iid]?.controller;

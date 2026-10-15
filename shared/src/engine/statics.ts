@@ -885,7 +885,7 @@ export function mayPlayPermission(st: StaticsState, iid: string, pid: string, lo
   const zoneName = c.zone.charAt(0).toUpperCase() + c.zone.slice(1);
   for (const { s, ev } of active(st, lookup, 'Continuous')) {
     const p = s.params;
-    if (p.MayPlay !== 'True') continue;
+    if (p.MayPlay !== 'True' || p.MayPlayLimit) continue; // once-per-turn permissions: permissions.ts (bestPermission) counts their uses
     if (!(p.AffectedZone ?? '').split(',').includes(zoneName)) continue;
     const who = p.MayPlayPlayer === 'CardOwner' ? c.owner : s.controller;
     if (who !== pid) continue;

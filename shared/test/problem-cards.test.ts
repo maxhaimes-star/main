@@ -302,3 +302,42 @@ describe('Springheart Nantuko (bestow)', () => {
     expect(isCreature(g.cards[sn], getCard, g)).toBe(true);
   });
 });
+
+describe('Serra Paragon', () => {
+  it('once per turn: a permanent spell (MV <= 3) from the graveyard gains "dies: exile it, gain 2 life"', () => {
+    const { g, ctx } = setup(['serra_paragon', 'containment_priest', 'lightning_bolt', 'basic_mountain', 'basic_island'], [], 'basic_plains');
+    put(g, ctx, 'a', 'serra_paragon');
+    lands(g, 'a', 'basic_plains', 2);
+    lands(g, 'a', 'basic_mountain', 1);
+    const priest = find(g, 'a', 'containment_priest');
+    moveCard(g, ctx, priest, 'graveyard');
+    const isl = find(g, 'a', 'basic_island');
+    moveCard(g, ctx, isl, 'graveyard');
+    expect(castability(g, 'a', priest, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'cast', iid: priest });
+    drain(g, ctx);
+    expect(g.cards[priest].zone).toBe('battlefield');
+    expect(logText(g)).toMatch(/Containment Priest gains "When this permanent is put into a graveyard/);
+    // the once-per-turn permission is used up: no land from the graveyard this turn
+    expect(castability(g, 'a', isl, getCard).ok).toBe(false);
+    const bolt = toHand(g, ctx, 'a', 'lightning_bolt');
+    act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: [[{ kind: 'card', iid: priest }]] });
+    drain(g, ctx);
+    expect(g.cards[priest].zone).toBe('exile');
+    expect(g.players[0].life).toBe(22);
+  });
+
+  it('plays a land from the graveyard (once per turn), which gains the trigger too', () => {
+    const { g, ctx } = setup(['serra_paragon', 'basic_island', 'containment_priest'], [], 'basic_plains');
+    put(g, ctx, 'a', 'serra_paragon');
+    lands(g, 'a', 'basic_plains', 2);
+    const isl = find(g, 'a', 'basic_island');
+    moveCard(g, ctx, isl, 'graveyard');
+    const priest = find(g, 'a', 'containment_priest');
+    moveCard(g, ctx, priest, 'graveyard');
+    act(g, ctx, 'a', { t: 'playLand', iid: isl });
+    expect(g.cards[isl].zone).toBe('battlefield');
+    expect(g.cards[isl].animations?.some((a) => a.grant?.triggers?.length)).toBe(true);
+    expect(castability(g, 'a', priest, getCard).ok).toBe(false);
+  });
+});
