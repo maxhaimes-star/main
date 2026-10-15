@@ -6,7 +6,7 @@ import type { RoomProps } from '../Room.tsx';
 import { CardBack, CardImage, getCard, PreviewPanel, setPreview } from '../cards.tsx';
 import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
-import { castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
+import { isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 
 /** Actions never performed on behalf of a controlled player (see engine/turns.ts NEVER_ROUTED); also allowed while controlled. */
@@ -67,6 +67,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const [tokens, setTokens] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [hoverTargets, setHoverTargets] = useState<string[]>([]);
+  const [payPreview, setPayPreview] = useState<string[]>([]);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toast = useCallback((msg: string) => { setToastMsg(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToastMsg(null), 2200); }, []);
 
@@ -123,7 +124,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     else setMode({ ...mode, chosen });
   };
 
-  const base = { g, me, act, ask, askText, pickModes, pickOption, divide, setMode, opp, mode, target };
+  const base = { g, me, act, ask, askText, pickModes, pickOption, divide, setMode, opp, mode, target, toast };
   const menuFor = (iid: string) => menuForImpl(base, iid);
   const defaultAction = (iid: string) => defaultActionImpl(base, iid, menuFor, (items, title) => {
     const el = document.querySelector(`[data-iid="${iid}"]`)?.getBoundingClientRect();
@@ -133,7 +134,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const ctx: GameCtx = {
     g, me, self, opp, act, openMenu, mode, setMode, ask, askText, pickModes, pickOption, divide,
     openZone: (pid, z) => setZone({ pid, zone: z }), openTokens: () => setTokens(true), menuFor, defaultAction,
-    target, pickTarget, isLegal, cast: (iid, face) => { castWithX(base, iid, face); }, toast, hoverTargets, setHoverTargets,
+    target, pickTarget, isLegal, cast: (iid, face) => { castWithX(base, iid, face); }, toast, hoverTargets, setHoverTargets, payPreview, setPayPreview,
   };
 
   // Keyboard shortcuts
@@ -172,6 +173,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
               <span className="small">You can only chat or concede.</span>
             </div>
           )}
+          <FixModeBar />
           <PlayerArea pid={opp} top />
           <CenterBar okRef={okRef} match={match} onLeave={onLeave} />
           <PlayerArea pid={self} />
@@ -243,6 +245,8 @@ function useDrop(onDrop: (iid: string) => void) {
 function dropTo(ctx: GameCtx, iid: string, to: Zone, position?: 'top' | 'bottom') {
   const c = ctx.g.cards[iid];
   if (!c) return;
+  const handToBf = to === 'battlefield' && c.zone === 'hand';
+  if (!manualOk(ctx.g) && !handToBf) return;
   if (to === 'battlefield' && c.zone !== 'battlefield') {
     if (!isHidden(c)) {
       const f = faceOf(c, getCard);
@@ -270,7 +274,7 @@ function PlayerArea({ pid, top }: { pid: string; top?: boolean }) {
   const other = roots.filter((id) => !isLand(id) && !isCreature(id));
   const drop = useDrop((iid) => {
     const c = g.cards[iid];
-    if (c?.zone === 'battlefield' && c.controller !== pid && ctx.me) ctx.act({ t: 'control', iid, pid });
+    if (c?.zone === 'battlefield' && c.controller !== pid && ctx.me && manualOk(g)) ctx.act({ t: 'control', iid, pid });
     else dropTo(ctx, iid, 'battlefield');
   });
   const row = (ids: string[], cls: string) => (
@@ -297,6 +301,7 @@ function PlayerPanel({ p }: { p: ViewPlayer }) {
   const life = (d: number) => act({ t: 'life', pid: p.pid, delta: d });
   const pool = Object.entries(p.manaPool).filter(([, n]) => n > 0);
   const viewing = g.players.find((x) => x.pid === me)?.viewingHandOf === p.pid;
+  const manual = manualOk(g);
   return (
     <div className={`player-panel ${g.priority === p.pid && g.phase === 'playing' ? 'has-priority' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen ? 'targeted' : ''}`}
       onClick={targeting ? (e) => { e.stopPropagation(); pickTarget({ kind: 'player', pid: p.pid }); } : undefined}>
@@ -305,26 +310,26 @@ function PlayerPanel({ p }: { p: ViewPlayer }) {
         {g.activePlayer === p.pid && <span className="turn-badge">turn</span>}
       </div>
       <div className="life">
-        {me && <button onClick={() => life(-1)} onContextMenu={(e) => { e.preventDefault(); life(-5); }} title="−1 (right-click −5)">−</button>}
-        <span className={`life-num ${p.life <= 5 ? 'low' : ''}`} onClick={async () => { if (!me) return; const n = await ask(`Set ${p.name}'s life to`, p.life); if (n != null) life(n - p.life); }}>{p.life}</span>
-        {me && <button onClick={() => life(1)} onContextMenu={(e) => { e.preventDefault(); life(5); }} title="+1 (right-click +5)">+</button>}
+        {me && manual && <button onClick={() => life(-1)} onContextMenu={(e) => { e.preventDefault(); life(-5); }} title="−1 (right-click −5)">−</button>}
+        <span className={`life-num ${p.life <= 5 ? 'low' : ''}`} onClick={async () => { if (!me || !manual) return; const n = await ask(`Set ${p.name}'s life to`, p.life); if (n != null) life(n - p.life); }}>{p.life}</span>
+        {me && manual && <button onClick={() => life(1)} onContextMenu={(e) => { e.preventDefault(); life(5); }} title="+1 (right-click +5)">+</button>}
       </div>
       <div className="pcounters">
         {Object.entries(p.counters).filter(([, v]) => v > 0).map(([k, v]) => (
           <span key={k} className="pctr" title="click +1, right-click −1"
-            onClick={() => me && act({ t: 'playerCounter', pid: p.pid, kind: k, delta: 1 })}
-            onContextMenu={(e) => { e.preventDefault(); if (me) act({ t: 'playerCounter', pid: p.pid, kind: k, delta: -1 }); }}>{k} {v}</span>
+            onClick={() => me && manual && act({ t: 'playerCounter', pid: p.pid, kind: k, delta: 1 })}
+            onContextMenu={(e) => { e.preventDefault(); if (me && manual) act({ t: 'playerCounter', pid: p.pid, kind: k, delta: -1 }); }}>{k} {v}</span>
         ))}
-        {me && <button className="tiny" title="Add a player counter (poison, energy, experience, rad…)" onClick={async () => { const k = await askText('Counter (poison, energy, experience, rad, tickets…)', 'poison'); if (k) act({ t: 'playerCounter', pid: p.pid, kind: k, delta: 1 }); }}>+ctr</button>}
+        {me && manual && <button className="tiny" title="Add a player counter (poison, energy, experience, rad…)" onClick={async () => { const k = await askText('Counter (poison, energy, experience, rad, tickets…)', 'poison'); if (k) act({ t: 'playerCounter', pid: p.pid, kind: k, delta: 1 }); }}>+ctr</button>}
       </div>
       {p.designations.length > 0 && <div className="designations">{p.designations.map((d) => <span key={d} className="desig" onClick={() => isMe && act({ t: 'designation', name: d, on: false })}>{d === 'Monarch' ? '👑' : d === 'Initiative' ? '🗺' : '✦'} {d}</span>)}</div>}
-      {(pool.length > 0 || isMe) && (
+      {(pool.length > 0 || (isMe && manual)) && (
         <div className="mana-pool">
-          {pool.map(([m, n]) => <span key={m} className={`pip pip-${m}`} title="click to spend 1" onClick={() => isMe && act({ t: 'addMana', mana: m, n: -1 })}>{m}{n > 1 ? `×${n}` : ''}</span>)}
-          {isMe && <AddMana />}
+          {pool.map(([m, n]) => <span key={m} className={`pip pip-${m}`} title="click to spend 1" onClick={() => isMe && manual && act({ t: 'addMana', mana: m, n: -1 })}>{m}{n > 1 ? `×${n}` : ''}</span>)}
+          {isMe && manual && <AddMana />}
         </div>
       )}
-      {!isMe && me && <button className="tiny" onClick={() => act({ t: 'lookAtHand', pid: viewing ? null : p.pid })}>{viewing ? 'Hide hand' : 'Look at hand'}</button>}
+      {!isMe && me && manual && <button className="tiny" onClick={() => act({ t: 'lookAtHand', pid: viewing ? null : p.pid })}>{viewing ? 'Hide hand' : 'Look at hand'}</button>}
       {!isMe && <span className="muted small">✋ {p.handCount}</span>}
       {p.zones.command.length > 0 && <button className="tiny" onClick={() => openZone(p.pid, 'command')}>Command ({p.zones.command.length})</button>}
       {isMe && <MyTools p={p} />}
@@ -370,7 +375,7 @@ function Zones({ p }: { p: ViewPlayer }) {
 
   return (
     <div className="zones">
-      <div className={`zone lib ${libDrop.over ? 'drop-over' : ''}`} {...libDrop.props} onClick={isMe ? libMenu : undefined} title={isMe ? 'Library — click for options (drop a card here to put it on top)' : 'Library'}>
+      <div className={`zone lib ${libDrop.over ? 'drop-over' : ''}`} {...libDrop.props} onClick={isMe && manualOk(g) ? libMenu : undefined} title={isMe && manualOk(g) ? 'Library — click for options (drop a card here to put it on top)' : 'Library'}>
         <CardBack label={String(p.libraryCount)} />
         {revealedTop.length > 0 && <div className="revealed-top" onMouseEnter={() => { const c = g.cards[revealedTop[0]]; if (!isHidden(c)) setPreview({ face: faceOf(c, getCard) }); }}>top: {revealedTop.map((i) => { const c = g.cards[i]; return isHidden(c) ? '?' : faceOf(c, getCard).name; }).join(', ')}</div>}
       </div>
@@ -389,18 +394,41 @@ function Zones({ p }: { p: ViewPlayer }) {
 function MyTools({ p }: { p: ViewPlayer }) {
   const ctx = useGame();
   const { act, openZone, openMenu, openTokens } = ctx;
+  const manual = manualOk(ctx.g);
   return (
     <div className="my-tools">
       <button className="tiny" onClick={() => openZone(p.pid, 'sideboard')}>Sideboard</button>
-      <button className="tiny" onClick={openTokens}>Tokens</button>
+      {manual && <button className="tiny" onClick={openTokens}>Tokens</button>}
       <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
-        { label: 'Untap all my permanents', onClick: () => act({ t: 'untapAll' }) },
-        { label: 'Reveal my hand', onClick: () => act({ t: 'revealHand' }) },
+        ...(manual ? [{ label: 'Untap all my permanents', onClick: () => act({ t: 'untapAll' }) }, { label: 'Reveal my hand', onClick: () => act({ t: 'revealHand' }) }] : []),
         { label: `Automatic triggers: ${(p as { autoTriggers?: boolean }).autoTriggers === false ? 'off (click to turn on)' : 'on (click to turn off)'}`, onClick: () => act({ t: 'setAutoTriggers', on: (p as { autoTriggers?: boolean }).autoTriggers === false } as never) },
-        ...['Monarch', 'Initiative', "City's blessing", 'Day', 'Night'].map((d) => ({ label: `${p.designations.includes(d) ? 'Lose' : 'Take'} ${d}`, onClick: () => act({ t: 'designation', name: d, on: !p.designations.includes(d) }) })),
-        { label: 'Put a free trigger/effect on the stack…', onClick: async () => { const t = await ctx.askText('Text'); if (t) act({ t: 'trigger', text: t }); } },
+        ...(manual ? ['Monarch', 'Initiative', "City's blessing", 'Day', 'Night'] : []).map((d) => ({ label: `${p.designations.includes(d) ? 'Lose' : 'Take'} ${d}`, onClick: () => act({ t: 'designation', name: d, on: !p.designations.includes(d) }) })),
+        ...(manual ? [{ label: 'Put a free trigger/effect on the stack…', onClick: async () => { const t = await ctx.askText('Text'); if (t) act({ t: 'trigger', text: t }); } }] : []),
         { label: 'Concede game', onClick: () => { if (confirm('Concede this game?')) act({ t: 'concede' }); } },
       ], 'More')}>More…</button>
+    </div>
+  );
+}
+
+function FixModeBar() {
+  const { g, me, act } = useGame();
+  const name = (pid: string) => g.players.find((p) => p.pid === pid)?.name ?? '?';
+  const req = fixRequest(g);
+  if (fixModeOn(g)) {
+    return (
+      <div className="fix-banner">
+        <span>Fix mode: manual tools are on for both players</span>
+        {me && <button className="tiny" onClick={() => act({ t: 'endFixMode' } as never)}>Done fixing</button>}
+      </div>
+    );
+  }
+  if (!req || !me) return null;
+  if (req === me) return <div className="undo-req pending-wait">Waiting for your opponent to allow fixing the board…</div>;
+  return (
+    <div className="undo-req">
+      {name(req)} wants to fix the board.
+      <button className="primary" onClick={() => act({ t: 'answerFixMode', accept: true } as never)}>Allow</button>
+      <button onClick={() => act({ t: 'answerFixMode', accept: false } as never)}>Decline</button>
     </div>
   );
 }
@@ -412,26 +440,38 @@ function Hand({ pid }: { pid: string }) {
   const { g } = ctx;
   const p = g.players.find((x) => x.pid === pid)!;
   const drop = useDrop((iid) => dropTo(ctx, iid, 'hand'));
+  const left = landPlaysLeft(g, pid);
+  const played = (p as { landsPlayed?: number }).landsPlayed ?? 0;
   return (
     <div className={`hand ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
+      {left != null && <span className={`land-plays ${left === 0 ? 'none' : ''}`} title="Land drops this turn">Lands: {played}/{played + left} played</span>}
       {p.zones.hand.map((iid) => <HandCard key={iid} iid={iid} />)}
       {p.zones.hand.length === 0 && <span className="muted">Your hand is empty.</span>}
-      <span className="hand-hint muted">Click: play / cast · Right-click: more · Drag to battlefield, graveyard, exile or library</span>
+      <span className="hand-hint muted">{manualOk(g) ? 'Click: play / cast · Right-click: more · Drag to battlefield, graveyard, exile or library' : 'Click: play / cast (mana is paid automatically) · Right-click: more'}</span>
     </div>
   );
 }
 
 function HandCard({ iid }: { iid: string }) {
-  const { g, me, menuFor, defaultAction, openMenu } = useGame();
+  const { g, me, menuFor, defaultAction, openMenu, setPayPreview } = useGame();
   const c = g.cards[iid];
   if (!c || isHidden(c)) return <div className="hcard"><CardBack /></div>;
   const face = faceOf(c, getCard);
   const st = castStatus(c.cardId, 0);
   const altHints = c.owner === me ? safeCastOptions(g, iid, 0).filter((o) => o.id !== 'normal' && !o.unavailable).map((o) => `${o.label}: ${optionText(o)}`) : [];
+  const usable = c.owner === me ? castability(g, me, iid) : undefined;
+  const strictCls = usable ? (usable.ok ? 'castable' : 'uncastable') : '';
+  const showPay = () => {
+    if (!usable?.ok) return;
+    const p = autoPayPreview(g, me, iid, 0);
+    if (p?.ok) setPayPreview(p.taps);
+  };
   return (
-    <div className={`hcard ${c.revealedTo.length ? 'revealed' : ''}`} data-iid={iid} draggable
+    <div className={`hcard ${strictCls} ${c.revealedTo.length ? 'revealed' : ''}`} data-iid={iid} draggable
+      title={usable && !usable.ok ? usable.reason ?? 'Cannot be cast right now' : undefined}
+      onMouseLeave={() => setPayPreview([])}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); }}
-      onMouseEnter={() => setPreview({ face, extra: [costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined, ...altHints].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined })}
+      onMouseEnter={() => { showPay(); setPreview({ face, extra: [usable && !usable.ok ? `Can't cast: ${usable.reason ?? 'not now'}` : undefined, costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined, ...altHints].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined }); }}
       onClick={() => defaultAction(iid)}
       onContextMenu={(e) => { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
       <CardImage face={face} />
@@ -504,6 +544,7 @@ function CenterBar({ okRef, match, onLeave }: { okRef: React.MutableRefObject<()
           <div className="sub-actions">
             {myTurn && <button className="tiny" onClick={() => act({ t: 'nextTurn' })} title="Skip to the end of your turn">End turn</button>}
             <button className="tiny" onClick={() => act({ t: 'passUntilEOT' })} title="F6: auto-pass until end of turn">F6</button>
+            {!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) && <button className="tiny" title="Ask your opponent to let you fix the board by hand" onClick={() => act({ t: 'requestFixMode' } as never)}>Fix board</button>}
             <button className="tiny" disabled={!g.canUndo} onClick={() => act({ t: 'requestUndo' })} title="Ctrl+Z">Undo</button>
             <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
               { label: 'Stops are shown as dots on the phase bar.', disabled: true },
@@ -548,7 +589,7 @@ function Stack() {
               <small>{s.kind === 'trigger' && face ? `${face.name} · ` : ''}{g.players.find((p) => p.pid === s.controller)?.name}{s.x != null ? ` · X=${s.x}` : ''}</small>
               {refs.length > 0 && <small className="stack-targets">→ {refs.map((r) => targetName(g, r)).join(', ')}</small>}
             </div>
-            {i === 0 && !targeting && (
+            {i === 0 && !targeting && manualOk(g) && (
               <div className="stack-btns">
                 <button className="tiny" onClick={() => act({ t: 'resolve' })} title="Force-resolve now">Resolve</button>
                 <button className="tiny" onClick={() => act({ t: 'counterTop' })}>Counter</button>
@@ -636,6 +677,7 @@ function PendingChoices() {
       if (mode?.kind === 'target') setMode(null);
     }
   }, [g.pending, mode, setMode]);
+  const revealedIds = mine ? pendingRevealed(mine) : [];
   const targetingThis = !!tg && mode?.kind === 'target' && handling.current === mineId;
   const showModal = mine && (!tg || (dismissed === mineId && mine.options.length > 0));
   return (
@@ -650,9 +692,10 @@ function PendingChoices() {
         <div className="modal-bg pending-bg" onMouseDown={(e) => e.stopPropagation()}>
           <div className="modal pending" onMouseDown={(e) => e.stopPropagation()}>
             <p>{mine.prompt}</p>
+            <RevealedPick pending={mine} />
             <div className="row">
               {tg && <button className="primary" onClick={() => startTargeting(mine)}>Choose targets for {tg.label}</button>}
-              {mine.options.map((o) => <PendingOption key={o.value} o={o} onClick={() => act({ t: 'choose', id: mine.id, value: o.value })} />)}
+              {mine.options.filter((o) => !revealedIds.includes(o.value)).map((o) => <PendingOption key={o.value} o={o} onClick={() => act({ t: 'choose', id: mine.id, value: o.value })} />)}
             </div>
           </div>
         </div>
@@ -666,6 +709,29 @@ function PendingChoices() {
         <div key={p.id} className="undo-req pending-wait">Waiting for {g.players.find((x) => x.pid === p.pid)?.name ?? '?'} to decide: {p.prompt}</div>
       ))}
     </>
+  );
+}
+
+/** Cards revealed by a question (Duress-style): legal choices are clickable, the rest dimmed. */
+function RevealedPick({ pending }: { pending: { id: string; options: { value: string; label: string }[] } }) {
+  const { g, act } = useGame();
+  const ids = pendingRevealed(pending);
+  if (!ids.length) return null;
+  return (
+    <div className="revealed-pick">
+      {ids.map((iid) => {
+        const c = g.cards[iid];
+        if (!c || isHidden(c)) return null;
+        const face = faceOf(c, getCard);
+        const opt = pending.options.find((o) => o.value === iid);
+        return (
+          <button key={iid} className={`rv ${opt ? 'legal' : 'illegal'}`} disabled={!opt} title={opt ? opt.label : `${face.name} (not a legal choice)`}
+            onMouseEnter={() => setPreview({ face })} onClick={() => opt && act({ t: 'choose', id: pending.id, value: iid })}>
+            <CardImage face={face} />
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { effectivePT, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
+import { isStrict, summoningSickNoHaste } from './engine.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 
 // ---------------------------------------------------------------- context
@@ -57,6 +58,9 @@ export interface GameCtx {
   /** Battlefield cards to outline (stack item hover). */
   hoverTargets: string[];
   setHoverTargets: (iids: string[]) => void;
+  /** Sources auto-pay would tap (hand card hover). */
+  payPreview: string[];
+  setPayPreview: (iids: string[]) => void;
 }
 
 export const Ctx = createContext<GameCtx>(null as unknown as GameCtx);
@@ -65,7 +69,7 @@ export const useGame = () => useContext(Ctx);
 // ---------------------------------------------------------------- card on the table
 
 export function TableCard({ iid, small, attachments }: { iid: string; small?: boolean; attachments?: string[] }) {
-  const { g, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets } = useGame();
+  const { g, me, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets, payPreview } = useGame();
   const c = g.cards[iid];
   if (!c) return null;
   const hidden = isHidden(c);
@@ -83,11 +87,14 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
   const selectable = mode && mode.kind !== 'attackPW' && !targeting;
   const legal = targeting ? isLegal({ kind: 'card', iid }) : null;
   const chosen = mode?.kind === 'target' && mode.chosen.some((l) => l.some((r) => r.kind === 'card' && r.iid === iid));
+  // Strict mode: grey out my creatures that cannot attack right now.
+  const noAttack = !hidden && !!me && isStrict(g) && g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && !!isCreature && !c.attacking
+    && (c.tapped || summoningSickNoHaste(g, iid));
   const kws = !hidden && c.tempKeywords?.length ? c.tempKeywords : [];
 
   return (
     <div
-      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || hoverTargets.includes(iid) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''}`}
+      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || hoverTargets.includes(iid) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''} ${payPreview.includes(iid) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''}`}
       data-iid={iid}
       draggable={!hidden || c.faceDown}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); e.dataTransfer.effectAllowed = 'move'; }}

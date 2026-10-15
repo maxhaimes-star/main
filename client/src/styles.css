@@ -349,3 +349,17 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .saga-chapter { background: #5b3a1a; color: #fff; border: 1px solid #e6c47a; font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px; white-space: nowrap; }
 .passes { margin-top: 6px; }
 .nominate-panel { margin-top: 10px; }
+
+.tcard.pay-preview { outline: 3px solid #f0b840; outline-offset: 1px; box-shadow: 0 0 14px #f0b840aa; z-index: 4; }
+.tcard.no-attack .card-img { filter: grayscale(.9) brightness(.7); }
+.hcard.castable .card-img { box-shadow: 0 0 0 2px #5fd08a, 0 0 12px #5fd08a99; border-radius: 6px; }
+.hcard.uncastable .card-img { filter: grayscale(.7) brightness(.62); }
+.hcard.uncastable:hover { transform: translateY(-6px); }
+.land-plays { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--bg2); border: 1px solid var(--line); margin-right: 8px; white-space: nowrap; }
+.land-plays.none { opacity: .6; }
+.fix-banner { background: #b3202a; color: #fff; padding: 6px 12px; display: flex; gap: 12px; align-items: center; font-weight: 600; border-radius: 6px; margin-bottom: 6px; }
+.fix-banner button { background: #fff; color: #b3202a; }
+.revealed-pick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 10px 0; max-height: 60vh; overflow: auto; }
+.revealed-pick .rv { width: 120px; border-radius: 6px; padding: 0; border: 2px solid transparent; background: none; cursor: pointer; }
+.revealed-pick .rv.legal { border-color: #5fd08a; }
+.revealed-pick .rv.illegal { opacity: .4; filter: grayscale(.6); cursor: not-allowed; }
