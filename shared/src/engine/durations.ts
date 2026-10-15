@@ -52,7 +52,18 @@ let reverting = 0;
 export function afterMove(state: GameState, ctx: Ctx, inst: CardInstance, from: Zone, to: Zone) {
   if (inst.castInfo && to !== 'stack' && !(from === 'stack' && to === 'battlefield') && from !== to) inst.castInfo = undefined;
   extAfterMove(state, ctx, inst, from, to); // animations / copies / effects (engine/ext.ts)
-  if (from !== to && state.effects?.some((e) => e.kind === 'grant' && e.iid === inst.iid)) state.effects = state.effects.filter((e) => !(e.kind === 'grant' && e.iid === inst.iid));
+  if (from !== to && state.effects?.some((e) => e.kind === 'grant' && e.iid === inst.iid)) {
+    const earthbend = state.effects.find((e) => e.kind === 'grant' && e.iid === inst.iid && e.keyword === 'Earthbend');
+    state.effects = state.effects.filter((e) => !(e.kind === 'grant' && e.iid === inst.iid));
+    // Earthbend: "when it dies or is exiled, return it to the battlefield tapped".
+    if (earthbend && from === 'battlefield' && (to === 'graveyard' || to === 'exile') && !inst.token && state.cards[inst.iid] && reverting < 10) {
+      reverting++;
+      try {
+        moveCard(state, ctx, inst.iid, 'battlefield', { tapped: true, controller: inst.owner });
+        log(state, ctx, inst.owner, `${cardName(inst, ctx.lookup)} returns to the battlefield tapped (earthbend).`);
+      } finally { reverting--; }
+    }
+  }
   if (from === 'battlefield' && to !== 'battlefield' && state.effects?.length && reverting < 10) {
     reverting++;
     try { leftBattlefield(state, ctx, inst.iid); } finally { reverting--; }
@@ -102,7 +113,7 @@ export function durationsAtCleanup(state: GameState, ctx: Ctx) {
   const keep: TimedEffect[] = [];
   for (const e of state.effects) {
     if (e.kind === 'control' && e.until === 'eot') { revertControl(state, ctx, e.iid, e.previous); continue; }
-    if (e.kind === 'grant') continue; // "until end of turn" keyword grants (Snapcaster Mage)
+    if (e.kind === 'grant' && e.until === 'eot') continue; // "until end of turn" keyword grants (Snapcaster Mage)
     if (e.kind === 'dash') {
       const c = state.cards[e.iid];
       if (c?.zone === 'battlefield') { moveCard(state, ctx, e.iid, 'hand'); log(state, ctx, e.controller, `${cardName(c, ctx.lookup)} returns to its owner's hand (dash).`); }

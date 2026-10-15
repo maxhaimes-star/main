@@ -51,6 +51,8 @@ export interface PlayPermission {
   extraCost?: string;
   /** Costs {N} more (Elite Spellbinder). */
   raise?: number;
+  /** Pay this mana cost rather than the card's (airbend: {2}). */
+  manaCost?: string;
   /** Exiled when it leaves the stack (flashback / escape). */
   exileOnLeave?: boolean;
   /** Only lands / only nonland cards. */
@@ -131,6 +133,7 @@ function fromStatic(p: Record<string, string>, key: string, source: string, c: C
 function fromKeyword(kw: string, key: string, source: string): PlayPermission | undefined {
   const k = kw.trim();
   if (k === 'Retrace') return { key, source: `retrace — ${source}`, extraCost: 'Discard<1/Land/land card>', lands: 'never' };
+  if (k === 'Airbend') return { key, source: `airbend — ${source}`, manaCost: '{2}' };
   if (k === 'Flashback') return { key, source: `flashback — ${source}`, exileOnLeave: true, lands: 'never' };
   const esc = /^Escape:CardManaCost\s*(.*)$/.exec(k);
   if (esc) return { key, source: `escape — ${source}`, extraCost: esc[1].trim(), exileOnLeave: true, flags: { escaped: true }, lands: 'never' };
@@ -272,6 +275,7 @@ export function applyPermissions(st: GameState, c: CardInstance, pid: string, fa
     if (!perm) { d.unavailable ??= `You can't cast it from ${where}`; continue; }
     let mana = d.mana;
     if (perm.free || perm.altCost) mana = d.kicker?.mana ?? '';
+    if (perm.manaCost) mana = perm.manaCost + (d.kicker?.mana ?? '');
     if (perm.anyColor) mana = anyColorCost(mana);
     if (perm.raise) mana = raiseGeneric(mana, perm.raise);
     d.mana = mana;

@@ -23,7 +23,7 @@ import type { ParsedAbility } from './types.ts';
 export const SYNTH_UNIQUE_APIS = new Set(['Hideaway', 'OathOfDruids', 'SylvanLibrary', 'SacSelfToken']);
 
 export const UNIQUE_APIS = new Set([
-  'AddTurn', 'Balance', 'Vote', 'TwoPiles', 'RemoveCounter', 'ControlPlayer', 'Play', 'WinsGame', ...SYNTH_UNIQUE_APIS,
+  'AddTurn', 'Balance', 'Vote', 'TwoPiles', 'RemoveCounter', 'ControlPlayer', 'WinsGame', ...SYNTH_UNIQUE_APIS,
 ]);
 
 /** Counting variables only the unique effects understand (see unique.ts uniqueVar). */

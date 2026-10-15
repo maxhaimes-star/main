@@ -242,7 +242,7 @@ export type TimedEffect =
   | { kind: 'exiled'; id: string; controller: string; until: 'hostLeaves'; hostIid: string; cards: { iid: string; from: string; owner: string }[] }
   | { kind: 'dash'; id: string; controller: string; until: 'eot'; iid: string }
   /** A keyword granted to a card outside the battlefield until end of turn (Snapcaster Mage: flashback), engine/permissions.ts. */
-  | { kind: 'grant'; id: string; controller: string; until: 'eot'; iid: string; zone: string; keyword: string; source: string }
+  | { kind: 'grant'; id: string; controller: string; until: 'eot' | 'permanent'; iid: string; zone: string; keyword: string; source: string }
   | EffectRecord;
 
 /** When an Effect / animation ends. */
@@ -370,4 +370,18 @@ export interface AutoCont {
   targets: TargetRef[][];
   lki: Record<string, Lki>;
   remembered: string[];
+  /** The triggered ability's optional cost (AB$ ... Cost$) was paid: step 0 runs without asking again. */
+  costPaid?: boolean;
+  /**
+   * Sub-chains inserted while resolving (Branch, RepeatEach, GenericChoice, modes chosen on resolution ...), re-applied
+   * in order when the resolution resumes: the flattened chain of SVar `svar` (or the synthesized `line`) goes after
+   * step `at`, preceded by a step that sets the remembered objects to `remember` (RepeatEach) when given.
+   */
+  splices?: { at: number; svar: string; remember?: string[]; modes?: string[]; line?: string }[];
+  /** Targets chosen while resolving (steps added by splices / modes chosen on resolution), by step index. */
+  lateTargets?: Record<number, TargetRef[]>;
+  /** "Unless" costs already decided this resolution: step index -> the step runs. */
+  unless?: Record<number, boolean>;
+  /** ChooseCard / ChooseNumber / ChooseType results of this resolution (Defined$ ChosenCard ...), imprinted cards. */
+  chosen?: { cards?: string[]; number?: number; players?: string[]; type?: string; color?: string; imprinted?: string[] };
 }

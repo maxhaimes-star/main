@@ -14,13 +14,14 @@ import { cardName, hasKeyword } from '../game/rules.ts';
 import { type Ctx, log, player, randomId } from '../game/state.ts';
 import { type CardInstance, type GameEvent, type GameState, type StackItem, STEPS, type Zone } from '../game/types.ts';
 import { checkTargets } from './play.ts';
-import { lkiOf } from './resolve.ts';
+import { answerResolveTargets, lkiOf } from './resolve.ts';
 import { chainOf, describe, getScript, isAutomatable, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
 import { extraTriggerHosts, grantedTriggers } from './effects.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { uniqueVar } from './unique.ts';
 import { notePermissionUse } from './permissions.ts';
+import { parseCostTokens } from './paycost.ts';
 import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
 
 /** Max triggered abilities detected per player action (loop guard). */
@@ -62,7 +63,7 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
   const unknown = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
   const chain = triggerChain(cardId, face, p.Execute);
-  const cost = !!chain && chain.kind === 'AB' && !!chain.params.Cost;
+  const cost = !!chain && chain.kind === 'AB' && !!chain.params.Cost && parseCostTokens(chain.params.Cost).unknown.length > 0;
   const un = chain ? isAutomatable(chain).unsupported : ['no chain'];
   const auto = !!chain && !cost && un.length === 0;
   if (unknown) return { detect: false, chain: auto, reason: `param ${unknown}` };
@@ -349,9 +350,10 @@ function queueFor(state: GameState, ctx: Ctx, host: Host, index: number, p: Reco
   const chain = chainOf(auto);
   const faceName = (cardId && getScript(cardId)?.[face]?.name) || name;
   const desc = describe(p.TriggerDescription ?? chain?.description ?? 'Triggered ability', faceName);
-  const manual = !chain || (chain.kind === 'AB' && !!chain.params.Cost);
+  const optCost = !!chain && chain.kind === 'AB' && !!chain.params.Cost ? parseCostTokens(chain.params.Cost) : undefined;
+  const manual = !chain || (!!optCost && optCost.unknown.length > 0);
   const q: QueuedTrigger = { id: randomId(ctx.rng), controller: c.controller, sourceIid: state.cards[c.iid] ? c.iid : undefined, sourceName: name, text: `${name}: ${desc}`, auto };
-  if (p.OptionalDecider) q.optional = true;
+  if (p.OptionalDecider && !(optCost && !optCost.mandatory)) q.optional = true; // an optional cost already asks
   if (manual) q.manual = true;
   return q;
 }
@@ -584,6 +586,7 @@ export function answerTriggerTargets(state: GameState, ctx: Ctx, pid: string, id
   const pend = state.pending.find((p) => p.id === id);
   if (!pend) return 'That question is no longer open';
   if (pend.pid !== pid) return 'That question is for another player';
+  if (pend.targets && pend.data.kind !== 'trigger') return answerResolveTargets(state, ctx, pend, targets); // resolve.ts / more.ts questions
   if (!pend.targets || pend.data.kind !== 'trigger') return 'That question does not take targets';
   const t = (state.triggerQueue ?? []).find((x) => x.id === pend.data.qid);
   if (!t) { state.pending = state.pending.filter((p) => p !== pend); return null; }

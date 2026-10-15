@@ -1,6 +1,6 @@
 /**
  * Effects of the cube's unique / hard cards (see unique-support.ts for the list and the support checks):
- * extra turns, Balance, Council's Judgment votes, Liliana's two piles, Mindslaver, Hideaway + Play,
+ * extra turns, Balance, Council's Judgment votes, Liliana's two piles, Mindslaver, Hideaway,
  * "untap up to N lands", Jace's +2 on any library, remove counters, win the game, Oath of Druids,
  * Sylvan Library, Dark Depths' Marit Lage, and a fallback for simple Animate (haste + "sacrifice at end").
  *
@@ -21,7 +21,7 @@ interface Objs { cards: string[]; players: string[] }
 /** A pick handled by resolve.ts's generic pick machinery (same shape as its PickData). */
 export interface PickSpec {
   kind: 'pick';
-  action: 'move' | 'discard' | 'sacrifice';
+  action: 'move' | 'discard' | 'sacrifice' | 'tap';
   chooser: string;
   candidates: string[];
   left: number;
@@ -86,7 +86,6 @@ type UData =
   | { kind: 'unique'; u: 'pile'; separator: string; target: string; cards: string[]; pile1: string[]; chosen?: string; source: string; cont: AutoCont }
   | { kind: 'unique'; u: 'tap'; pid: string; tap: boolean; candidates: string[]; left: number; optional: boolean; source: string; cont: AutoCont }
   | { kind: 'unique'; u: 'jace'; pid: string; target: string; iid: string; cont: AutoCont }
-  | { kind: 'unique'; u: 'play'; pid: string; queue: string[]; source: string; cont: AutoCont }
   | { kind: 'unique'; u: 'hideaway'; pid: string; host: string; top: string[]; cont: AutoCont }
   | { kind: 'unique'; u: 'oath'; pid: string; valid: string; source: string; cont: AutoCont }
   | { kind: 'unique'; u: 'sylvan'; pid: string; phase: 'draw' | 'pick' | 'pay'; left: number; card?: string; life: number; n: number; source: string; cont: AutoCont };
@@ -144,7 +143,6 @@ export function execUniqueStep(state: GameState, ctx: Ctx, r: UniqueRun): Result
       log(state, ctx, r.controller, `${pname(state, r.controller)} will control ${pname(state, pid)} during ${pname(state, pid)}'s next turn (${r.sourceName}).`);
       return 'ok';
     }
-    case 'Play': return play(state, ctx, r);
     case 'WinsGame': {
       if (r.uncertain) { r.manual(); return 'ok'; }
       state.phase = 'over';
@@ -343,58 +341,7 @@ function animate(state: GameState, ctx: Ctx, r: UniqueRun): Result {
   return 'ok';
 }
 
-// ------------------------------------------------------------------ Play (Shelldock Isle) / Hideaway
-
-function play(state: GameState, ctx: Ctx, r: UniqueRun): Result {
-  const p = r.step.params;
-  if (r.uncertain) { r.manual(); return 'ok'; }
-  let cards: string[];
-  if (p.Defined === 'ExiledWith') cards = r.sourceIid ? [...(state.remembered?.[r.sourceIid] ?? [])] : [];
-  else cards = r.defined('Remembered')?.cards ?? [];
-  cards = cards.filter((iid) => state.cards[iid] && state.cards[iid].zone !== 'battlefield' && state.cards[iid].zone !== 'stack');
-  if (!cards.length) { log(state, ctx, r.controller, `${r.sourceName}: no card to play.`); return 'ok'; }
-  const d: Extract<UData, { u: 'play' }> = { kind: 'unique', u: 'play', pid: r.controller, queue: cards, source: r.sourceName, cont: r.cont() };
-  if (p.Optional !== 'True') {
-    for (const iid of cards) playFree(state, ctx, r.controller, iid, r.sourceName);
-    return 'ok';
-  }
-  askPlay(state, ctx, d);
-  return 'wait';
-}
-
-function askPlay(state: GameState, ctx: Ctx, d: Extract<UData, { u: 'play' }>) {
-  const iid = d.queue[0];
-  if (!iid) { resumeAuto(state, ctx, d.cont); return; }
-  ask(state, ctx, d.pid, `${d.source}: play the card without paying its mana cost?`, [{ value: 'yes', label: `Play ${nm(state, ctx, iid)}` }, { value: 'no', label: "Don't" }], d);
-}
-
-/** Play a card without paying its mana cost: lands enter the battlefield, spells go on the stack (resolved automatically when they need no choices). */
-export function playFree(state: GameState, ctx: Ctx, pid: string, iid: string, via: string) {
-  const c = state.cards[iid];
-  if (!c) return;
-  c.faceDown = false;
-  const name = cardName(c, ctx.lookup);
-  if (faceOf(c, ctx.lookup).types.includes('Land')) {
-    moveCard(state, ctx, iid, 'battlefield', { controller: pid });
-    log(state, ctx, pid, `${pname(state, pid)} plays ${name} (${via}).`);
-    return;
-  }
-  detach(state, c);
-  c.zone = 'stack';
-  c.controller = pid;
-  c.revealedTo = [];
-  c.castAs = undefined;
-  c.transformed = false;
-  const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid, controller: pid, text: name };
-  const sp = c.cardId ? spellAbility(c.cardId, 0) : undefined;
-  const needsChoice = !!sp && (targetSpecs(sp.ability).length > 0 || sp.ability.api === 'Charm');
-  if (sp && !needsChoice) item.auto = { cardId: c.cardId!, face: 0, source: 'spell', index: sp.index, targets: [], targetZones: {} };
-  state.stack.push(item);
-  const st = turnStats(state);
-  st.cast[pid] = (st.cast[pid] ?? 0) + 1;
-  emit(state, { t: 'cast', iid, pid, nth: st.cast[pid] });
-  log(state, ctx, pid, `${pname(state, pid)} casts ${name} without paying its mana cost (${via})${needsChoice ? ' — it needs targets / modes: resolve it by hand' : ''}.`);
-}
+// ------------------------------------------------------------------ Hideaway (Shelldock Isle: its Play ability is in more.ts)
 
 function hideaway(state: GameState, ctx: Ctx, r: UniqueRun): Result {
   const n = parseInt(r.step.params.Num ?? '4', 10) || 4;
@@ -495,13 +442,6 @@ export function answerUniquePending(state: GameState, ctx: Ctx, pend: Pending, v
         log(state, ctx, pend.pid, `${who} puts the top card of ${pname(state, d.target)}'s library on the bottom.`);
       } else log(state, ctx, pend.pid, `${who} leaves the card on top of ${pname(state, d.target)}'s library.`);
       resumeAuto(state, ctx, d.cont);
-      return null;
-    }
-    case 'play': {
-      const [iid, ...rest] = d.queue;
-      if (value === 'yes' && iid && state.cards[iid]) playFree(state, ctx, d.pid, iid, d.source);
-      else if (iid) log(state, ctx, d.pid, `${who} doesn't play the card (${d.source}).`);
-      askPlay(state, ctx, { ...d, queue: rest });
       return null;
     }
     case 'hideaway': {

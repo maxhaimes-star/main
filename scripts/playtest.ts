@@ -190,6 +190,7 @@ function act(G: Game, pid: string, a: GameAction): string | null {
     return err;
   } catch (e) {
     const err = e as Error;
+    if (process.env.PT_STACK) console.error(err.stack);
     G.issues.push({ kind: 'exception', card: cardIn(err.message) ?? ctxCard, text: `${a.t}: ${err.message} @ ${(err.stack ?? '').split('\n').slice(1, 3).map((s) => s.trim()).join(' | ')}`, seed: G.seed, turn: G.g.turn });
     return 'exception';
   }

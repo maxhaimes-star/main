@@ -8,6 +8,13 @@ import { type Animation, type AutoInfo, type ForgeFace, type ParsedAbility, type
 import { KEYWORD_APIS, synthAbilities, synthLine } from './keywords.ts';
 import { uniqueReason, uniqueVarSupported } from './unique-support.ts';
 import { EXT_APIS, extDefinedOk, extUnsupported } from './ext.ts';
+import { MORE_DEFINED, moreReason, moreVarSupported } from './more-support.ts';
+
+/** "Unless" costs resolve.ts can ask for (mana, X, life, energy, discard, sacrifice ...). */
+export function unlessCostSupported(cost: string): boolean {
+  if (/^DefinedCost_Remembered(_Minus\d+)?$/.test(cost.trim())) return true;
+  return (cost.trim().match(/\S+<[^>]*>|\S+/g) ?? []).every((t) => /^(\d+|[WUBRGCX]|[WUBRG2]\/[WUBRGP])$/.test(t) || /^(PayLife|PayEnergy|Discard|Sac|ExileFromGrave|ExileFromHand|Return|tapXType)<[^>]+>$/.test(t));
+}
 
 export const SCRIPTS = data as unknown as ScriptData;
 
@@ -333,12 +340,13 @@ const AMOUNT_PARAMS = ['NumDmg', 'NumCards', 'LifeAmount', 'TokenAmount', 'Count
 /** SVar values the engine can evaluate. */
 export function supportedVar(v: string | undefined): boolean {
   if (!v) return false;
-  return /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v)
+  return /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v) || v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount'
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
     || supportedCount(v)
     || /^Count\$Valid [A-Za-z.+,!]+$/.test(v)
-    || uniqueVarSupported(v);
+    || uniqueVarSupported(v)
+    || moreVarSupported(v);
 }
 
 export function amountSupported(raw: string | undefined, svars: Record<string, string> | undefined): boolean {
@@ -354,12 +362,15 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   const api = step.api;
   const unique = uniqueReason(step); // unique / hard cards (unique-support.ts)
   if (unique !== undefined) return unique === null && p.Condition && !KNOWN_CONDITIONS.has(p.Condition) ? `${api} (Condition$ ${p.Condition})` : unique;
+  const more = moreReason(step); // engine/more.ts
+  if (more !== undefined) return more;
+  if (api === 'Charm' && step.choices?.length) return null; // modes are asked on resolution when none were chosen
   if (api === 'Effect' && p.AILogic === 'CantRegenerate') return null; // regeneration isn't modelled: no-op
   const ext = EXT_APIS.has(api); // Animate, Effect, Clone ... (engine/ext.ts)
   if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api) && !ext) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;
-  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined) && !(ext && extDefinedOk(p.Defined))) return `${api} (Defined$ ${p.Defined})`;
-  if (p.UnlessCost && api !== 'Counter') return `${api} (UnlessCost)`;
+  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined) && !MORE_DEFINED.has(p.Defined) && !/^Valid [A-Za-z.+,!]+$/.test(p.Defined) && !(ext && extDefinedOk(p.Defined))) return `${api} (Defined$ ${p.Defined})`;
+  if (p.UnlessCost && api !== 'Counter' && !unlessCostSupported(p.UnlessCost)) return `${api} (UnlessCost)`;
   if (p.Condition && !KNOWN_CONDITIONS.has(p.Condition)) return `${api} (Condition$ ${p.Condition})`;
   for (const k of AMOUNT_PARAMS) {
     if (k === 'Amount' && !['Surveil', 'Mana', 'Sacrifice'].includes(api)) continue;
@@ -373,10 +384,10 @@ export function unsupportedReason(step: ParsedAbility): string | null {
       if (step.kind !== 'DB' || p.Mode !== 'Phase' || !PHASES[p.Phase ?? ''] || !p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
       if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
       break;
-    case 'ImmediateTrigger': if (step.kind !== 'DB' || !p.Execute || !step.svars?.[p.Execute] || (p.TriggerAmount && p.TriggerAmount !== 'Remembered$Amount')) return 'ImmediateTrigger'; break;
+    case 'ImmediateTrigger': if (step.kind === 'SP' || !p.Execute || !step.svars?.[p.Execute] || (p.TriggerAmount && p.TriggerAmount !== 'Remembered$Amount')) return 'ImmediateTrigger'; break;
     case 'Investigate': if (p.Num && !amountSupported(p.Num, step.svars)) return 'Investigate'; break;
     case 'Tap': case 'Untap': if (p.UntapType || p.TapType) return `${api} (choice)`; break;
-    case 'Counter': if (p.UnlessCost && !/^[\dWUBRGCX ]+$/.test(p.UnlessCost)) return 'Counter (UnlessCost)'; break;
+    case 'Counter': if (p.UnlessCost && !unlessCostSupported(p.UnlessCost)) return 'Counter (UnlessCost)'; break;
     case 'Token': if (p.AtEOT && !['Sacrifice', 'Exile', 'ExileCombat'].includes(p.AtEOT)) return 'Token (AtEOT)';
       if (!p.TokenScript || p.TokenScript.split(',').some((t) => !SCRIPTS.tokens[t.trim()])) return 'Token (unknown token)'; break;
     case 'ChangeZone': {

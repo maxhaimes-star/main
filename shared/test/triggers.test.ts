@@ -102,13 +102,16 @@ describe('ETB triggers', () => {
     expect(g.stack[0].auto?.targets).toEqual([[cardRef(gg)]]);
     resolveAll(g, ctx);
     expect(g.cards[gg].damage).toBe(1);
-    expect(logText(g)).toMatch(/Not automated: .*Amass/);
+    // amass Orcs 1: a 0/0 Orc Army token with a +1/+1 counter
+    const army = g.battlefield.map((i) => g.cards[i]).find((c) => c.token?.name === 'Orc Army');
+    expect(army?.counters['+1/+1']).toBe(1);
     // opponent draws an extra card -> Bowmasters triggers again
     act(g, ctx, 'b', { t: 'draw', n: 1 });
     expect(g.pending[0]?.targets).toBeDefined();
     act(g, ctx, 'a', { t: 'chooseTargets', id: g.pending[0].id, targets: [[player('b')]] });
     resolveAll(g, ctx);
     expect(P(g, 'b').life).toBe(19);
+    expect(army && g.cards[army.iid].counters['+1/+1']).toBe(2); // the existing Army grows
   });
 
   it('flicker (Stage 1 Ephemerate) re-triggers ETBs', () => {

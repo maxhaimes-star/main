@@ -6,7 +6,7 @@ import { cardName, effectivePT, faceOf, hasKeyword, isCreature, payFromPool } fr
 import { type Ctx, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import type { CardInstance, GamePlayer, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import type { TokenData } from '../cards.ts';
-import { chainOf, describe, flatten, PHASES, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
+import { chainOf, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import { staticsDefineToughness } from './statics.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
@@ -15,11 +15,15 @@ import { answerKeywordPending, execKeywordStep } from './keyword-play.ts';
 import { answerReplacementPending, cantBeCountered, counterAmount, damagePrevented, replaceDraws, tokenEntered, tokenMultiplier } from './replacements.ts';
 import { answerCostPending, type CostData } from './costs.ts';
 import { conditionTrue, type CountEnv, evalCount } from './counts.ts';
-import { addEffect } from './durations.ts';
+import { addEffect, turnInfo } from './durations.ts';
 import { execUniqueStep, type UniqueRun, uniqueVar, answerUniquePending, type PickSpec } from './unique.ts';
 import { isSimpleAnimate, uniqueReason } from './unique-support.ts';
 import { answerTapCost } from './turns.ts';
 import { answerExtPending, execExtStep, EXT_APIS, type StepApi } from './ext.ts';
+import { canPayCost, costText, parseCostTokens, payCostNow, timesPayable } from './paycost.ts';
+import { answerMorePending, answerMoreTargets, execMoreStep, MORE_APIS, moreDefinedValue, moreVar, type MoreRun } from './more.ts';
+import { checkTargets } from './play.ts';
+import { getCard } from '../cube.ts';
 
 // ------------------------------------------------------------------ run context
 
@@ -50,14 +54,52 @@ function makeRun(state: GameState, ctx: Ctx, cont: AutoCont): Run | undefined {
   const face = SCRIPTS.cards[auto.cardId]?.[auto.face];
   const trig = auto.trigger;
   const lki = trig?.lki ? { ...trig.lki, ...cont.lki } : cont.lki;
-  return {
+  const r: Run = {
     ...cont, lki, steps, specOf: specIndexByStep(steps), svars: face?.svars ?? {}, controller: cont.item.controller, sourceIid,
-    sourceName: src ? cardName(src, ctx.lookup) : face?.name ?? 'It', deathtouched: [], trig,
+    sourceName: src ? cardName(src, ctx.lookup) : face?.name ?? 'It', deathtouched: [], trig, splices: [], chosen: { ...(cont.chosen ?? {}) },
   };
+  for (const sp of cont.splices ?? []) spliceSteps(r, sp, true);
+  return r;
+}
+
+/** Steps a splice inserts (a pseudo step setting the remembered objects first, for RepeatEach). */
+function spliceList(svars: Record<string, string>, sp: NonNullable<AutoCont['splices']>[number], faceName = 'It'): ParsedAbility[] {
+  const line = sp.line ?? (sp.svar ? svars[sp.svar] : undefined);
+  const chain = line ? parseAbility(line, svars, faceName) : undefined;
+  const list = chain ? flatten(chain, sp.modes) : [];
+  if (sp.remember) list.unshift({ kind: 'DB', api: '_Remember', params: { Objects: sp.remember.join(',') }, description: '', svars });
+  return list;
+}
+
+/** Insert a splice into a run (and record it so a resumed run rebuilds it). Returns the number of steps added. */
+function spliceSteps(r: Run, sp: NonNullable<AutoCont['splices']>[number], replay = false): number {
+  const list = spliceList(r.svars, sp, r.sourceName);
+  r.steps.splice(sp.at + 1, 0, ...list);
+  r.specOf.splice(sp.at + 1, 0, ...list.map(() => undefined));
+  // Late targets / unless decisions of later steps move with them.
+  const shift = <T,>(rec: Record<number, T> | undefined) => {
+    if (!rec) return rec;
+    const out: Record<number, T> = {};
+    for (const [k, v] of Object.entries(rec)) out[Number(k) > sp.at ? Number(k) + list.length : Number(k)] = v;
+    return out;
+  };
+  if (list.length && !replay) { r.lateTargets = shift(r.lateTargets); r.unless = shift(r.unless); }
+  (r.splices ??= []).push(sp);
+  return list.length;
+}
+
+/** Record a splice on a continuation (Pending answers): returns the number of steps it adds. */
+export function addSplice(cont: AutoCont, at: number, svar: string, opts: { remember?: string[]; modes?: string[]; line?: string }): number {
+  const auto = cont.item.auto;
+  const face = auto ? SCRIPTS.cards[auto.cardId]?.[auto.face] : undefined;
+  const sp = { at, svar, ...opts };
+  const n = spliceList(face?.svars ?? {}, sp, face?.name).length;
+  (cont.splices ??= []).push(sp);
+  return n;
 }
 
 function contAt(r: Run, next: number): AutoCont {
-  return JSON.parse(JSON.stringify({ item: r.item, next, targets: r.targets, lki: r.lki, remembered: r.remembered })) as AutoCont;
+  return JSON.parse(JSON.stringify({ item: r.item, next, targets: r.targets, lki: r.lki, remembered: r.remembered, splices: r.splices, lateTargets: r.lateTargets, unless: r.unless, chosen: r.chosen })) as AutoCont;
 }
 
 export function lkiOf(c: CardInstance, ctx: Ctx, state?: GameState): Lki {
@@ -96,6 +138,7 @@ function manual(state: GameState, ctx: Ctx, r: Run, step: ParsedAbility) {
 // ------------------------------------------------------------------ targets & defined objects
 
 function ownTargets(r: Run, i: number): TargetRef[] | undefined {
+  if (r.lateTargets?.[i]) return r.lateTargets[i];
   const s = r.specOf[i];
   return s == null ? undefined : r.targets[s] ?? [];
 }
@@ -142,10 +185,11 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     }
     case 'Player': return { cards: [], players: live };
     case 'Opponent': case 'Player.Opponent': return { cards: [], players: live.filter((p) => p !== r.controller) };
-    case 'Remembered': case 'RememberedLKI': {
+    case 'Remembered': case 'RememberedLKI': case 'RememberedCard': {
       // The run's own memory, else what the permanent remembered earlier (e.g. Journey to Nowhere's exiled card).
       const mem = r.remembered.length ? r.remembered : (r.sourceIid && r.item.kind !== 'spell' ? state.remembered?.[r.sourceIid] ?? [] : []);
-      return { cards: [...mem], players: [] };
+      const isP = (x: string) => state.players.some((p) => p.pid === x);
+      return { cards: mem.filter((x) => !isP(x)), players: mem.filter(isP) };
     }
     case 'Enchanted': case 'Equipped': return { cards: src?.attachedTo ? [src.attachedTo] : [], players: [] };
   }
@@ -168,7 +212,24 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     }
   }
   if (value === 'DelayTriggerRemembered' || value === 'DelayTriggerRememberedLKI') return { cards: [...(t?.remembered ?? [])], players: [] };
-  if (value === 'ChosenPlayer') { const pc = src?.chosen?.player; return { cards: [], players: pc ? [pc] : [] }; }
+  if (value === 'ChosenPlayer') { const pc = r.chosen?.players?.[0] ?? src?.chosen?.player; return { cards: [], players: pc ? [pc] : [] }; }
+  if (value === 'ChosenCard' || value === 'ChosenCardLKI') return { cards: [...(r.chosen?.cards ?? [])], players: [] };
+  if (value === 'ChosenCardController' || value === 'ChosenCardOwner') {
+    const ps = (r.chosen?.cards ?? []).map((x) => (value === 'ChosenCardOwner' ? state.cards[x]?.owner : state.cards[x]?.controller) ?? r.lki[x]?.controller);
+    return { cards: [], players: [...new Set(ps.filter((x): x is string => !!x))] };
+  }
+  if (value === 'TargetedOrController') {
+    const t = parentTargets(r, i);
+    const ps = t.map((ref) => (ref.kind === 'player' ? ref.pid : ref.kind === 'card' ? state.cards[ref.iid]?.controller : undefined)).filter((x): x is string => !!x);
+    return { cards: [], players: ps.length ? [...new Set(ps)] : [r.controller] };
+  }
+  if (value === 'ThisTargetedCard' || value === 'ThisTargetedPlayer') { const t = split(state, ownTargets(r, i) ?? []); return value === 'ThisTargetedCard' ? { cards: t.cards, players: [] } : { cards: [], players: t.players }; }
+  if (value?.startsWith('Valid ')) {
+    const E: MatchEnv = { controller: r.controller, sourceIid: r.sourceIid, lookup: getCard, remembered: r.remembered };
+    return { cards: state.battlefield.filter((x) => matchCard(state.cards[x], value.slice(6), E) === true), players: [] };
+  }
+  const more = moreDefinedValue(state, r, value); // engine/more.ts: Imprinted, ReplacedCard, TriggeredSpellAbility ...
+  if (more) return more;
   return undefined;
 }
 
@@ -201,6 +262,9 @@ function countEnv(state: GameState, ctx: Ctx, r: Run): CountEnv {
 function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefined {
   if (!supportedVar(v)) return undefined;
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
+  const mv = moreVar(state, r, ctx, v); // engine/more.ts
+  if (mv !== undefined) return mv;
+  if (v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount') return r.trig?.amount ?? 0;
   const uv = uniqueVar(state, ctx, r.controller, r.remembered, v);
   if (uv !== undefined) return uv;
   const counted = evalCount(v, countEnv(state, ctx, r));
@@ -243,6 +307,8 @@ function amount(state: GameState, ctx: Ctx, r: Run, raw: string | undefined, dfl
   if (s.startsWith('+')) s = s.slice(1);
   else if (s.startsWith('-')) { sign = -1; s = s.slice(1); }
   if (/^\d+$/.test(s)) return sign * parseInt(s, 10);
+  const announced = r.item.auto?.extra?.[s]; // Announce$ values (Intrepid Adversary's NumTimes)
+  if (announced != null && /^-?\d+$/.test(announced)) return sign * parseInt(announced, 10);
   const sv = r.svars[s];
   const n = sv ? evalVar(state, ctx, r, sv) : undefined;
   return n == null ? undefined : sign * n;
@@ -375,7 +441,7 @@ function openPeek(state: GameState, ctx: Ctx, r: Run, i: number, p: GamePlayer, 
 
 interface PickData {
   kind: 'pick';
-  action: 'move' | 'discard' | 'sacrifice';
+  action: 'move' | 'discard' | 'sacrifice' | 'tap';
   chooser: string;
   candidates: string[];
   left: number;
@@ -389,6 +455,19 @@ interface PickData {
   untilHost?: string;
   /** Player whose hand is revealed to the chooser for this pick (Pending.revealed). */
   reveal?: string;
+  /** Each pick adds 1 to the resolving ability's X ("tap X untapped Myr"). */
+  countX?: boolean;
+}
+
+/** A triggered ability's optional cost ("you may pay {E}{E}{E}. When you do ..."), asked as it resolves. */
+interface OptCostData {
+  kind: 'optcost';
+  cont: AutoCont;
+  cost: string;
+  x: number;
+  /** Mana<cost NumTimes>: the answer is how many times to pay. */
+  times?: boolean;
+  label: string;
 }
 
 interface ColorData {
@@ -525,6 +604,13 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     if (step.api !== 'Cleanup') manual(state, ctx, r, step);
     return 'ok';
   }
+  // A triggered ability with an optional cost ("you may pay ... If you do"): asked first (Guide of Souls, Smuggler's Copter ...).
+  if (i === 0 && step.kind === 'AB' && p.Cost && r.item.kind === 'trigger' && !r.costPaid) return optionalCost(state, ctx, r, step);
+  // Targets for a step added while resolving (a mode / branch chosen now): asked now.
+  if (step.params.ValidTgts && r.specOf[i] == null && !r.lateTargets?.[i]) return askLateTargets(state, ctx, r, i);
+  // "... unless <player> pays <cost>" / UnlessSwitched "if <player> pays <cost>, ...".
+  if (step.params.UnlessCost && step.api !== 'Counter' && r.unless?.[i] === undefined) return askUnless(state, ctx, r, i);
+  if (r.unless?.[i] === false) return 'ok';
   const cond = condition(state, ctx, r, i);
   if (cond === false) {
     log(state, ctx, r.controller, `${r.sourceName}: condition not met — skipped (${step.description}).`);
@@ -546,6 +632,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const bad = () => { manual(state, ctx, r, step); return 'ok' as const; };
   const E = env(state, ctx, r);
   if (EXT_APIS.has(step.api)) return execExtStep(state, ctx, step, extApi(state, ctx, r, i, remember, E)); // engine/ext.ts
+  if (MORE_APIS.has(step.api) || (step.api === 'Charm' && !step.params.Modes)) { // engine/more.ts
+    const res = execMoreStep(state, ctx, moreRun(state, ctx, r, i, cond === 'unknown'));
+    if (res) return res;
+  }
 
   switch (step.api) {
     case 'Cleanup': {
@@ -586,6 +676,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const prev = damagePrevented(state, ctx.lookup, pid);
         if (prev) { log(state, ctx, pid, `Damage to ${pname(state, pid)} is prevented (${prev}).`); continue; }
         player(state, pid).life -= k;
+        noteLife(state, pid, -k);
         hit.push(division && many ? `${pname(state, pid)} (${k})` : pname(state, pid));
         dealt += k;
         if (srcObj) emit(state, { t: 'damage', source: srcObj, target: pid, amount: k, combat: false });
@@ -594,6 +685,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       if (src && hasKeyword(src, ctx.lookup, 'Lifelink', state) && hit.length) {
         const gain = dealt;
         player(state, src.controller).life += gain;
+        noteLife(state, src.controller, gain);
         log(state, ctx, src.controller, `${pname(state, src.controller)} gains ${gain} life (lifelink).`);
       }
       return 'ok';
@@ -812,9 +904,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const auto = r.item.auto!;
       const text = describe(p.TriggerDescription ?? p.SpellDescription ?? 'Reflexive trigger', r.sourceName);
       const times = p.TriggerAmount === 'Remembered$Amount' ? r.remembered.length : 1;
+      const rememberedAmount = p.RememberSVarAmount ? amount(state, ctx, r, p.RememberSVarAmount, 0) : undefined;
       for (let k = 0; k < times; k++) (state.triggerQueue ??= []).push({
         id: randomId(ctx.rng), controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, text: `${r.sourceName}: ${text}`,
-        auto: { cardId: auto.cardId, face: auto.face, source: 'trigger', index: -1, svar: p.Execute, targets: [], trigger: { ...(r.trig ?? {}), mode: 'Immediate', remembered: [...r.remembered], lki: { ...r.lki } } },
+        auto: { cardId: auto.cardId, face: auto.face, source: 'trigger', index: -1, svar: p.Execute, targets: [], trigger: { ...(r.trig ?? {}), mode: 'Immediate', remembered: [...r.remembered], lki: { ...r.lki }, ...(rememberedAmount != null ? { amount: rememberedAmount } : {}) } },
       });
       return 'ok';
     }
@@ -853,9 +946,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       if (n == null || !o) return bad();
       for (const pid of o.players) {
         const pl = player(state, pid);
-        if (step.api === 'GainLife') pl.life += n;
-        else if (step.api === 'LoseLife') pl.life -= n;
-        else pl.life = n;
+        if (step.api === 'GainLife') { pl.life += n; noteLife(state, pid, n); }
+        else if (step.api === 'LoseLife') { pl.life -= n; noteLife(state, pid, -n); }
+        else { noteLife(state, pid, n - pl.life); pl.life = n; }
         const verb = step.api === 'GainLife' ? `gains ${n} life` : step.api === 'LoseLife' ? `loses ${n} life` : `has their life total set to ${n}`;
         log(state, ctx, pid, `${pl.name} ${verb} (${pl.life}).`);
       }
@@ -988,9 +1081,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const all: string[] = [];
       for (const pid of o.players) {
         const pl = player(state, pid);
-        const ids = pl.zones.library.slice(0, n);
-        for (const iid of ids) moveCard(state, ctx, iid, 'graveyard');
-        all.push(...ids);
+        const ids: string[] = [];
+        // One at a time: a replacement may shuffle the library (Emrakul), which re-keys its cards.
+        for (let k = 0; k < n && pl.zones.library.length; k++) { const iid = pl.zones.library[0]; ids.push(iid); moveCard(state, ctx, iid, 'graveyard'); }
+        all.push(...ids.filter((x) => state.cards[x]));
         log(state, ctx, pid, `${pl.name} mills ${names(state, ctx, ids)}.`);
       }
       remember(all);
@@ -1137,6 +1231,239 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   return bad();
 }
 
+// ------------------------------------------------------------------ optional costs of triggered abilities
+
+function optionalCost(state: GameState, ctx: Ctx, r: Run, step: ParsedAbility): StepResult {
+  const { toks, mandatory, unknown } = parseCostTokens(step.params.Cost);
+  if (unknown.length) { manual(state, ctx, r, step); return 'ok'; }
+  const x = r.svars.X && !/xPaid/.test(r.svars.X) ? amount(state, ctx, r, 'X', 0) ?? 0 : 0;
+  const label = costText(toks);
+  const cont = contAt(r, 0);
+  cont.costPaid = true;
+  const times = toks.find((t) => t.kind === 'manaTimes');
+  if (times) {
+    const max = timesPayable(state, r.controller, times.mana ?? '', 10, ctx.lookup);
+    const data: OptCostData = { kind: 'optcost', cont, cost: step.params.Cost, x, times: true, label };
+    state.pending.push({
+      id: randomId(ctx.rng), pid: r.controller, prompt: `${r.sourceName}: ${label.charAt(0).toLowerCase()}${label.slice(1)} — how many times? (you can afford ${max})`,
+      options: Array.from({ length: max + 1 }, (_v, k) => ({ value: String(k), label: k === 0 ? "Don't pay" : `${k} time${k === 1 ? '' : 's'}` })),
+      number: { min: 0, max }, data: data as unknown as Record<string, unknown>,
+    });
+    return 'wait';
+  }
+  const payable = canPayCost(state, ctx, r.controller, r.sourceIid, toks, x);
+  if (mandatory) {
+    if (!payable) { log(state, ctx, r.controller, `${r.sourceName}: can't ${label.toLowerCase()} — nothing happens.`); return 'wait'; }
+    payOptional(state, ctx, { kind: 'optcost', cont, cost: step.params.Cost, x, label }, 1);
+    return 'wait';
+  }
+  const data: OptCostData = { kind: 'optcost', cont, cost: step.params.Cost, x, label };
+  const options = payable ? [{ value: 'pay', label }, { value: 'decline', label: "Don't" }] : [{ value: 'decline', label: `Can't pay (${label.toLowerCase()})` }];
+  state.pending.push({ id: randomId(ctx.rng), pid: r.controller, prompt: `${r.sourceName}: ${label.toLowerCase()}? (${step.description})`, options, data: data as unknown as Record<string, unknown> });
+  return 'wait';
+}
+
+/** Pay an optional cost and continue the chain (after the cost's choices). Returns true when a question was asked. */
+function payOptional(state: GameState, ctx: Ctx, d: OptCostData, times: number): boolean {
+  const { toks } = parseCostTokens(d.cost);
+  const pid = d.cont.item.controller;
+  const src = d.cont.item.sourceIid ?? d.cont.item.iid;
+  const choices = payCostNow(state, ctx, pid, src, toks, d.x, times);
+  if (d.times && d.cont.item.auto) d.cont.item.auto.extra = { ...(d.cont.item.auto.extra ?? {}), NumTimes: String(times) };
+  if (choices.some((c) => c.kind === 'tapType' && c.upTo) && d.cont.item.auto) { d.cont.item.auto.x = 0; d.cont.item.x = 0; }
+  const name = d.cont.item.text.split(':')[0];
+  const picks: Omit<PickData, 'queue' | 'cont'>[] = choices.map((c) => ({
+    kind: 'pick', chooser: pid, candidates: c.candidates, left: c.n, optional: c.upTo, label: `${name}: ${c.text} (cost)`,
+    ...(c.kind === 'discard' ? { action: 'discard' as const } : c.kind === 'sac' ? { action: 'sacrifice' as const }
+      : c.kind === 'tapType' ? { action: 'tap' as const, countX: c.upTo } : { action: 'move' as const, dest: (c.kind === 'return' ? 'hand' : 'exile') as Zone }),
+  }));
+  if (startPicks(state, ctx, picks, d.cont)) return true;
+  runFrom(state, ctx, d.cont);
+  return false;
+}
+
+function answerOptionalCost(state: GameState, ctx: Ctx, pid: string, d: OptCostData, value: string) {
+  const who = player(state, pid).name;
+  const name = d.cont.item.text.split(':')[0];
+  if (d.times) {
+    const n = parseInt(value, 10) || 0;
+    if (n <= 0) { log(state, ctx, pid, `${who} doesn't pay (${name}).`); return; }
+    payOptional(state, ctx, d, n);
+    return;
+  }
+  if (value !== 'pay') { log(state, ctx, pid, `${who} doesn't ${d.label.toLowerCase()} (${name}).`); return; }
+  const { toks } = parseCostTokens(d.cost);
+  if (!canPayCost(state, ctx, pid, d.cont.item.sourceIid ?? d.cont.item.iid, toks, d.x)) { log(state, ctx, pid, `${who} can no longer ${d.label.toLowerCase()} (${name}).`); return; }
+  payOptional(state, ctx, d, 1);
+}
+
+// ------------------------------------------------------------------ targets chosen while resolving
+
+interface LateData { kind: 'late'; cont: AutoCont; step: number }
+
+function candidatesFor(state: GameState, ctx: Ctx, spec: TargetSpec, controller: string, sourceIid: string | undefined): TargetRef[] {
+  const refs: TargetRef[] = [];
+  if (spec.players) for (const p of state.players) refs.push({ kind: 'player', pid: p.pid });
+  if (spec.zone === 'stack') for (const s of state.stack) refs.push({ kind: 'stack', id: s.id });
+  else if (spec.cards) for (const iid of Object.keys(state.cards)) refs.push({ kind: 'card', iid });
+  return refs.filter((ref) => isValidTarget(state, spec, ref, controller, sourceIid, ctx.lookup));
+}
+
+/** A step added while resolving targets something: ask for its targets now (forced choices are made automatically). */
+function askLateTargets(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
+  const step = r.steps[i];
+  const spec = targetSpecs({ ...step, sub: undefined })[0];
+  const cands = spec ? candidatesFor(state, ctx, spec, r.controller, r.sourceIid) : [];
+  if (!spec || cands.length <= spec.min) {
+    if (spec && cands.length < spec.min) log(state, ctx, r.controller, `${r.sourceName}: no legal target${spec.min === 1 ? '' : 's'} for "${step.description}".`);
+    r.lateTargets = { ...(r.lateTargets ?? {}), [i]: cands };
+    return execStep(state, ctx, r, i);
+  }
+  const data: LateData = { kind: 'late', cont: contAt(r, i), step: i };
+  state.pending.push({
+    id: randomId(ctx.rng), pid: r.controller, prompt: `${r.sourceName}: ${step.description} — choose target${spec.max > 1 ? 's' : ''}`,
+    options: spec.min === 0 ? [{ value: 'none', label: 'No target' }] : [], data: data as unknown as Record<string, unknown>,
+    targets: { specs: [spec], sourceIid: r.sourceIid, controller: r.controller, label: r.sourceName },
+  });
+  return 'wait';
+}
+
+/** Answer (chooseTargets) to a question asked while resolving: late targets, or a more.ts question (cast / copy targets). */
+export function answerResolveTargets(state: GameState, ctx: Ctx, pend: Pending, targets: TargetRef[][]): string | null {
+  const more = answerMoreTargets(state, ctx, pend, targets);
+  if (more !== undefined) return more;
+  const d = pend.data as unknown as LateData;
+  if (d.kind !== 'late') return 'That question does not take targets';
+  const r = makeRun(state, ctx, d.cont);
+  const step = r?.steps[d.step];
+  if (!r || !step) { state.pending = state.pending.filter((p) => p !== pend); return null; }
+  const res = checkTargets(state, { ...step, sub: undefined }, undefined, targets, r.controller, r.sourceIid ?? '', ctx, r.sourceName);
+  if ('error' in res) return res.error;
+  state.pending = state.pending.filter((p) => p !== pend);
+  d.cont.lateTargets = { ...(d.cont.lateTargets ?? {}), [d.step]: res.targets[0] ?? [] };
+  for (const ref of res.targets.flat()) if (ref.kind === 'card' && state.cards[ref.iid]) d.cont.lki[ref.iid] = lkiOf(state.cards[ref.iid], ctx, state);
+  runFrom(state, ctx, d.cont);
+  return null;
+}
+
+// ------------------------------------------------------------------ "unless <player> pays <cost>"
+
+interface Unless2Data { kind: 'unless2'; cont: AutoCont; step: number; cost: string; switched: boolean; payer: string; x: number; label: string }
+
+/** "DefinedCost_Remembered_Minus2" (Flash): the remembered card's mana cost, reduced. */
+function definedCost(state: GameState, ctx: Ctx, r: Run, raw: string): string | undefined {
+  const m = /^DefinedCost_Remembered(?:_Minus(\d+))?$/.exec(raw.trim());
+  if (!m) return undefined;
+  const c = state.cards[r.remembered[0]];
+  if (!c) return '';
+  let less = parseInt(m[1] ?? '0', 10) || 0;
+  const syms = (faceOf(c, ctx.lookup).manaCost.match(/\{[^}]+\}/g) ?? []).map((s) => s.slice(1, -1));
+  const out: string[] = [];
+  for (const s of syms) {
+    if (/^\d+$/.test(s)) { const v = Math.max(0, parseInt(s, 10) - less); less = Math.max(0, less - parseInt(s, 10)); if (v) out.push(String(v)); } else out.push(s);
+  }
+  return out.join(' ');
+}
+
+function askUnless(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
+  const step = r.steps[i];
+  const p = step.params;
+  const payer = (p.UnlessPayer ? defined(state, r, i, p.UnlessPayer)?.players[0] : defined(state, r, i, 'TargetedController')?.players[0]) ?? r.controller;
+  const cost = definedCost(state, ctx, r, p.UnlessCost) ?? p.UnlessCost;
+  const x = /X/.test(cost) ? amount(state, ctx, r, 'X', 0) ?? 0 : 0;
+  const { toks } = parseCostTokens(cost);
+  const switched = p.UnlessSwitched === 'True';
+  const decide = (run: boolean): StepResult => { r.unless = { ...(r.unless ?? {}), [i]: run }; return run ? execStep(state, ctx, r, i) : 'ok'; };
+  const free = toks.every((t) => (t.kind === 'mana' && !(t.mana ?? '').replace(/\{0\}/g, '').replace(/\{X\}/g, x ? '{X}' : '')) || (typeof t.n === 'number' ? t.n === 0 : x === 0));
+  if (!toks.length || free) return decide(switched);
+  const label = costText(toks).replace(/\{X\}/g, `{${x}}`).replace(/<X>/g, String(x));
+  const payable = canPayCost(state, ctx, payer, r.sourceIid, toks, x);
+  if (!payable) {
+    log(state, ctx, payer, `${pname(state, payer)} can't ${label.toLowerCase()} (${r.sourceName}).`);
+    return decide(!switched);
+  }
+  const data: Unless2Data = { kind: 'unless2', cont: contAt(r, i), step: i, cost, switched, payer, x, label };
+  const what = step.description && step.description !== step.api ? step.description : r.sourceName;
+  state.pending.push({
+    id: randomId(ctx.rng), pid: payer,
+    prompt: switched ? `${r.sourceName}: ${label.toLowerCase()}? If you do: ${what}` : `${r.sourceName}: ${label.toLowerCase()}, or else: ${what}`,
+    options: [{ value: 'pay', label }, { value: 'decline', label: "Don't pay" }], data: data as unknown as Record<string, unknown>,
+  });
+  return 'wait';
+}
+
+function answerUnless(state: GameState, ctx: Ctx, pid: string, d: Unless2Data, value: string) {
+  const who = player(state, pid).name;
+  const name = d.cont.item.text.split(':')[0];
+  let paid = false;
+  let picks: Omit<PickData, 'queue' | 'cont'>[] = [];
+  if (value === 'pay') {
+    const { toks } = parseCostTokens(d.cost);
+    const src = d.cont.item.sourceIid ?? d.cont.item.iid;
+    if (canPayCost(state, ctx, pid, src, toks, d.x)) {
+      paid = true;
+      picks = costPicks(payCostNow(state, ctx, pid, src, toks, d.x), pid, name);
+      log(state, ctx, pid, `${who} pays (${d.label.toLowerCase()}).`);
+    }
+  }
+  if (!paid) log(state, ctx, pid, `${who} doesn't pay (${d.label.toLowerCase()}).`);
+  d.cont.unless = { ...(d.cont.unless ?? {}), [d.step]: d.switched ? paid : !paid };
+  if (startPicks(state, ctx, picks, d.cont)) return;
+  runFrom(state, ctx, d.cont);
+}
+
+/** Cost choices (paycost.ts) as resolve.ts picks. */
+function costPicks(choices: ReturnType<typeof payCostNow>, pid: string, name: string): Omit<PickData, 'queue' | 'cont'>[] {
+  return choices.map((c) => ({
+    kind: 'pick', chooser: pid, candidates: c.candidates, left: c.n, optional: c.upTo, label: `${name}: ${c.text} (cost)`,
+    ...(c.kind === 'discard' ? { action: 'discard' as const } : c.kind === 'sac' ? { action: 'sacrifice' as const }
+      : c.kind === 'tapType' ? { action: 'tap' as const, countX: c.upTo } : { action: 'move' as const, dest: (c.kind === 'return' ? 'hand' : 'exile') as Zone }),
+  }));
+}
+
+/** Life gained / lost this turn (Ocelot Pride, Kaito, spectacle ...). */
+export function noteLife(state: GameState, pid: string, delta: number) {
+  if (!delta) return;
+  const ti = turnInfo(state);
+  const k = `${delta > 0 ? 'life+' : 'life-'}|${pid}`;
+  ti.activations[k] = (ti.activations[k] ?? 0) + Math.abs(delta);
+}
+
+/** Damage from a source to a card iid or player id, for more.ts effects. */
+function dealDamageTo(state: GameState, ctx: Ctx, r: Run, source: string | undefined, key: string, n: number): number {
+  if (n <= 0) return 0;
+  const src = source ? state.cards[source] : undefined;
+  if (state.players.some((p) => p.pid === key)) {
+    const prev = damagePrevented(state, ctx.lookup, key);
+    if (prev) { log(state, ctx, key, `Damage to ${pname(state, key)} is prevented (${prev}).`); return 0; }
+    player(state, key).life -= n;
+    noteLife(state, key, -n);
+  } else {
+    const c = onBattlefield(state, key);
+    if (!c) return 0;
+    damageCard(state, ctx, r, c, n, !!src && hasKeyword(src, ctx.lookup, 'Deathtouch', state));
+  }
+  if (source) emit(state, { t: 'damage', source, target: key, amount: n, combat: false });
+  if (src && hasKeyword(src, ctx.lookup, 'Lifelink', state)) { player(state, src.controller).life += n; noteLife(state, src.controller, n); }
+  return n;
+}
+
+/** The running chain as engine/more.ts sees it. */
+function moreRun(state: GameState, ctx: Ctx, r: Run, i: number, uncertain: boolean): MoreRun {
+  let offset = 0;
+  return {
+    ...uniqueRun(state, ctx, r, i, uncertain),
+    remembered: r.remembered,
+    index: i,
+    env: env(state, ctx, r),
+    chosen: (r.chosen ??= {}),
+    splice: (svar, opts = {}) => { const n = spliceSteps(r, { at: i + offset, svar, ...opts }); offset += n; return n; },
+    contAt: (next) => contAt(r, next),
+    damage: (source, key, n) => dealDamageTo(state, ctx, r, source, key, n),
+    lateTargets: () => r.lateTargets?.[i],
+  };
+}
+
 /** The running chain as engine/unique.ts sees it. */
 function uniqueRun(state: GameState, ctx: Ctx, r: Run, i: number, uncertain: boolean): UniqueRun {
   const step = r.steps[i];
@@ -1235,6 +1562,7 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
     }
   }
   log(state, ctx, item.controller, item.kind === 'spell' ? `${name} resolves.` : `Resolved: ${item.text}`);
+  if (item.kind !== 'spell') { const ti = turnInfo(state); const key = `resolved|${auto.cardId}|${auto.index}|${item.sourceIid}`; ti.activations[key] = (ti.activations[key] ?? 0) + 1; }
   const isSpellCard = item.kind === 'spell' && !!item.iid;
   if (isSpellCard && isPermanentSpell) finish();
   const cont: AutoCont = { item, next: 0, targets: legal, lki, remembered: [] };
@@ -1252,7 +1580,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   const pend = state.pending.find((p) => p.id === id);
   if (!pend) return 'That question is no longer open';
   if (pend.pid !== pid) return 'That question is for another player';
-  if (!pend.options.some((o) => o.value === value)) return 'Not one of the options';
+  if (!pend.number && !pend.divide && !pend.options.some((o) => o.value === value)) return 'Not one of the options';
   state.pending = state.pending.filter((p) => p !== pend);
   if ((pend.data as { kind?: string }).kind === 'cost') return answerCostPending(state, ctx, pid, pend.data as unknown as CostData, value);
   let ext = answerReplacementPending(state, ctx, pend, value);
@@ -1261,8 +1589,13 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (ext === undefined) ext = answerTapCost(state, ctx, pend, value);
   if (ext === undefined) ext = answerExtPending(state, ctx, pend, value);
   if (ext !== undefined) return ext;
-  const data = pend.data as unknown as PickData | UnlessData | ColorData;
+  const more = answerMorePending(state, ctx, pend, value); // engine/more.ts
+  if (more !== undefined) return more;
+  const data = pend.data as unknown as PickData | UnlessData | ColorData | OptCostData | LateData | Unless2Data;
   const who = player(state, pid);
+  if (data.kind === 'late') { if (value === 'none') { data.cont.lateTargets = { ...(data.cont.lateTargets ?? {}), [data.step]: [] }; runFrom(state, ctx, data.cont); } return null; }
+  if (data.kind === 'unless2') { answerUnless(state, ctx, pid, data, value); return null; }
+  if (data.kind === 'optcost') { answerOptionalCost(state, ctx, pid, data, value); return null; }
   if (data.kind === 'color') {
     who.manaPool[value] = (who.manaPool[value] ?? 0) + data.n;
     log(state, ctx, pid, `${who.name} adds ${Array(data.n).fill(`{${value}}`).join('')}.`);
@@ -1298,6 +1631,10 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
       } else if (data.action === 'sacrifice') {
         moveCard(state, ctx, value, 'graveyard', { cause: 'sacrifice' });
         log(state, ctx, pid, `${who.name} sacrifices ${nm}.`);
+      } else if (data.action === 'tap') {
+        c.tapped = true;
+        log(state, ctx, pid, `${who.name} taps ${nm}.`);
+        if (data.countX && data.cont?.item.auto) { data.cont.item.auto.x = (data.cont.item.auto.x ?? 0) + 1; data.cont.item.x = data.cont.item.auto.x; }
       } else {
         const p = data.params ?? {};
         const from = c.zone;
