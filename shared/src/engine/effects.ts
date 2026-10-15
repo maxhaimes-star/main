@@ -101,6 +101,7 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
     statics: list(p.StaticAbilities), triggers: list(p.Triggers), remembered: [...new Set(remembered)], turn: state.turn,
   };
   if (p.ReplacementEffects) rec.replacements = list(p.ReplacementEffects);
+  if (api.sourceIid && state.cards[api.sourceIid]) rec.source = api.sourceIid;
   if (emblem) rec.emblem = true;
   if (p.Image) rec.image = p.Image;
   if (watch && ZONES[watch]) rec.watchZone = ZONES[watch];

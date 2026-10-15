@@ -392,7 +392,8 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any' && !/^Combo (Any|[WUBRGC]( [WUBRGC])*)$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
     case 'DelayedTrigger':
       if (!p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
-      if (p.Mode === 'Phase' ? step.kind !== 'DB' || !PHASES[p.Phase ?? ''] : !['SpellCast', 'ChangesZone'].includes(p.Mode ?? '')) return 'DelayedTrigger';
+      if (p.Mode === 'Phase' ? (step.kind !== 'DB' && p.Planeswalker !== 'True') || !PHASES[(p.Phase ?? '').replace(/->$/, '')] : !['SpellCast', 'ChangesZone'].includes(p.Mode ?? '')) return 'DelayedTrigger';
+      if (p.ValidPlayer && !['Player', 'Player.controlsCard.IsTriggerRemembered'].includes(p.ValidPlayer)) return 'DelayedTrigger (ValidPlayer)';
       if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects) && !MORE_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
       break;
     case 'ImmediateTrigger': if (step.kind === 'SP' || !p.Execute || !step.svars?.[p.Execute] || (p.TriggerAmount && p.TriggerAmount !== 'Remembered$Amount')) return 'ImmediateTrigger'; break;

@@ -639,7 +639,7 @@ export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, t
 }
 
 /** Register a delayed trigger created by the resolving ability. */
-function addDelayed(state: GameState, ctx: Ctx, r: Run, at: Step, chain: { svar?: string; line?: string }, remembered: string[], text: string, extra?: { event?: Record<string, string>; thisTurn?: boolean }) {
+function addDelayed(state: GameState, ctx: Ctx, r: Run, at: Step, chain: { svar?: string; line?: string }, remembered: string[], text: string, extra?: { event?: Record<string, string>; thisTurn?: boolean; pid?: string }) {
   const auto = r.item.auto!;
   const lki: Record<string, Lki> = {};
   for (const iid of remembered) {
@@ -1003,11 +1003,17 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     }
     case 'DelayedTrigger': {
       const evented = p.Mode !== 'Phase' && ['SpellCast', 'ChangesZone'].includes(p.Mode ?? '');
-      const at = evented ? state.step : PHASES[p.Phase ?? ''];
+      const at = evented ? state.step : PHASES[(p.Phase ?? '').replace(/->$/, '')];
       if (!at || !p.Execute) return bad();
       const objs = p.RememberObjects ? defined(state, r, i, p.RememberObjects) : undefined;
       const rememberedNow = objs ? objs.cards : [];
-      let extra: { event?: Record<string, string>; thisTurn?: boolean } | undefined;
+      let extra: { event?: Record<string, string>; thisTurn?: boolean; pid?: string } | undefined;
+      // "During its controller's next turn" (Gideon, Battle-Forged +2): fires in the remembered creature's controller's turn.
+      if (p.ValidPlayer === 'Player.controlsCard.IsTriggerRemembered') {
+        const c = rememberedNow.map((x) => state.cards[x]).find((x) => x?.zone === 'battlefield');
+        if (!c) { log(state, ctx, r.controller, `${r.sourceName}: no target — nothing happens.`); return 'ok'; }
+        extra = { pid: c.controller };
+      }
       if (evented) {
         const event: Record<string, string> = {};
         for (const [k, v] of Object.entries(p)) if (!['Execute', 'ThisTurn', 'RememberObjects', 'TriggerDescription', 'SpellDescription', 'StackDescription', 'Cost', 'AILogic', 'SubAbility', 'Defined', 'Optional'].includes(k)) event[k] = v;

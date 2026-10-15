@@ -221,3 +221,23 @@ describe('Glorybringer (exert)', () => {
     expect(g.remembered?.[`exerted|${gb}`]).toBeUndefined();
   });
 });
+
+describe('Gideon, Battle-Forged (+2)', () => {
+  it("the targeted creature must attack Gideon during its controller's next turn", () => {
+    const { g, ctx } = setup(['kytheon_hero_of_akros'], ['containment_priest']);
+    const gid = put(g, ctx, 'a', 'kytheon_hero_of_akros');
+    g.cards[gid].transformed = true;
+    g.cards[gid].counters.loyalty = 3;
+    const priest = put(g, ctx, 'b', 'containment_priest');
+    const plus2 = activatedAbilitiesOf('kytheon_hero_of_akros', 1).find((a) => a.ability.api === 'DelayedTrigger')!;
+    expect(plus2).toBeTruthy();
+    act(g, ctx, 'a', { t: 'activate', iid: gid, ability: plus2.index, text: '', targets: [[{ kind: 'card', iid: priest }]] });
+    drain(g, ctx);
+    expect(g.cards[gid].counters.loyalty).toBe(5);
+    passUntil(g, ctx, () => g.activePlayer === 'b' && g.step === 'main1');
+    act(g, ctx, 'b', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'b', { t: 'confirmAttackers' });
+    expect(logText(g)).toMatch(/Containment Priest attacks \(attacks each combat if able\)/);
+    expect(g.cards[gid].counters.loyalty).toBe(3); // dealt 2 damage
+  });
+});

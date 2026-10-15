@@ -280,6 +280,8 @@ export interface EffectRecord {
   until: EffectDuration;
   /** The permanent that created it (UntilHostLeavesPlay). */
   hostIid?: string;
+  /** The card whose ability created it (EFFECTSOURCE: Gideon's "attacks Gideon if able"). */
+  source?: string;
   /** Script that holds the SVars (statics / triggers / their Execute$ chains). */
   cardId: string;
   face: number;

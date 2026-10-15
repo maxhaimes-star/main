@@ -51,6 +51,8 @@ export interface StaticAbility {
   /** Effects (engine/effects.ts): the effect's name ("Emblem — ...") and remembered objects. */
   sourceName?: string;
   remembered?: string[];
+  /** Effects: the card that created the effect (EFFECTSOURCE). */
+  effectSource?: string;
 }
 
 /** How fully the engine handles a static. */
@@ -217,6 +219,7 @@ function effectStatics(st: StaticsState): StaticAbility[] {
       out.push({
         sourceIid: `effect:${e.id}`, controller: e.controller, modes: (params.Mode ?? '').split(',').map((m) => m.trim()).filter(Boolean),
         params, svars: f.svars, line, description: nameText((params.Description ?? e.text).replace(/EFFECTSOURCE/g, f.name), f.name), sourceName: e.name, remembered: e.remembered,
+        ...(e.source ? { effectSource: e.source } : {}),
       });
     }
   }

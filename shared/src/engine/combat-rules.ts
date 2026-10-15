@@ -44,6 +44,12 @@ export function mustAttackers(state: GameState, ctx: Ctx): { iid: string; target
       if (attackRestriction(state, iid, ctx.lookup)) continue;
       let target = opp;
       if (s.params.MustAttack === 'ChosenPlayer') target = state.cards[s.sourceIid]?.chosen?.player ?? opp;
+      if (s.params.MustAttack === 'EffectSource') {
+        // "attacks Gideon if able": only while that planeswalker can be attacked
+        const pw = s.effectSource ? state.cards[s.effectSource] : undefined;
+        if (!pw || pw.zone !== 'battlefield' || pw.controller === c.controller || !faceOf(pw, ctx.lookup).types.includes('Planeswalker')) continue;
+        target = pw.iid;
+      }
       if (out.some((o) => o.iid === iid)) continue;
       out.push({ iid, target });
     }
