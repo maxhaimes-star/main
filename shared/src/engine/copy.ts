@@ -22,7 +22,7 @@ import type { StepApi } from './ext.ts';
 import './replacements.ts'; // installs moveHooks.before first; the ETB-replacement hook below wraps it
 import { createTokenInstance, resumeAuto } from './resolve.ts';
 import { tokenMultiplier } from './replacements.ts';
-import { amountSupported, getScript, SUPPORTED_DEFINED } from './script.ts';
+import { amountSupported, getScript, SUPPORTED_DEFINED, activatedAbilitiesOf, type ActivatedEntry } from './script.ts';
 import { MORE_DEFINED } from './more-support.ts';
 import { matchCard } from './targets.ts';
 import type { AutoCont, CopyExtra, ParsedAbility, Pending } from './types.ts';
@@ -40,7 +40,7 @@ const COPY_PERMANENT_KEYS = new Set([
   'ConditionCompare', 'ConditionDefined', 'ConditionCheckSVar', 'ConditionSVarCompare', 'ConditionDescription', 'ActivationLimit', 'SorcerySpeed',
   'UnlessCost', 'UnlessPayer', 'UnlessSwitched', 'UnlessResolveSubs', 'RememberLKI',
 ]);
-const CLONE_KEYS = new Set([
+const CLONE_KEYS = new Set(['GainThisAbility', 
   'Choices', 'ChoiceZone', 'ChoiceTitle', 'AddTypes', 'SetPower', 'SetToughness', 'NewName', 'AddKeywords', 'CloneTarget', 'Defined', 'ValidTgts', 'TgtPrompt',
   'Duration', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'AILogic', 'Optional', 'ConditionPresent', 'ConditionCompare', 'ConditionDefined',
   'RememberCloneOrigin', 'Planeswalker', 'Ultimate',
@@ -95,6 +95,7 @@ function mergeExtra(a: CopyExtra | undefined, b: CopyExtra): CopyExtra | undefin
   if (b.toughness != null) out.toughness = b.toughness;
   if (b.nonLegendary) out.nonLegendary = true;
   if (b.until) out.until = b.until;
+  if (b.abilities?.length) out.abilities = [...(out.abilities ?? []).filter((x) => !b.abilities!.some((y) => y.cardId === x.cardId && y.index === x.index)), ...b.abilities];
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -124,6 +125,26 @@ export function becomeCopy(target: CardInstance, src: CardInstance, extra: CopyE
   if (!target.copyExtra) delete target.copyExtra;
   const f = faceOf(target, lookup);
   if (f.loyalty && target.counters.loyalty == null) target.counters.loyalty = parseInt(f.loyalty, 10) || 0;
+}
+
+/** Activated-ability indexes of abilities a copy keeps ("except it has this ability"): KEPT_BASE + position. */
+export const KEPT_BASE = 3000;
+
+/** The kept ability at index `index` (>= KEPT_BASE) of a copy, as a script reference. */
+export function keptAbility(c: Pick<CardInstance, 'copyExtra' | 'zone'>, index: number): { cardId: string; face: number; index: number } | undefined {
+  if (index < KEPT_BASE || index >= KEPT_BASE + 100 || c.zone !== 'battlefield') return undefined;
+  return c.copyExtra?.abilities?.[index - KEPT_BASE];
+}
+
+/** Abilities a copy keeps (Thespian's Stage's copy ability), as activated-ability entries with KEPT_BASE indexes. */
+export function keptAbilities(c: Pick<CardInstance, 'copyExtra' | 'zone'>): ActivatedEntry[] {
+  if (c.zone !== 'battlefield' || !c.copyExtra?.abilities?.length) return [];
+  const out: ActivatedEntry[] = [];
+  c.copyExtra.abilities.forEach((k, i) => {
+    const e = activatedAbilitiesOf(k.cardId, k.face).find((x) => x.index === k.index);
+    if (e) out.push({ ...e, index: KEPT_BASE + i });
+  });
+  return out;
 }
 
 /** Create a token that's a copy of `src` (any zone: printed values; battlefield: its copiable values). */
@@ -197,6 +218,8 @@ export function execCopyStep(state: GameState, ctx: Ctx, step: ParsedAbility, ap
       if (!target || target.zone !== 'battlefield') { log(state, ctx, api.controller, `${api.sourceName}: nothing becomes a copy.`); return 'ok'; }
       const extra = extraOf(p, api);
       if (p.Duration === 'UntilEndOfTurn') extra.until = 'eot';
+      // "except it has this ability" (Thespian's Stage)
+      if (p.GainThisAbility === 'True' && api.auto.source === 'ability') extra.abilities = [{ cardId: api.auto.cardId, face: api.auto.face, index: api.auto.index }];
       if (p.Choices) {
         const zone = (p.ChoiceZone ?? 'Battlefield').toLowerCase() as Zone;
         const pool = zone === 'battlefield' ? state.battlefield : state.players.flatMap((pl) => pl.zones[zone as 'graveyard'] ?? []);

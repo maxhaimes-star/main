@@ -490,3 +490,33 @@ describe('Sanctum of All (Panharmonicon for Shrines)', () => {
     expect((logText(g).match(/Sanctum of Stone Fangs's trigger/g) ?? []).length).toBe(1);
   });
 });
+
+describe("Thespian's Stage", () => {
+  it('becomes a copy of a land but keeps its copy ability; copying Dark Depths makes Marit Lage', () => {
+    const { g, ctx } = setup(['thespians_stage', 'dark_depths', 'strip_mine'], [], 'basic_island');
+    const stage = put(g, ctx, 'a', 'thespians_stage');
+    lands(g, 'a', 'basic_island', 4);
+    const depths = put(g, ctx, 'a', 'dark_depths');
+    g.cards[depths].counters.ice = 10;
+    const copyAb = activatedAbilitiesOf('thespians_stage', 0).find((a) => a.ability.api === 'Clone')!;
+    act(g, ctx, 'a', { t: 'activate', iid: stage, ability: copyAb.index, text: '', targets: [[{ kind: 'card', iid: depths }]] });
+    passUntil(g, ctx, () => !g.stack.length && !g.pending.length);
+    expect(g.cards[stage]?.zone ?? 'gone').not.toBe('battlefield'); // the copy of Dark Depths had no ice counters: sacrificed
+    const marit = g.battlefield.find((i) => g.cards[i].token?.name === 'Marit Lage');
+    expect(marit).toBeTruthy();
+  });
+
+  it('the copy keeps "{2}, {T}: becomes a copy of target land, except it has this ability"', () => {
+    const { g, ctx } = setup(['thespians_stage', 'strip_mine'], [], 'basic_island');
+    const stage = put(g, ctx, 'a', 'thespians_stage');
+    lands(g, 'a', 'basic_island', 2);
+    const urborg = put(g, ctx, 'a', 'strip_mine');
+    const copyAb = activatedAbilitiesOf('thespians_stage', 0).find((a) => a.ability.api === 'Clone')!;
+    act(g, ctx, 'a', { t: 'activate', iid: stage, ability: copyAb.index, text: '', targets: [[{ kind: 'card', iid: urborg }]] });
+    drain(g, ctx);
+    expect(faceOf(g.cards[stage], getCard).name).toBe('Strip Mine');
+    const abs = abilitiesOfInstance(g.cards[stage]);
+    const kept = abs.find((a) => a.ability.api === 'Clone');
+    expect(kept && kept.index >= 3000).toBe(true);
+  });
+});

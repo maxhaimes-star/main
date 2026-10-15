@@ -317,6 +317,8 @@ export interface CopyExtra {
   nonLegendary?: boolean;
   /** The copy effect ends at cleanup (Saheeli, Sublime Artificer). */
   until?: 'eot';
+  /** "Except it has this ability" (Thespian's Stage): A: lines of other scripts the copy also has (engine/copy.ts KEPT_BASE). */
+  abilities?: { cardId: string; face: number; index: number }[];
 }
 
 /** An Animate effect on a permanent (engine/animate.ts). Applied by faceOf(); ends per `until`. */

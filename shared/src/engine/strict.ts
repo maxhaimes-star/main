@@ -1,3 +1,4 @@
+import { keptAbility } from './copy.ts';
 /**
  * Strict rules enforcement (GameState.strict, on for new games): MTG Arena-style play.
  *
@@ -363,10 +364,12 @@ export function abilityUsability(state: AnyState, pid: string, iid: string, abil
   if (pe) return { ok: false, reason: pe };
   if (c.zone === 'battlefield' ? c.controller !== pid : c.owner !== pid) return { ok: false, reason: "You don't control that card" };
   const foreign = abilityIndex >= FOREIGN_BASE ? foreignAbility(state as StaticsState, iid, abilityIndex, lookup) : undefined; // engine/grants.ts
-  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
+  const kept = keptAbility(c, abilityIndex); // Thespian's Stage
+  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : kept ? { cardId: kept.cardId, face: kept.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
   if (!ref) return { ok: false, reason: 'That card has no abilities' };
-  const line = abilityLine(ref.cardId, ref.face, foreign ? foreign.scriptIndex : abilityIndex);
-  const ab = abilityAt(ref.cardId, ref.face, foreign ? foreign.scriptIndex : abilityIndex);
+  const sIndex = foreign ? foreign.scriptIndex : kept ? kept.index : abilityIndex;
+  const line = abilityLine(ref.cardId, ref.face, sIndex);
+  const ab = abilityAt(ref.cardId, ref.face, sIndex);
   if (!line || !ab) return { ok: false, reason: 'No such ability' };
   const name = cardName(c, lookup);
   const banned = activateRestriction(state as StaticsState, iid, pid, lookup);

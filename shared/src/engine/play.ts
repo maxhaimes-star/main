@@ -1,3 +1,4 @@
+import { keptAbility } from './copy.ts';
 /** Casting / activating with the engine: target validation and cost payment. */
 import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
@@ -102,13 +103,14 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   // An ability another object grants (Splinter Twin, Koth's emblem): its script is the granting card's (engine/grants.ts).
   const foreign = a.ability! >= FOREIGN_BASE ? foreignAbility(state, c.iid, a.ability!, ctx.lookup) : undefined;
   if (a.ability! >= FOREIGN_BASE && !foreign) return 'No such ability';
-  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined; // a copy: the copied card's
+  const kept = keptAbility(c, a.ability!); // a copy's "except it has this ability" (Thespian's Stage)
+  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : kept ? { cardId: kept.cardId, face: kept.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined; // a copy: the copied card's
   if (!ref) return 'That card has no abilities';
   const { cardId, face } = ref;
-  const scriptIndex = foreign ? foreign.scriptIndex : a.ability!;
+  const scriptIndex = foreign ? foreign.scriptIndex : kept ? kept.index : a.ability!;
   const line = abilityLine(cardId, face, scriptIndex);
   if (!line || !/^\s*AB\$/.test(line)) return 'No such ability';
-  if (!foreign && a.ability! >= GRANT_BASE && !hasGrantedAbility(c, a.ability!)) return 'No such ability';
+  if (!foreign && !kept && a.ability! >= GRANT_BASE && !hasGrantedAbility(c, a.ability!)) return 'No such ability';
   const ab = abilityAt(cardId, face, scriptIndex);
   if (!ab) return 'No such ability';
   const src = cardName(c, ctx.lookup);
