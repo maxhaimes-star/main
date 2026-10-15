@@ -100,6 +100,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
       draggable={!hidden || c.faceDown}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); e.dataTransfer.effectAllowed = 'move'; }}
       onMouseEnter={() => face && !c.faceDown ? setPreview({ face, extra: describe(c) }) : face ? setPreview({ face, extra: 'Face down (only you can see this). ' + describe(c) }) : undefined}
+      onMouseLeave={(e) => { e.stopPropagation(); setPreview(null); }}
       onClick={(e) => { e.stopPropagation(); if (targeting) pickTarget({ kind: 'card', iid }); else defaultAction(iid); }}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); openMenu(e.clientX, e.clientY, menuFor(iid), face?.name); }}
     >

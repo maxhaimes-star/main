@@ -3,7 +3,8 @@ import {
   type GameAction, type GameView, isHidden, faceOf, type MatchView, STEP_LABELS, STEPS, type Step, type TargetRef, type TargetSpec, type ViewPlayer, type Zone,
 } from '@ojb/shared';
 import type { RoomProps } from '../Room.tsx';
-import { CardBack, CardImage, getCard, PreviewPanel, setPreview } from '../cards.tsx';
+import { CardBack, CardImage, getCard, HoverPreview, setPreview } from '../cards.tsx';
+import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
 import { Ctx, ContextMenu, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
@@ -13,6 +14,9 @@ import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from
 const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom']);
 
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
+
+/** Phase pips shown in the slim bar (Arena groups them). */
+const PHASE_STEPS: Step[] = ['upkeep', 'draw', 'main1', 'beginCombat', 'attackers', 'blockers', 'damage', 'endCombat', 'main2', 'end'];
 
 export function GameScreen({ view, send, match, onLeave }: RoomProps & { match: MatchView; onLeave?: () => void }) {
   const g = match.game;
@@ -68,6 +72,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [hoverTargets, setHoverTargets] = useState<string[]>([]);
   const [payPreview, setPayPreview] = useState<string[]>([]);
+  const [auto, setAuto] = useAutoSettings();
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toast = useCallback((msg: string) => { setToastMsg(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToastMsg(null), 2200); }, []);
 
@@ -137,6 +142,10 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     target, pickTarget, isLegal, cast: (iid, face) => { castWithX(base, iid, face); }, toast, hoverTargets, setHoverTargets, payPreview, setPayPreview,
   };
 
+  useAutoPass({ g, me, act, settings: auto, busy: !!mode || !!menu || !!prompt || !!modes || !!picker || !!dividing || !!forceAsk, controlled });
+  const autoRef = useRef<{ s: AutoSettings; set: typeof setAuto }>({ s: auto, set: setAuto });
+  autoRef.current = { s: auto, set: setAuto };
+
   // Keyboard shortcuts
   const okRef = useRef<() => void>(() => {});
   const modeRef = useRef<Mode>(null);
@@ -145,8 +154,8 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     const on = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return;
-      if (e.key === 'F2' || (e.key === ' ' && !e.repeat && t.tagName !== 'BUTTON')) { e.preventDefault(); okRef.current(); }
-      if (e.key === 'F6') { e.preventDefault(); act({ t: 'passUntilEOT' }); }
+      if (e.key === 'F2' || (e.key === ' ' && !e.ctrlKey && !e.repeat && t.tagName !== 'BUTTON')) { e.preventDefault(); okRef.current(); }
+      if (e.key === 'F6' || (e.ctrlKey && e.code === 'Space')) { e.preventDefault(); act({ t: 'passUntilEOT' }); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); act({ t: 'requestUndo' }); }
       if (e.key === 'Escape') { if (modeRef.current?.kind === 'target') modeRef.current.onDone(null); setMode(null); }
     };
@@ -158,7 +167,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
 
   return (
     <Ctx.Provider value={ctx}>
-      <div className={`table ${mode ? `mode-${mode.kind}` : ''}`} onClick={() => mode && mode.kind !== 'target' && setMode(null)}>
+      <div className={`table ${mode ? `mode-${mode.kind}` : ''} ${auto.sidePanel ? 'side-open' : 'side-closed'}`} onClick={() => mode && mode.kind !== 'target' && setMode(null)}>
         <div className="table-main">
           {controlling && cb && (
             <div className="control-banner">
@@ -175,15 +184,18 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
           )}
           <FixModeBar />
           <PlayerArea pid={opp} top />
-          <CenterBar okRef={okRef} match={match} onLeave={onLeave} />
+          <CenterBar match={match} onLeave={onLeave} auto={auto} setAuto={setAuto} />
           <PlayerArea pid={self} />
           {me && <Hand pid={me} />}
+          <Stack yields={auto.yields} setAuto={setAuto} />
+          <PassButton okRef={okRef} />
         </div>
+        <button className="side-toggle" onClick={() => setAuto({ sidePanel: !auto.sidePanel })} title="Toggle log / active effects">{auto.sidePanel ? '›' : '‹ Log'}</button>
         <div className="table-side">
-          <PreviewPanel />
           <ActiveEffects />
           <GameLog />
         </div>
+        <HoverPreview />
         {g.phase === 'mulligan' && <div className="overlay"><MulliganOverlay /></div>}
         {g.phase === 'over' && (
           <div className="overlay"><div className="overlay-msg">
@@ -280,7 +292,10 @@ function PlayerArea({ pid, top }: { pid: string; top?: boolean }) {
   const row = (ids: string[], cls: string) => (
     <div className={`bf-row ${cls}`}>{ids.map((id) => <TableCard key={id} iid={id} attachments={attachedTo(id)} />)}</div>
   );
-  const rows = [row(creatures, 'creatures'), row(other, 'others'), row(lands, 'lands')];
+  const rows = [
+    <div key="front" className="bf-front">{row(creatures, 'creatures')}</div>,
+    <div key="back" className="bf-back">{row(other, 'others')}{row(lands, 'lands')}</div>,
+  ];
   return (
     <div className={`player-area ${top ? 'top' : 'bottom'} ${g.activePlayer === pid ? 'active' : ''}`}>
       <PlayerPanel p={p} />
@@ -309,6 +324,11 @@ function PlayerPanel({ p }: { p: ViewPlayer }) {
         <span className={`dot ${p.conceded ? '' : 'on'}`} />{p.name}
         {g.activePlayer === p.pid && <span className="turn-badge">turn</span>}
       </div>
+      <div className="pp-counts" title="Hand · Library · Graveyard">
+        <span title="Cards in hand">✋ {p.handCount ?? p.zones.hand.length}</span>
+        <span title="Cards in library">▤ {p.libraryCount}</span>
+        <span title="Cards in graveyard">☠ {p.zones.graveyard.length}</span>
+      </div>
       <div className="life">
         {me && manual && <button onClick={() => life(-1)} onContextMenu={(e) => { e.preventDefault(); life(-5); }} title="−1 (right-click −5)">−</button>}
         <span className={`life-num ${p.life <= 5 ? 'low' : ''}`} onClick={async () => { if (!me || !manual) return; const n = await ask(`Set ${p.name}'s life to`, p.life); if (n != null) life(n - p.life); }}>{p.life}</span>
@@ -330,7 +350,6 @@ function PlayerPanel({ p }: { p: ViewPlayer }) {
         </div>
       )}
       {!isMe && me && manual && <button className="tiny" onClick={() => act({ t: 'lookAtHand', pid: viewing ? null : p.pid })}>{viewing ? 'Hide hand' : 'Look at hand'}</button>}
-      {!isMe && <span className="muted small">✋ {p.handCount}</span>}
       {p.zones.command.length > 0 && <button className="tiny" onClick={() => openZone(p.pid, 'command')}>Command ({p.zones.command.length})</button>}
       {isMe && <MyTools p={p} />}
       {!isMe && p.zones.hand.some((iid) => !isHidden(g.cards[iid])) && <button className="tiny" onClick={() => openZone(p.pid, 'hand')}>See revealed</button>}
@@ -379,11 +398,13 @@ function Zones({ p }: { p: ViewPlayer }) {
         <CardBack label={String(p.libraryCount)} />
         {revealedTop.length > 0 && <div className="revealed-top" onMouseEnter={() => { const c = g.cards[revealedTop[0]]; if (!isHidden(c)) setPreview({ face: faceOf(c, getCard) }); }}>top: {revealedTop.map((i) => { const c = g.cards[i]; return isHidden(c) ? '?' : faceOf(c, getCard).name; }).join(', ')}</div>}
       </div>
-      <div className={`zone gy ${gyDrop.over ? 'drop-over' : ''}`} {...gyDrop.props} onClick={() => openZone(p.pid, 'graveyard')} title="Graveyard">
+      <div className={`zone gy ${gyDrop.over ? 'drop-over' : ''}`} {...gyDrop.props} onClick={() => openZone(p.pid, 'graveyard')} title="Graveyard"
+        onMouseEnter={() => { const c = topGy ? g.cards[topGy] : undefined; if (c && !isHidden(c)) setPreview({ face: faceOf(c, getCard) }); }}>
         {topGy && !isHidden(g.cards[topGy]) ? <CardImage face={faceOf(g.cards[topGy] as never, getCard)} /> : <div className="empty-zone">GY</div>}
         <span className="zone-count">{p.zones.graveyard.length}</span>
       </div>
-      <div className={`zone ex ${exDrop.over ? 'drop-over' : ''}`} {...exDrop.props} onClick={() => openZone(p.pid, 'exile')} title="Exile">
+      <div className={`zone ex ${exDrop.over ? 'drop-over' : ''}`} {...exDrop.props} onClick={() => openZone(p.pid, 'exile')} title="Exile"
+        onMouseEnter={() => { const c = topEx ? g.cards[topEx] : undefined; if (c && !isHidden(c) && !c.faceDown) setPreview({ face: faceOf(c, getCard) }); }}>
         {topEx && !isHidden(g.cards[topEx]) && !g.cards[topEx].faceDown ? <CardImage face={faceOf(g.cards[topEx] as never, getCard)} /> : <div className="empty-zone">Exile</div>}
         <span className="zone-count">{p.zones.exile.length}</span>
       </div>
@@ -445,17 +466,29 @@ function Hand({ pid }: { pid: string }) {
   return (
     <div className={`hand ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
       {left != null && <span className={`land-plays ${left === 0 ? 'none' : ''}`} title="Land drops this turn">Lands: {played}/{played + left} played</span>}
-      {p.zones.hand.map((iid) => <HandCard key={iid} iid={iid} />)}
+      {p.zones.hand.map((iid, i) => <HandCard key={iid} iid={iid} i={i} n={p.zones.hand.length} />)}
       {p.zones.hand.length === 0 && <span className="muted">Your hand is empty.</span>}
       <span className="hand-hint muted">{manualOk(g) ? 'Click: play / cast · Right-click: more · Drag to battlefield, graveyard, exile or library' : 'Click: play / cast (mana is paid automatically) · Right-click: more'}</span>
     </div>
   );
 }
 
-function HandCard({ iid }: { iid: string }) {
+/** Arc layout for the hand: CSS variables only, no animation. */
+function fanStyle(i: number, n: number): React.CSSProperties {
+  const t = i - (n - 1) / 2;
+  const step = Math.min(5, 44 / Math.max(n, 1));
+  return {
+    '--rot': `${(t * step).toFixed(2)}deg`,
+    '--dy': `${(t * t * Math.min(2.2, 14 / Math.max(n, 1))).toFixed(1)}px`,
+    '--ov': String(Math.min(0.62, Math.max(0.08, (n - 4) * 0.06))),
+    zIndex: i + 1,
+  } as React.CSSProperties;
+}
+
+function HandCard({ iid, i = 0, n = 1 }: { iid: string; i?: number; n?: number }) {
   const { g, me, menuFor, defaultAction, openMenu, setPayPreview } = useGame();
   const c = g.cards[iid];
-  if (!c || isHidden(c)) return <div className="hcard"><CardBack /></div>;
+  if (!c || isHidden(c)) return <div className="hcard" style={fanStyle(i, n)}><CardBack /></div>;
   const face = faceOf(c, getCard);
   const st = castStatus(c.cardId, 0);
   const altHints = c.owner === me ? safeCastOptions(g, iid, 0).filter((o) => o.id !== 'normal' && !o.unavailable).map((o) => `${o.label}: ${optionText(o)}`) : [];
@@ -467,9 +500,9 @@ function HandCard({ iid }: { iid: string }) {
     if (p?.ok) setPayPreview(p.taps);
   };
   return (
-    <div className={`hcard ${strictCls} ${c.revealedTo.length ? 'revealed' : ''}`} data-iid={iid} draggable
+    <div className={`hcard ${strictCls} ${c.revealedTo.length ? 'revealed' : ''}`} style={fanStyle(i, n)} data-iid={iid} draggable
       title={usable && !usable.ok ? usable.reason ?? 'Cannot be cast right now' : undefined}
-      onMouseLeave={() => setPayPreview([])}
+      onMouseLeave={() => { setPayPreview([]); setPreview(null); }}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); }}
       onMouseEnter={() => { showPay(); setPreview({ face, extra: [usable && !usable.ok ? `Can't cast: ${usable.reason ?? 'not now'}` : undefined, costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined, ...altHints].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined }); }}
       onClick={() => defaultAction(iid)}
@@ -481,28 +514,13 @@ function HandCard({ iid }: { iid: string }) {
 
 // ---------------------------------------------------------------- center: phases, stack, priority
 
-function CenterBar({ okRef, match, onLeave }: { okRef: React.MutableRefObject<() => void>; match: MatchView; onLeave?: () => void }) {
-  const { g, me, act, openMenu } = useGame();
+function CenterBar({ match, onLeave, auto, setAuto }: { match: MatchView; onLeave?: () => void; auto: AutoSettings; setAuto: (p: Partial<AutoSettings>) => void }) {
+  const { g, me, act } = useGame();
   const myTurn = g.activePlayer === me;
-  const havePriority = g.priority === me && g.phase === 'playing';
   const name = (pid: string) => g.players.find((p) => p.pid === pid)?.name ?? '?';
-  const attackers = g.battlefield.filter((id) => g.cards[id].attacking).length;
   const mePlayer = g.players.find((p) => p.pid === me);
-  // Extra turns (engine/turns.ts): the turn that follows is taken from the END of extraTurns (LIFO); nextNormalTurn is set
-  // while extra turns interrupt the regular rotation, i.e. the current turn is an extra one unless that player is due anyway.
   const queued = (g.extraTurns ?? []).slice().reverse();
   const extra = !!g.nextNormalTurn;
-
-  let okLabel = 'Pass';
-  if (g.stack.length) okLabel = 'Resolve';
-  else if (g.step === 'attackers' && myTurn && !g.combat.attackersDeclared) okLabel = attackers ? `Attack with ${attackers}` : 'No attack';
-  else if (g.step === 'blockers' && !myTurn && !g.combat.blockersDeclared) okLabel = 'Confirm blocks';
-  else if (g.step === 'damage' && g.combat.proposal) okLabel = 'Confirm damage';
-  else if (myTurn) {
-    const next = STEPS[STEPS.indexOf(g.step) + 1];
-    okLabel = next && next !== 'cleanup' ? `To ${STEP_LABELS[next]}` : 'End turn';
-  }
-  okRef.current = () => { if (havePriority) act({ t: 'pass' }); };
 
   const toggleStop = (s: Step, own: boolean) => {
     if (!mePlayer) return;
@@ -510,22 +528,37 @@ function CenterBar({ okRef, match, onLeave }: { okRef: React.MutableRefObject<()
     const next = list.includes(s) ? list.filter((x) => x !== s) : [...list, s];
     act({ t: 'setStops', own: own ? next : mePlayer.stops.own, opp: own ? mePlayer.stops.opp : next });
   };
+  // Full control: stop at every step; turning it off restores the previous stops.
+  const setFullControl = (on: boolean) => {
+    setAuto({ fullControl: on });
+    if (!mePlayer) return;
+    try {
+      if (on) {
+        localStorage.setItem('ojb:stopsBackup', JSON.stringify(mePlayer.stops));
+        const all = PHASE_STEPS;
+        act({ t: 'setStops', own: all, opp: all });
+      } else {
+        const b = JSON.parse(localStorage.getItem('ojb:stopsBackup') ?? 'null');
+        if (b?.own && b?.opp) act({ t: 'setStops', own: b.own, opp: b.opp });
+      }
+    } catch { /* ignore */ }
+  };
 
   return (
     <div className="center-bar">
       <div className="turn-info">
         <b>Turn {g.turn}</b> · {name(g.activePlayer)}
         {extra && <span className="extra-badge" title="This turn is an extra turn">Extra turn</span>}
-        {queued.map((pid, i) => <div key={i} className="muted small">Next: extra turn for {name(pid)}</div>)}
-        <div className="muted small">Game {match.gameNumber} · {match.wins[match.players[0]]}–{match.wins[match.players[1]]}</div>
+        {queued.map((pid, i) => <span key={i} className="muted small"> · Next: extra turn for {name(pid)}</span>)}
+        <span className="muted small"> · Game {match.gameNumber} · {match.wins[match.players[0]]}–{match.wins[match.players[1]]}</span>
         {onLeave && <button className="tiny" onClick={onLeave}>Stop watching</button>}
       </div>
       <div className="phases">
-        {STEPS.filter((s) => s !== 'untap' && s !== 'cleanup').map((s) => {
+        {PHASE_STEPS.map((s) => {
           const own = myTurn;
           const stopped = mePlayer ? (own ? mePlayer.stops.own : mePlayer.stops.opp).includes(s) : false;
           return (
-            <div key={s} className={`phase ${g.step === s ? 'current' : ''} ${STEPS.indexOf(s) < STEPS.indexOf(g.step) ? 'past' : ''}`}
+            <div key={s} className={`phase ${g.step === s ? 'current' : ''} ${STEPS.indexOf(s) < STEPS.indexOf(g.step) ? 'past' : ''} ${myTurn ? 'mine' : 'theirs'}`}
               title={myTurn ? 'Click to skip ahead to this step. Right-click: toggle your stop.' : 'Right-click: toggle your stop on opponent turns.'}
               onClick={() => myTurn && STEPS.indexOf(s) > STEPS.indexOf(g.step) && act({ t: 'gotoStep', step: s })}
               onContextMenu={(e) => { e.preventDefault(); toggleStop(s, own); }}>
@@ -534,25 +567,60 @@ function CenterBar({ okRef, match, onLeave }: { okRef: React.MutableRefObject<()
           );
         })}
       </div>
-      <Stack />
       <CombatPanel />
-      <div className="priority">
-        {g.phase === 'playing' && me && (havePriority
-          ? <button className="primary ok" onClick={() => act({ t: 'pass' })} title="F2 / Space">{okLabel}</button>
-          : <span className="waiting">Waiting for {name(g.priority)}…</span>)}
-        {me && g.phase === 'playing' && (
-          <div className="sub-actions">
-            {myTurn && <button className="tiny" onClick={() => act({ t: 'nextTurn' })} title="Skip to the end of your turn">End turn</button>}
-            <button className="tiny" onClick={() => act({ t: 'passUntilEOT' })} title="F6: auto-pass until end of turn">F6</button>
-            {!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) && <button className="tiny" title="Ask your opponent to let you fix the board by hand" onClick={() => act({ t: 'requestFixMode' } as never)}>Fix board</button>}
-            <button className="tiny" disabled={!g.canUndo} onClick={() => act({ t: 'requestUndo' })} title="Ctrl+Z">Undo</button>
-            <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
-              { label: 'Stops are shown as dots on the phase bar.', disabled: true },
-              { label: 'Right-click a phase to toggle a stop for the current turn type.', disabled: true },
-            ], 'Help')}>?</button>
-          </div>
-        )}
-      </div>
+      {me && g.phase === 'playing' && (
+        <div className="auto-toggles">
+          <label className={`tgl ${auto.autoPass && !auto.fullControl ? 'on' : ''}`} title="Pass priority automatically when you have nothing to respond with (never skips your main phases or combat decisions)">
+            <input type="checkbox" checked={auto.autoPass} onChange={(e) => setAuto({ autoPass: e.target.checked })} /> Auto-pass
+          </label>
+          <label className={`tgl ${auto.fullControl ? 'on' : ''}`} title="Stop at every step and never auto-pass">
+            <input type="checkbox" checked={auto.fullControl} onChange={(e) => setFullControl(e.target.checked)} /> Full control
+          </label>
+          {auto.yields.length > 0 && (
+            <button className="tiny" title={`Auto-yielding to: ${auto.yields.join(', ')} (click to clear)`} onClick={() => setAuto({ yields: [] })}>Yields ({auto.yields.length}) ✕</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
+  const { g, me, act, openMenu } = useGame();
+  const myTurn = g.activePlayer === me;
+  const havePriority = g.priority === me && g.phase === 'playing';
+  const name = (pid: string) => g.players.find((p) => p.pid === pid)?.name ?? '?';
+  const attackers = g.battlefield.filter((id) => g.cards[id].attacking).length;
+
+  let okLabel = 'Pass';
+  if (g.stack.length) okLabel = 'Resolve';
+  else if (g.step === 'attackers' && myTurn && !g.combat.attackersDeclared) okLabel = attackers ? `Attack with ${attackers}` : 'No attacks';
+  else if (g.step === 'blockers' && !myTurn && !g.combat.blockersDeclared) okLabel = 'Confirm blocks';
+  else if (g.step === 'damage' && g.combat.proposal) okLabel = 'Confirm damage';
+  else if (myTurn) {
+    const next = STEPS[STEPS.indexOf(g.step) + 1];
+    okLabel = next && next !== 'cleanup' ? `To ${STEP_LABELS[next]}` : 'End turn';
+  }
+  okRef.current = () => { if (havePriority) act({ t: 'pass' }); };
+
+  return (
+    <div className="priority">
+      {g.phase === 'playing' && me && (havePriority
+        ? <button className="primary ok" onClick={() => act({ t: 'pass' })} title="F2 / Space">{okLabel}</button>
+        : <span className="waiting">Waiting for {name(g.priority)}…</span>)}
+      {me && g.phase === 'playing' && (
+        <div className="sub-actions">
+          {myTurn && <button className="tiny" onClick={() => act({ t: 'nextTurn' })} title="Skip to the end of your turn">End turn</button>}
+          <button className="tiny" onClick={() => act({ t: 'passUntilEOT' })} title="F6 / Ctrl+Space: auto-pass until end of turn">Pass to EOT</button>
+          {!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) && <button className="tiny" title="Ask your opponent to let you fix the board by hand" onClick={() => act({ t: 'requestFixMode' } as never)}>Fix board</button>}
+          <button className="tiny" disabled={!g.canUndo} onClick={() => act({ t: 'requestUndo' })} title="Ctrl+Z">Undo</button>
+          <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
+            { label: 'Stops are shown as dots on the phase bar.', disabled: true },
+            { label: 'Right-click a phase to toggle a stop for the current turn type.', disabled: true },
+            { label: 'Right-click a trigger on the stack to always yield to it.', disabled: true },
+          ], 'Help')}>?</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -564,28 +632,37 @@ function targetName(g: GameView, r: TargetRef): string {
   return c && !isHidden(c) ? faceOf(c, getCard).name : 'a card';
 }
 
-function Stack() {
+function Stack({ yields, setAuto }: { yields: string[]; setAuto: (p: Partial<AutoSettings>) => void }) {
   const { g, act, openMenu, menuFor, mode, pickTarget, isLegal, setHoverTargets } = useGame();
   if (!g.stack.length) return null;
   const targeting = mode?.kind === 'target';
   return (
     <div className="stack">
-      <div className="stack-title">Stack</div>
-      {g.stack.slice().reverse().map((s, i) => {
+      <div className="stack-title">Stack ({g.stack.length})</div>
+      {g.stack.slice().reverse().map((s, i, arr) => {
         const c = s.iid ? g.cards[s.iid] : undefined;
         const face = c && !isHidden(c) ? faceOf(c, getCard) : undefined;
         const refs = s.auto?.targets?.flat() ?? [];
         const legal = targeting ? isLegal({ kind: 'stack', id: s.id }) : null;
+        const src = sourceName(g, s);
+        const yieldable = s.kind !== 'spell' && !!src;
+        const yielding = !!src && yields.includes(src);
         return (
-          <div key={s.id} className={`stack-item ${i === 0 ? 'top' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''}`}
+          <div key={s.id} className={`stack-item ${i === 0 ? 'top' : ''} ${s.kind} ${targeting ? (legal ? 'legal-target' : 'dim') : ''}`}
+            style={{ zIndex: arr.length - i }}
             data-stack-id={s.id}
             onMouseEnter={() => { if (face) setPreview({ face }); if (refs.length) setHoverTargets(refs.flatMap((r) => (r.kind === 'card' ? [r.iid] : []))); }}
             onMouseLeave={() => refs.length && setHoverTargets([])}
             onClick={targeting ? (e) => { e.stopPropagation(); pickTarget({ kind: 'stack', id: s.id }); } : undefined}
-            onContextMenu={(e) => { if (s.iid) { e.preventDefault(); openMenu(e.clientX, e.clientY, menuFor(s.iid), face?.name); } }}>
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const items = s.iid ? menuFor(s.iid) : [];
+              if (yieldable) items.push({ label: yielding ? `Stop yielding to ${src}` : `Always yield to this (${src})`, onClick: () => setAuto({ yields: yielding ? yields.filter((y) => y !== src) : [...yields, src!] }) });
+              if (items.length) openMenu(e.clientX, e.clientY, items, face?.name ?? src);
+            }}>
             {face ? <CardImage face={face} className="stack-img" /> : <div className="stack-ability">⚡</div>}
             <div className="stack-text">
-              <b>{s.auto && <span className="auto-badge" title="Resolved automatically">⚡ </span>}{s.kind === 'trigger' && <span className="trigger-badge">trigger</span>}{s.text}</b>
+              <b>{s.auto && <span className="auto-badge" title="Resolved automatically">⚡ </span>}{s.kind === 'trigger' && <span className="trigger-badge">trigger</span>}{yielding && <span className="trigger-badge" title="Auto-yield on">yield</span>}{s.text}</b>
               <small>{s.kind === 'trigger' && face ? `${face.name} · ` : ''}{g.players.find((p) => p.pid === s.controller)?.name}{s.x != null ? ` · X=${s.x}` : ''}</small>
               {refs.length > 0 && <small className="stack-targets">→ {refs.map((r) => targetName(g, r)).join(', ')}</small>}
             </div>
