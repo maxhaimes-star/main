@@ -35,7 +35,7 @@ export async function setup(list, tag = 'e') {
   await B.getByRole('button', { name: 'Join' }).click();
   await A.getByText('Sam').waitFor();
   await A.getByRole('button', { name: /^Cube sealed/ }).click();
-  await A.getByRole('button', { name: /custom card list/ }).click();
+  await A.getByRole('button', { name: /Import a cube list/ }).click();
   await A.locator('.custom-list textarea').fill(list);
   await A.getByRole('button', { name: 'Use this list' }).click();
   const set = async (label, v) => { await A.locator('.setting', { hasText: label }).locator('input').fill(String(v)); await A.waitForTimeout(250); };
