@@ -1,3 +1,4 @@
+import { anyColorCost } from './permissions.ts';
 import { keptAbility } from './copy.ts';
 /** Casting / activating with the engine: target validation and cost payment. */
 import { cardName, payFromPool } from '../game/rules.ts';
@@ -9,7 +10,7 @@ import { hasGrantedAbility } from './animate.ts';
 import { divisionError } from './divide.ts';
 import { afterActivation, checkActivation, specialAction } from './keyword-play.ts';
 import { isValidTarget } from './targets.ts';
-import { activateRestriction, adjustCost } from './statics.ts';
+import { activateRestriction, adjustCost, manaConvertApplies } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 import { isUniqueCost, payUniqueCosts, uniqueActivationError, uniqueCostError } from './turns.ts';
@@ -182,6 +183,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
     const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
     if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
     if (helped) mana = reduceGeneric(mana, Math.min(helped, wb), x);
+    if (manaConvertApplies(state, c.iid, pid, ctx.lookup)) mana = anyColorCost(mana); // Agatha's Soul Cauldron
     const paid = payFromPool(mana, me.manaPool, x);
     if (paid) { me.manaPool = paid.pool; if (paid.lifePaid) { me.life -= paid.lifePaid; notes.push(`paid ${paid.lifePaid} life`); } }
     else notes.push('mana not deducted');

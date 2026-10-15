@@ -463,8 +463,25 @@ function computed(st: StaticsState, lookup: Lookup): Computed {
 export function abilityGrants(st: StaticsState, lookup: Lookup): { s: StaticAbility; iids: string[] }[] {
   const ev = new Evaluator(st, lookup, true);
   return computed(st, lookup).statics
-    .filter((s) => s.modes.includes('Continuous') && (!!s.params.AddAbility || !!s.params.AddTrigger) && (!s.params.AffectedZone || s.params.AffectedZone === 'Battlefield') && ev.active(s) === true)
+    .filter((s) => s.modes.includes('Continuous') && (!!s.params.AddAbility || !!s.params.AddTrigger || !!s.params.GainsAbilitiesOf) && (!s.params.AffectedZone || s.params.AffectedZone === 'Battlefield') && ev.active(s) === true)
     .map((s) => ({ s, iids: affectedCards(st, ev, s).map((c) => c.iid) }));
+}
+
+/**
+ * ManaConvert statics (Agatha's Soul Cauldron: "you may spend mana as though it were mana of any color to activate
+ * abilities of creatures you control"): does one apply to activating an ability of `iid` for `pid`?
+ */
+export function manaConvertApplies(st: StaticsState, iid: string, pid: string, lookup: Lookup): boolean {
+  const c = visible(st, iid);
+  if (!c || c.zone !== 'battlefield') return false;
+  for (const { s, ev } of active(st, lookup, 'ManaConvert')) {
+    const p = s.params;
+    if (p.ManaConversion !== 'AnyType->AnyColor' || (p.ValidSA && p.ValidSA !== 'Activated') || s.controller !== pid) continue;
+    if (p.ValidPlayer && p.ValidPlayer !== 'You') continue;
+    if (p.ValidCard && matchCard(c, p.ValidCard.replace(/\+inZoneBattlefield/, ''), ev.env(s)) !== true) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Continuous-effect modifications to a permanent (undefined when none apply). */
@@ -483,12 +500,16 @@ const CONT_HANDLED_KEYS = new Set([
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone', 'AddAbility',
   // granted triggered abilities (Kaldra Compleat, Nadu): grants.ts foreignTriggers, detected by triggers.ts
   'AddTrigger', 'ExcludeZone',
+  // "have all activated abilities of all creature cards exiled with CARDNAME" (Agatha's Soul Cauldron): grants.ts
+  'GainsAbilitiesOf', 'GainsAbilitiesOfZones',
 ]);
 const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated', 'CantGainLife', 'CastWithFlash',
   // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)
   'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost',
   // triggers.ts exertOffer (Exert as it attacks), extraTriggerCount (Panharmonicon: Sanctum of All)
-  'OptionalAttackCost', 'Panharmonicon']);
+  'OptionalAttackCost', 'Panharmonicon',
+  // strict.ts manaConverted (Agatha's Soul Cauldron: spend mana as though any color for creatures' abilities)
+  'ManaConvert']);
 /** Modes that are listed and logged as reminders. */
 const REMINDER_MODES = new Set<string>([]);
 

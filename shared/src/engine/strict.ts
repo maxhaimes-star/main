@@ -1,3 +1,4 @@
+import { anyColorCost } from './permissions.ts';
 import { keptAbility } from './copy.ts';
 /**
  * Strict rules enforcement (GameState.strict, on for new games): MTG Arena-style play.
@@ -25,7 +26,7 @@ import { activateMana, manaPlansFor } from './mana.ts';
 import { stateBasedActions } from './resolve.ts';
 import { abilityAt, abilityLine, getScript, scriptRef } from './script.ts';
 import { noteTapped } from './manatriggers.ts';
-import { activateRestriction, adjustCost, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
+import { activateRestriction, adjustCost, manaConvertApplies, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
 import { activationError, castTimingError } from './timing.ts';
 
 type AnyState = GameState | GameView;
@@ -348,7 +349,8 @@ export function abilityPayment(state: AnyState, pid: string, c: CardInstance, co
   const name = cardName(c, lookup);
   if ((parsed.tap || parsed.untap) && c.zone === 'battlefield' && summoningSick(state, c, lookup)) return { error: `${name} has summoning sickness` };
   if (!parsed.mana) return { plan: null, mana: '' };
-  const mana = adjustCost(state as StaticsState, c, pid, parsed.mana, 'Ability', lookup).cost;
+  let mana = adjustCost(state as StaticsState, c, pid, parsed.mana, 'Ability', lookup).cost;
+  if (manaConvertApplies(state as StaticsState, c.iid, pid, lookup)) mana = anyColorCost(mana); // Agatha's Soul Cauldron
   const exclude = new Set(parsed.tap || /\bSac<1\/(CARDNAME|Self|NICKNAME)>/.test(cost) ? [c.iid] : []);
   const wb = waterbendOf(cost);
   const plan = planAutoPay(state, pid, mana, x, lookup, exclude, wb ? { artifacts: true, creatures: true, max: wb, label: 'waterbend' } : undefined);

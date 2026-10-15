@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, matchCard, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
+  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, hasKeyword, matchCard, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -518,5 +518,33 @@ describe("Thespian's Stage", () => {
     const abs = abilitiesOfInstance(g.cards[stage]);
     const kept = abs.find((a) => a.ability.api === 'Clone');
     expect(kept && kept.index >= 3000).toBe(true);
+  });
+});
+
+describe("Agatha's Soul Cauldron", () => {
+  it('exiles a creature card; creatures with +1/+1 counters get its activated abilities, paid with mana of any color', () => {
+    const { g, ctx } = setup(['agathas_soul_cauldron', 'stoneforge_mystic', 'kytheon_hero_of_akros'], [], 'basic_island');
+    const cauldron = put(g, ctx, 'a', 'agathas_soul_cauldron');
+    const sfm = put(g, ctx, 'a', 'stoneforge_mystic');
+    const ky = find(g, 'a', 'kytheon_hero_of_akros');
+    moveCard(g, ctx, ky, 'graveyard');
+    lands(g, 'a', 'basic_island', 3);
+    const ab = activatedAbilitiesOf('agathas_soul_cauldron', 0)[0];
+    act(g, ctx, 'a', { t: 'activate', iid: cauldron, ability: ab.index, text: '', targets: [[{ kind: 'card', iid: ky }]] });
+    for (let i = 0; i < 10 && (g.stack.length || g.pending.length); i++) {
+      const q = g.pending[0];
+      if (q?.targets) act(g, ctx, 'a', { t: 'chooseTargets', id: q.id, targets: [[{ kind: 'card', iid: sfm }]] });
+      else if (q) answer(g, ctx, /./);
+      else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(g.cards[ky].zone).toBe('exile');
+    expect(g.cards[sfm].counters['+1/+1']).toBe(1);
+    const granted = abilitiesOfInstance(g.cards[sfm], g, getCard).find((a) => a.index >= 4000 && /indestructible/.test(a.ability.description));
+    expect(granted).toBeTruthy();
+    // {2}{W} with three Islands: mana of any color for creatures' abilities
+    expect(abilityUsability(g, 'a', sfm, granted!.index, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'activate', iid: sfm, ability: granted!.index, text: '' });
+    drain(g, ctx);
+    expect(hasKeyword(g.cards[sfm], getCard, 'Indestructible', g)).toBe(true);
   });
 });
