@@ -170,6 +170,8 @@ export interface QueuedTrigger {
   targetsChosen?: boolean;
   /** Not automatable (e.g. an optional cost): goes on the stack without `auto`, resolved by hand. */
   manual?: boolean;
+  /** Exert (OptionalAttackCost Exert<1/CARDNAME>): this attacking creature is exerted when the trigger is used. */
+  exert?: string;
 }
 
 /** Stage 2: a delayed trigger ("at the beginning of the next end step, return it"). Engine-internal. */

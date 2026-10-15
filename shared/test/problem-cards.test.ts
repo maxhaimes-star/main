@@ -53,6 +53,15 @@ function answer(g: GameState, ctx: Ctx, match: RegExp) {
   if (!o) throw new Error(`no option ${match} in ${q.prompt}: ${q.options.map((x) => x.label).join(' / ')}`);
   act(g, ctx, q.pid, { t: 'choose', id: q.id, value: o.value });
 }
+/** Pass priority (answering questions with their first option) until `done`. */
+function passUntil(g: GameState, ctx: Ctx, done: () => boolean) {
+  for (let i = 0; i < 60 && !done(); i++) {
+    const q = g.pending[0];
+    if (q) act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value });
+    else act(g, ctx, g.priority, { t: 'pass' });
+  }
+  expect(done()).toBe(true);
+}
 const logText = (g: GameState) => g.log.map((l) => l.text).join('\n');
 const lands = (g: GameState, pid: string, cardId: string, n: number) => Array.from({ length: n }, () => put(g, { rng: seeded(1), lookup: getCard, now: 0 }, pid, cardId));
 
@@ -173,5 +182,42 @@ describe('Entreat the Angels (miracle with X)', () => {
     drain(g, ctx);
     expect(g.battlefield.filter((i) => g.cards[i].token?.name === 'Angel').length).toBe(2);
     expect(g.cards[ent].zone).toBe('graveyard');
+  });
+});
+
+describe('Glorybringer (exert)', () => {
+  it('exerting deals 4 to a non-Dragon creature; it stays tapped during the next untap step', () => {
+    const { g, ctx } = setup(['glorybringer'], ['containment_priest']);
+    const gb = put(g, ctx, 'a', 'glorybringer');
+    const priest = put(g, ctx, 'b', 'containment_priest');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: gb, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    // the exert trigger asks for its target (or "Don't use it")
+    const q = g.pending[0];
+    expect(q.targets).toBeTruthy();
+    expect(q.options.some((o) => o.value === 'decline')).toBe(true);
+    act(g, ctx, 'a', { t: 'chooseTargets', id: q.id, targets: [[{ kind: 'card', iid: priest }]] });
+    expect(logText(g)).toMatch(/exerts Glorybringer/);
+    drain(g, ctx);
+    expect(g.cards[priest].zone).toBe('graveyard');
+    for (let i = 0; i < 10 && g.step !== 'main2'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    expect(g.players[1].life).toBe(16);
+    passUntil(g, ctx, () => g.activePlayer === 'b');
+    passUntil(g, ctx, () => g.activePlayer === 'a');
+    expect(g.cards[gb].tapped).toBe(true);
+    expect(logText(g)).toMatch(/Glorybringer stays tapped \(exerted\)/);
+  });
+
+  it('declining: no damage, untaps normally', () => {
+    const { g, ctx } = setup(['glorybringer'], ['containment_priest']);
+    const gb = put(g, ctx, 'a', 'glorybringer');
+    const priest = put(g, ctx, 'b', 'containment_priest');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: gb, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    act(g, ctx, 'a', { t: 'choose', id: g.pending[0].id, value: 'decline' });
+    expect(g.cards[priest].zone).toBe('battlefield');
+    expect(g.remembered?.[`exerted|${gb}`]).toBeUndefined();
   });
 });

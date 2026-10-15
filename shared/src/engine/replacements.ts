@@ -392,6 +392,11 @@ export function cantBeCountered(state: GameState, ctx: Ctx, item: StackItem): st
  * Meekstone) or a stun counter (one is removed instead).
  */
 export function untapPrevented(state: GameState, ctx: Ctx, c: CardInstance): boolean {
+  const exerted = state.remembered?.[`exerted|${c.iid}`];
+  if (exerted && parseInt(exerted[0], 10) < state.turn) {
+    delete state.remembered![`exerted|${c.iid}`];
+    if (c.tapped) { log(state, ctx, c.controller, `${cardName(c, ctx.lookup)} stays tapped (exerted).`); return true; }
+  }
   if (!c.tapped) return false;
   if ((c.counters.stun ?? 0) > 0) {
     c.counters.stun--;

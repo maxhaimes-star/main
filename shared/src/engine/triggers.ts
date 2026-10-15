@@ -15,7 +15,7 @@ import { type Ctx, log, player, randomId } from '../game/state.ts';
 import { type CardInstance, type GameEvent, type GameState, type StackItem, STEPS, type Zone } from '../game/types.ts';
 import { checkTargets } from './play.ts';
 import { answerResolveTargets, lkiOf } from './resolve.ts';
-import { chainOf, describe, getScript, isAutomatable, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
+import { chainOf, describe, getScript, isAutomatable, parseParams, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
 import { extraTriggerHosts, grantedTriggers } from './effects.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
@@ -590,6 +590,7 @@ function detect(state: GameState, ctx: Ctx) {
     if (ev.t === 'phase') delayedFor(state, ctx, ev, found);
     else eventDelayedFor(state, ctx, ev, found);
     if (ev.t === 'drawn' && ev.nth === 1) miracle(state, ctx, ev, found);
+    if (ev.t === 'attacks') exertOffer(state, ctx, ev, found);
   }
   // APNAP: the active player's triggers go on the stack first, then the others' in turn order.
   const order = state.players.map((p) => p.pid);
@@ -614,6 +615,36 @@ function miracle(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'drawn'
   found.push({ controller: ev.pid, q: { id: randomId(ctx.rng), controller: ev.pid, sourceIid: c.iid, sourceName: name, text: `${name}: Miracle — you may cast it for its miracle cost`,
     auto: { cardId: c.cardId, face: 0, source: 'trigger', index: -1, line, targets: [], trigger: { mode: 'Drawn', card: c.iid, player: ev.pid } } } });
   log(state, ctx, ev.pid, `${player(state, ev.pid).name} reveals ${name} (miracle).`);
+}
+
+/**
+ * Exert (Glorybringer: S:Mode$ OptionalAttackCost | Cost$ Exert<1/CARDNAME> | Trigger$ X): "you may exert it as it
+ * attacks. When you do, <X>". Offered as an optional trigger; using it exerts the creature (it doesn't untap during
+ * its controller's next untap step, replacements.ts untapPrevented).
+ */
+function exertOffer(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'attacks' }>, found: Detected[]) {
+  const c = state.cards[ev.iid];
+  const ref = c ? scriptRef(c) : undefined;
+  const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
+  if (!c || !ref || !f || c.zone !== 'battlefield') return;
+  for (const line of f.statics) {
+    const p = parseParams(line).params;
+    if (p.Mode !== 'OptionalAttackCost' || p.ValidCard !== 'Card.Self' || !/^Exert<1\/(CARDNAME|Self|NICKNAME)>$/.test(p.Cost ?? '') || !p.Trigger || !f.svars[p.Trigger]) continue;
+    const name = cardName(c, ctx.lookup);
+    const desc = (p.Description ?? 'You may exert it as it attacks.').replace(/CARDNAME/g, name);
+    found.push({ controller: c.controller, q: {
+      id: randomId(ctx.rng), controller: c.controller, sourceIid: c.iid, sourceName: name, text: `${name}: ${desc}`, optional: true, exert: c.iid,
+      auto: { cardId: ref.cardId, face: ref.face, source: 'trigger', index: -1, svar: p.Trigger, targets: [], trigger: { mode: 'Attacks', card: c.iid, player: c.controller, defender: ev.defender } },
+    } });
+  }
+}
+
+/** Mark a creature exerted: it doesn't untap during its controller's next untap step. */
+export function exert(state: GameState, ctx: Ctx, iid: string) {
+  const c = state.cards[iid];
+  if (!c || c.zone !== 'battlefield') return;
+  (state.remembered ??= {})[`exerted|${iid}`] = [String(state.turn)];
+  log(state, ctx, c.controller, `${player(state, c.controller).name} exerts ${cardName(c, ctx.lookup)} (it won't untap during their next untap step).`);
 }
 
 /** Event-based delayed triggers ("when you cast your next instant or sorcery spell this turn", "when CARDNAME leaves the battlefield"). */
@@ -674,6 +705,7 @@ function targetName(state: GameState, ctx: Ctx, ref: TargetRef): string {
 }
 
 function push(state: GameState, ctx: Ctx, t: QueuedTrigger) {
+  if (t.exert) exert(state, ctx, t.exert);
   const item: StackItem = { id: randomId(ctx.rng), kind: 'trigger', controller: t.controller, text: t.text };
   if (t.sourceIid) item.sourceIid = t.sourceIid;
   if (!t.manual) item.auto = t.auto;

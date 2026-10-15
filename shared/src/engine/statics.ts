@@ -481,7 +481,9 @@ const CONT_HANDLED_KEYS = new Set([
 ]);
 const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated', 'CantGainLife', 'CastWithFlash',
   // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)
-  'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost']);
+  'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost',
+  // triggers.ts exertOffer (Exert as it attacks)
+  'OptionalAttackCost']);
 /** Modes that are listed and logged as reminders. */
 const REMINDER_MODES = new Set<string>([]);
 
