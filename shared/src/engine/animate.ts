@@ -13,6 +13,9 @@ import type { CardInstance, GameState } from '../game/types.ts';
 import type { StepApi } from './ext.ts';
 import { activatedAbilitiesOf, type ActivatedEntry, GRANT_BASE, grantedLines, parseAbility, scriptRef } from './script.ts';
 import { matchCard } from './targets.ts';
+import type { Lookup } from '../game/rules.ts';
+import type { StaticsState } from './statics.ts';
+import { foreignAbilities } from './grants.ts';
 import type { Animation, EffectDuration, ParsedAbility } from './types.ts';
 
 const COLOR_LETTER: Record<string, string> = { White: 'W', Blue: 'U', Black: 'B', Red: 'R', Green: 'G' };
@@ -132,10 +135,13 @@ export function grantedAbilities(c: Pick<CardInstance, 'cardId' | 'copyOf' | 'co
   return out;
 }
 
-/** All activated abilities of a permanent right now: its script's (a copy: the copied card's) plus granted ones. */
-export function abilitiesOfInstance(c: CardInstance): ActivatedEntry[] {
+/**
+ * All activated abilities of a permanent right now: its script's (a copy: the copied card's) plus granted ones.
+ * Pass `state` and `lookup` to include abilities other objects grant it (Splinter Twin, Koth's emblem: FOREIGN_BASE indexes, engine/grants.ts).
+ */
+export function abilitiesOfInstance(c: CardInstance, state?: StaticsState, lookup?: Lookup): ActivatedEntry[] {
   const ref = scriptRef(c);
-  return [...(ref ? activatedAbilitiesOf(ref.cardId, ref.face) : []), ...grantedAbilities(c)];
+  return [...(ref ? activatedAbilitiesOf(ref.cardId, ref.face) : []), ...grantedAbilities(c), ...(state && lookup ? foreignAbilities(state, c.iid, lookup) : [])];
 }
 
 /** Is ability index `index` (>= GRANT_BASE) currently granted to `c`? */

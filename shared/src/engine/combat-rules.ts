@@ -12,6 +12,23 @@ import type { CardInstance, GameState } from '../game/types.ts';
 import { evasionRestriction, illegalBlocks } from './protection.ts';
 import { attackRestriction, staticsOfKind } from './statics.ts';
 import { matchCard } from './targets.ts';
+import { turnInfo } from './durations.ts';
+
+/** "After this phase, there is an additional combat phase" (AddPhase$ ExtraPhase$ Combat). */
+export function addExtraCombat(state: GameState) {
+  const ti = turnInfo(state);
+  ti.activations.extraCombat = (ti.activations.extraCombat ?? 0) + 1;
+}
+
+/** Called by the reducer when the end of combat step ends: true = go to another beginning of combat. */
+export function takeExtraCombat(state: GameState, ctx: Ctx): boolean {
+  const ti = turnInfo(state);
+  const n = ti.activations.extraCombat ?? 0;
+  if (n <= 0) return false;
+  ti.activations.extraCombat = n - 1;
+  log(state, ctx, null, 'There is an additional combat phase.');
+  return true;
+}
 
 /** Creatures that must attack this combat and could, with what they must attack. */
 export function mustAttackers(state: GameState, ctx: Ctx): { iid: string; target: string }[] {

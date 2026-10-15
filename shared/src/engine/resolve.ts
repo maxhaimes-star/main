@@ -345,7 +345,8 @@ function amount(state: GameState, ctx: Ctx, r: Run, raw: string | undefined, dfl
   if (/^\d+$/.test(s)) return sign * parseInt(s, 10);
   const announced = r.item.auto?.extra?.[s]; // Announce$ values (Intrepid Adversary's NumTimes)
   if (announced != null && /^-?\d+$/.test(announced)) return sign * parseInt(announced, 10);
-  const sv = r.svars[s];
+  // An SVar name, or an inline variable ("NumCards$ PlayerCountRegisteredOpponents$HasPropertyLostLifeThisTurn").
+  const sv = r.svars[s] ?? (/\$/.test(s) ? s : undefined);
   const n = sv ? evalVar(state, ctx, r, sv) : undefined;
   return n == null ? undefined : sign * n;
 }
@@ -355,7 +356,7 @@ function env(state: GameState, ctx: Ctx, r: Run): MatchEnv {
   return {
     controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup, num: (name) => amount(state, ctx, r, name, 0),
     turnInfo: turnInfo(state), remembered: r.remembered, defender: r.trig?.defender, attachedTo: src?.attachedTo ?? '',
-    ...(src?.chosen ? { chosen: src.chosen } : {}),
+    ...(src?.chosen ? { chosen: src.chosen } : {}), ...(r.chosen?.cards ? { chosenCards: r.chosen.cards } : {}), exiledWith: exiledWithSource(state, r.sourceIid),
   };
 }
 
@@ -453,7 +454,16 @@ function moveTo(state: GameState, ctx: Ctx, r: Run, iid: string, dest: Zone, p: 
     moveCard(state, ctx, iid, 'battlefield', { tapped: p.Tapped === 'True', controller: p.GainControl === 'True' ? r.controller : c.zone === 'battlefield' ? c.controller : c.owner });
     // Transformed$ True: "return it to the battlefield transformed" (Fable of the Mirror-Breaker).
     if (p.Transformed === 'True' && state.cards[iid]?.zone === 'battlefield') state.cards[iid].transformed = true;
-  } else moveCard(state, ctx, iid, dest, dest === 'exile' && p.ExileFaceDown === 'True' ? { faceDown: true } : {});
+    // WithCountersType$ (persist / undying): it returns with a counter.
+    const back = state.cards[iid];
+    if (p.WithCountersType && back?.zone === 'battlefield') {
+      const k = counterKind(p.WithCountersType);
+      back.counters[k] = (back.counters[k] ?? 0) + (parseInt(p.WithCountersAmount ?? '1', 10) || 1);
+    }
+  } else {
+    moveCard(state, ctx, iid, dest, dest === 'exile' && p.ExileFaceDown === 'True' ? { faceDown: true } : {});
+    if (dest === 'exile') noteExiledWith(state, r.sourceIid, [iid]);
+  }
 }
 
 /** Duration$ UntilHostLeavesPlay on an exile: the host iid, 'gone' if the host already left, else undefined. */
@@ -517,6 +527,17 @@ interface ColorData {
   kind: 'color';
   n: number;
   cont?: AutoCont;
+  /** "Combo" mana: more single mana to choose after this one, from these colors. */
+  more?: number;
+  colors?: string[];
+}
+
+function askColor(state: GameState, ctx: Ctx, pid: string, source: string, data: ColorData) {
+  const colors = data.colors ?? ['W', 'U', 'B', 'R', 'G'];
+  state.pending.push({
+    id: randomId(ctx.rng), pid, prompt: `${source}: add ${data.n} mana of any one color${data.more ? ` (${data.more} more to choose)` : ''}`,
+    options: colors.map((c) => ({ value: c, label: `{${c}}` })), data: data as unknown as Record<string, unknown>,
+  });
 }
 
 interface UnlessData {
@@ -571,6 +592,23 @@ function peekStep(state: GameState, ctx: Ctx, r: Run, i: number, me: GamePlayer)
 }
 
 /** Stage 2: a permanent's abilities remember objects across resolutions (Journey to Nowhere, Tidehollow Sculler ...). */
+/** "Exiled with <source>" bookkeeping (Bomat Courier, ExiledWithSource). */
+export function noteExiledWith(state: GameState, src: string | undefined, iids: string[]) {
+  if (!src || !iids.length) return;
+  const key = `exiled|${src}`;
+  const mem = (state.remembered ??= {});
+  mem[key] = [...new Set([...(mem[key] ?? []).filter((x) => state.cards[x]?.zone === 'exile'), ...iids.filter((x) => state.cards[x]?.zone === 'exile')])];
+}
+
+export function exiledWithSource(state: GameState, src: string | undefined): string[] {
+  if (!src) return [];
+  return [
+    ...(state.remembered?.[`exiled|${src}`] ?? []),
+    ...(state.remembered?.[src] ?? []),
+    ...(state.effects ?? []).flatMap((e) => (e.kind === 'exiled' && e.hostIid === src ? e.cards.map((x) => x.iid) : [])),
+  ].filter((x) => state.cards[x]?.zone === 'exile');
+}
+
 function rememberOnCard(state: GameState, item: StackItem, iids: string[]) {
   const src = item.sourceIid ?? item.iid;
   if (!src || item.kind === 'spell') return;
@@ -589,7 +627,7 @@ export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, t
 }
 
 /** Register a delayed trigger created by the resolving ability. */
-function addDelayed(state: GameState, ctx: Ctx, r: Run, at: Step, chain: { svar?: string; line?: string }, remembered: string[], text: string) {
+function addDelayed(state: GameState, ctx: Ctx, r: Run, at: Step, chain: { svar?: string; line?: string }, remembered: string[], text: string, extra?: { event?: Record<string, string>; thisTurn?: boolean }) {
   const auto = r.item.auto!;
   const lki: Record<string, Lki> = {};
   for (const iid of remembered) {
@@ -601,7 +639,7 @@ function addDelayed(state: GameState, ctx: Ctx, r: Run, at: Step, chain: { svar?
   if (chain.line) info.line = chain.line;
   (state.delayedTriggers ??= []).push({
     id: randomId(ctx.rng), controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, text: `${r.sourceName}: ${text}`,
-    step: at, turn: state.turn, createdStep: state.step, auto: info,
+    step: at, turn: state.turn, createdStep: state.step, auto: info, ...(extra ?? {}),
   });
   log(state, ctx, r.controller, `${r.sourceName}: delayed trigger set up (${text}).`);
 }
@@ -695,7 +733,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       if (n == null || !o || (!ownTargets(r, i) && !p.Defined)) return bad();
       const division = p.DividedAsYouChoose ? r.item.auto?.division : undefined;
       const many = o.cards.length + o.players.length > 1;
-      if (p.DividedAsYouChoose && many && !division) return bad();
+      if (p.DividedAsYouChoose && many && !division) return askDivision(state, ctx, r, i, n, o);
       // Divided damage: each object gets its share (a single target gets it all).
       const dmgOf = (key: string) => (division && many ? division[key] ?? 0 : n);
       const srcObj = p.DamageSource ? defined(state, r, i, p.DamageSource)?.cards[0] : r.sourceIid;
@@ -952,11 +990,18 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       return 'ok';
     }
     case 'DelayedTrigger': {
-      const at = PHASES[p.Phase ?? ''];
+      const evented = p.Mode !== 'Phase' && ['SpellCast', 'ChangesZone'].includes(p.Mode ?? '');
+      const at = evented ? state.step : PHASES[p.Phase ?? ''];
       if (!at || !p.Execute) return bad();
       const objs = p.RememberObjects ? defined(state, r, i, p.RememberObjects) : undefined;
       const rememberedNow = objs ? objs.cards : [];
-      addDelayed(state, ctx, r, at, { svar: p.Execute }, rememberedNow, describe(p.TriggerDescription ?? p.SpellDescription ?? 'Delayed trigger', r.sourceName));
+      let extra: { event?: Record<string, string>; thisTurn?: boolean } | undefined;
+      if (evented) {
+        const event: Record<string, string> = {};
+        for (const [k, v] of Object.entries(p)) if (!['Execute', 'ThisTurn', 'RememberObjects', 'TriggerDescription', 'SpellDescription', 'StackDescription', 'Cost', 'AILogic', 'SubAbility', 'Defined', 'Optional'].includes(k)) event[k] = v;
+        extra = { event, ...(p.ThisTurn === 'True' ? { thisTurn: true } : {}) };
+      }
+      addDelayed(state, ctx, r, at, { svar: p.Execute }, rememberedNow, describe(p.TriggerDescription ?? p.SpellDescription ?? 'Delayed trigger', r.sourceName), extra);
       return 'ok';
     }
     case 'ImmediateTrigger': {
@@ -1070,6 +1115,14 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const o = objects(state, r, i, 'Self');
         if (!o) return bad();
         cards = o.cards;
+        // "You gain protection from everything / hexproof until your next turn" (The One Ring, Teferi's Protection-style pumps on players).
+        if (o.players.length && kws.length) {
+          const until = /UntilYourNextTurn|UntilUntaps/.test(p.Duration ?? '') ? 'yourNextTurn' as const : 'eot' as const;
+          for (const pid of o.players) {
+            addEffect(state, ctx, { kind: 'playerKw', controller: r.controller, until, pid, keywords: kws, turn: state.turn });
+            log(state, ctx, pid, `${pname(state, pid)} gains ${kws.join(', ').toLowerCase()} ${until === 'eot' ? 'until end of turn' : 'until their next turn'} (${r.sourceName}).`);
+          }
+        }
       }
       const hit: string[] = [];
       for (const iid of cards) {
@@ -1180,6 +1233,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
           if (dest === 'library') moveCard(state, ctx, iid, 'library', { position: libraryIndex(state, ctx, r, p.LibraryPosition) });
           else if (dest === 'battlefield') moveCard(state, ctx, iid, 'battlefield', { controller: r.controller });
           else moveCard(state, ctx, iid, dest, { faceDown: dest === 'exile' && p.ExileFaceDown === 'True' });
+          if (dest === 'exile') noteExiledWith(state, r.sourceIid, [iid]);
           moved.push(iid);
         }
         for (const iid of [...rest].reverse()) {
@@ -1252,6 +1306,15 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const n = amount(state, ctx, r, p.Amount, 1);
       if (n == null) return bad();
       if (n <= 0) return 'ok';
+      // "Combo Any" / "Combo W U": each mana its own color choice (Coalition Relic).
+      const combo = /^Combo (.+)$/.exec(p.Produced ?? '');
+      if (combo) {
+        const colors = combo[1].trim() === 'Any' ? ['W', 'U', 'B', 'R', 'G'] : combo[1].trim().split(/\s+/).filter((c) => /^[WUBRGC]$/.test(c));
+        if (!colors.length) return bad();
+        if (colors.length === 1) { me.manaPool[colors[0]] = (me.manaPool[colors[0]] ?? 0) + n; log(state, ctx, r.controller, `${me.name} adds ${Array(n).fill(`{${colors[0]}}`).join('')}.`); return 'ok'; }
+        askColor(state, ctx, r.controller, r.sourceName, { kind: 'color', n: 1, more: n - 1, colors, cont: contAt(r, i + 1) });
+        return 'wait';
+      }
       if (p.Produced === 'Any') {
         const data: ColorData = { kind: 'color', n, cont: contAt(r, i + 1) };
         state.pending.push({
@@ -1365,6 +1428,44 @@ function answerOptionalCost(state: GameState, ctx: Ctx, pid: string, d: OptCostD
 // ------------------------------------------------------------------ targets chosen while resolving
 
 interface LateData { kind: 'late'; cont: AutoCont; step: number }
+interface DivideData { kind: 'divide'; cont: AutoCont; total: number; keys: string[] }
+
+/** Divided damage whose division wasn't given at cast time (e.g. triggered Fury): the controller divides it now. */
+function askDivision(state: GameState, ctx: Ctx, r: Run, i: number, total: number, o: { cards: string[]; players: string[] }): StepResult {
+  const targets = [
+    ...o.cards.filter((iid) => state.cards[iid]).map((iid) => ({ key: iid, label: cardName(state.cards[iid], ctx.lookup) })),
+    ...o.players.map((pid) => ({ key: pid, label: pname(state, pid) })),
+  ];
+  const keys = targets.map((t) => t.key);
+  if (total < keys.length) { // can't give each at least 1: put it all on the first
+    r.item.auto = { ...(r.item.auto ?? { cardId: '', index: 0 }), division: { [keys[0]]: total } } as typeof r.item.auto;
+    return execStep(state, ctx, r, i);
+  }
+  const even: Record<string, number> = {};
+  keys.forEach((k, j) => { even[k] = Math.floor(total / keys.length) + (j < total % keys.length ? 1 : 0); });
+  const data: DivideData = { kind: 'divide', cont: contAt(r, i), total, keys };
+  state.pending.push({
+    id: randomId(ctx.rng), pid: r.controller, prompt: `${r.sourceName}: divide ${total} damage among ${targets.map((t) => t.label).join(', ')}`,
+    options: [{ value: JSON.stringify(even), label: targets.map((t) => `${t.label}: ${even[t.key]}`).join(', ') }],
+    data: data as unknown as Record<string, unknown>, divide: { total, min: 1, targets },
+  });
+  return 'wait';
+}
+
+function answerDivision(state: GameState, ctx: Ctx, data: DivideData, value: string): string | null {
+  let d: Record<string, number>;
+  try { d = JSON.parse(value) as Record<string, number>; } catch { return 'Expected a JSON division'; }
+  if (!d || typeof d !== 'object') return 'Expected a JSON division';
+  const keys = Object.keys(d);
+  if (keys.some((k) => !data.keys.includes(k))) return 'Unknown target in division';
+  if (data.keys.some((k) => !(k in d))) return 'Every target must get some damage';
+  if (Object.values(d).some((v) => !Number.isInteger(v) || v < 1)) return 'Each target must get at least 1 damage';
+  if (Object.values(d).reduce((a, b) => a + b, 0) !== data.total) return `The division must total ${data.total}`;
+  const auto = data.cont.item.auto;
+  data.cont.item.auto = { ...(auto ?? { cardId: '', index: 0 }), division: d } as typeof auto;
+  runFrom(state, ctx, data.cont);
+  return null;
+}
 
 function candidatesFor(state: GameState, ctx: Ctx, spec: TargetSpec, controller: string, sourceIid: string | undefined): TargetRef[] {
   const refs: TargetRef[] = [];
@@ -1638,8 +1739,27 @@ export function resolveAuto(state: GameState, ctx: Ctx, item: StackItem, isPerma
   for (let i = 0; i < r.steps.length; i++) {
     if (execStep(state, ctx, r, i) === 'wait') break;
   }
-  if (isSpellCard && !isPermanentSpell && state.cards[item.iid!]?.zone === 'stack') finish();
+  if (isSpellCard && !isPermanentSpell && state.cards[item.iid!]?.zone === 'stack' && !rebound(state, ctx, item)) finish();
   stateBasedActions(state, ctx, r.deathtouched);
+  return true;
+}
+
+/** Rebound: a spell cast from the hand is exiled as it resolves; at its owner's next upkeep they may cast it free. */
+function rebound(state: GameState, ctx: Ctx, item: StackItem): boolean {
+  const c = item.iid ? state.cards[item.iid] : undefined;
+  if (!c?.cardId || !SCRIPTS.cards[c.cardId]?.[0]?.keywords.includes('Rebound')) return false;
+  const info = item.castInfo ?? c.castInfo;
+  if (info?.from || info?.exileOnLeave) return false; // not cast from the hand
+  const name = cardName(c, ctx.lookup);
+  moveCard(state, ctx, c.iid, 'exile');
+  if (state.cards[c.iid]?.zone !== 'exile') return true;
+  const line = 'DB$ Play | Defined$ DelayTriggerRemembered | WithoutManaCost$ True | Optional$ True | SpellDescription$ Rebound — you may cast it from exile without paying its mana cost.';
+  (state.delayedTriggers ??= []).push({
+    id: randomId(ctx.rng), controller: item.controller, sourceIid: c.iid, sourceName: name, text: `${name}: rebound — you may cast it from exile without paying its mana cost`,
+    step: 'upkeep', turn: state.turn, createdStep: state.step, pid: item.controller,
+    auto: { cardId: c.cardId, face: 0, source: 'trigger', index: -1, line, targets: [], trigger: { mode: 'Delayed', remembered: [c.iid], lki: {} } },
+  });
+  log(state, ctx, item.controller, `${name} resolves and is exiled (rebound).`);
   return true;
 }
 
@@ -1660,14 +1780,20 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (ext !== undefined) return ext;
   const more = answerMorePending(state, ctx, pend, value); // engine/more.ts
   if (more !== undefined) return more;
-  const data = pend.data as unknown as PickData | UnlessData | ColorData | OptCostData | LateData | Unless2Data;
+  const data = pend.data as unknown as PickData | UnlessData | ColorData | OptCostData | LateData | Unless2Data | DivideData;
   const who = player(state, pid);
+  if (data.kind === 'divide') {
+    const err = answerDivision(state, ctx, data, value);
+    if (err) state.pending.push(pend); // invalid division: ask again
+    return err;
+  }
   if (data.kind === 'late') { if (value === 'none') { data.cont.lateTargets = { ...(data.cont.lateTargets ?? {}), [data.step]: [] }; runFrom(state, ctx, data.cont); } return null; }
   if (data.kind === 'unless2') { answerUnless(state, ctx, pid, data, value); return null; }
   if (data.kind === 'optcost') { answerOptionalCost(state, ctx, pid, data, value); return null; }
   if (data.kind === 'color') {
     who.manaPool[value] = (who.manaPool[value] ?? 0) + data.n;
     log(state, ctx, pid, `${who.name} adds ${Array(data.n).fill(`{${value}}`).join('')}.`);
+    if (data.more) { askColor(state, ctx, pid, 'Mana', { ...data, more: data.more - 1 }); return null; }
     if (data.cont) runFrom(state, ctx, data.cont);
     return null;
   }

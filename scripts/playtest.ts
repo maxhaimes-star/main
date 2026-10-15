@@ -330,7 +330,7 @@ function abilityPlays(G: Game, pid: string): Play[] {
   for (const iid of g.battlefield) {
     const c = g.cards[iid];
     if (c.controller !== pid || c.faceDown) continue;
-    consider(iid, abilitiesOfInstance(c));
+    consider(iid, abilitiesOfInstance(c, g, getCard));
   }
   for (const iid of [...me.zones.hand, ...me.zones.graveyard]) {
     const c = g.cards[iid];

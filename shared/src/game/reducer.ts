@@ -14,7 +14,7 @@ import { tokenCopy } from '../engine/copy.ts';
 import { skipsStep, untapPrevented } from '../engine/replacements.ts';
 import { wardReminders } from '../engine/keyword-play.ts';
 import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
-import { enforceAttackRequirements, enforceBlockRestrictions } from '../engine/combat-rules.ts';
+import { enforceAttackRequirements, enforceBlockRestrictions, takeExtraCombat } from '../engine/combat-rules.ts';
 import { noteTapped } from '../engine/manatriggers.ts';
 import {
   answerStrictPending, attackError, blockError, blockersError, castManaCost, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
@@ -291,6 +291,7 @@ function startTurn(state: GameState, ctx: Ctx, pid: string) {
 }
 
 function advanceStep(state: GameState, ctx: Ctx) {
+  if (state.step === 'endCombat' && takeExtraCombat(state, ctx)) { enterStep(state, ctx, 'beginCombat'); return; } // engine/combat-rules.ts
   const i = STEPS.indexOf(state.step);
   enterStep(state, ctx, STEPS[i + 1] ?? 'cleanup');
 }

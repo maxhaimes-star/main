@@ -130,6 +130,8 @@ export function execUniqueStep(state: GameState, ctx: Ctx, r: UniqueRun): Result
         c.counters[kind] = have - n;
         if (!c.counters[kind] && kind !== 'loyalty') delete c.counters[kind];
         log(state, ctx, r.controller, `${r.sourceName}: removes ${n} ${kind} counter${n === 1 ? '' : 's'} from ${cardName(c, ctx.lookup)} (now ${c.counters[kind] ?? 0}).`);
+        // RememberRemoved$ True: Forge remembers one object per counter removed (Count$RememberedSize = the number removed).
+        if (p.RememberRemoved === 'True') r.remember(Array(n).fill(iid));
       }
       return 'ok';
     }

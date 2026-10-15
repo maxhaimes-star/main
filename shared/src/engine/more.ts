@@ -16,9 +16,10 @@ import { cardName, faceOf, isCreature } from '../game/rules.ts';
 import { type Ctx, detach, drawCards, emit, log, moveCard, player, randomId, shuffleLibrary, turnStats } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem, Zone } from '../game/types.ts';
 import { addEffect } from './durations.ts';
+import { addExtraCombat } from './combat-rules.ts';
 import { canPayCost, parseCostTokens, payCostNow } from './paycost.ts';
 import { checkTargets } from './play.ts';
-import { addSplice, createTokenInstance, lkiOf, resumeAuto } from './resolve.ts';
+import { addSplice, createTokenInstance, exiledWithSource, lkiOf, resumeAuto } from './resolve.ts';
 import { flatten, getScript, parseAbility, SCRIPTS, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard, type MatchEnv } from './targets.ts';
 import type { AutoCont, AutoInfo, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
@@ -86,10 +87,7 @@ function ask(state: GameState, ctx: Ctx, pid: string, prompt: string, options: P
 
 /** A card filter for Choices$ / RepeatCards$ etc., with properties that need the run (ExiledWithSource, ControlledBy Remembered ...). */
 export function cardFilter(state: GameState, r: MoreRun, valid: string): (c: CardInstance) => boolean {
-  const exiledWith = new Set<string>([
-    ...(r.sourceIid ? state.remembered?.[r.sourceIid] ?? [] : []),
-    ...(state.effects ?? []).flatMap((e) => (e.kind === 'exiled' && e.hostIid === r.sourceIid ? e.cards.map((x) => x.iid) : [])),
-  ]);
+  const exiledWith = new Set<string>(exiledWithSource(state, r.sourceIid));
   const remembered = new Set(r.remembered);
   const rememberedPlayers = new Set(r.remembered.filter((x) => isPlayer(state, x)));
   const env: MatchEnv = { ...r.env, remembered: r.remembered, chosen: { ...(r.chosen.type ? { type: r.chosen.type } : {}), ...(r.chosen.color ? { color: r.chosen.color } : {}) } };
@@ -129,6 +127,14 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       return 'ok';
     }
     case 'Charm': return askModes(state, ctx, r);
+    case 'AddPhase': {
+      if (p.ExtraPhase !== 'Combat') { r.manual(); return 'ok'; }
+      addExtraCombat(state);
+      log(state, ctx, r.controller, `${r.sourceName}: there will be an additional combat phase after this one.`);
+      return 'ok';
+    }
+    case '_Fading': case '_CumUpkeep': case '_Cascade': case '_Storm': case '_LivingWeapon': case '_Ravenous': case '_Backup': case '_PutBottom':
+      return keywordStep(state, ctx, r);
     case '_SetChosenType': r.chosen.type = p.Type; return 'ok';
     case '_Throne': {
       // Undercity's Throne of the Dead Three: reveal the top ten, a creature card among them enters with three +1/+1 counters.
@@ -693,6 +699,110 @@ function getAbility(auto: AutoInfo): ParsedAbility | undefined {
   return line ? parseAbility(line, f.svars, f.name) : undefined;
 }
 
+// ------------------------------------------------------------------ triggered keywords (engine/kwtriggers.ts)
+
+function keywordStep(state: GameState, ctx: Ctx, r: MoreRun): Result {
+  const p = r.step.params;
+  const self = r.sourceIid ? state.cards[r.sourceIid] : undefined;
+  const onBf = self && self.zone === 'battlefield' ? self : undefined;
+  const sacrifice = (c: CardInstance) => {
+    const name = cardName(c, ctx.lookup);
+    moveCard(state, ctx, c.iid, 'graveyard', { cause: 'sacrifice' });
+    log(state, ctx, c.controller, `${pname(state, c.controller)} sacrifices ${name}.`);
+  };
+  switch (r.step.api) {
+    case '_Fading': {
+      if (!onBf) return 'ok';
+      const kind = counterKind(p.CounterType ?? 'FADE');
+      const have = onBf.counters[kind] ?? 0;
+      if (have > 0) {
+        onBf.counters[kind] = have - 1;
+        log(state, ctx, r.controller, `${r.sourceName}: a ${kind} counter is removed (${have - 1} left).`);
+        if (p.Vanishing === 'True' && have - 1 === 0) sacrifice(onBf);
+      } else sacrifice(onBf);
+      return 'ok';
+    }
+    case '_CumUpkeep': {
+      if (!onBf) return 'ok';
+      onBf.counters.age = (onBf.counters.age ?? 0) + 1;
+      const age = onBf.counters.age;
+      const raw = (p.UpkeepCost ?? '').trim();
+      const life = /^PayLife<(\d+)>$/.exec(raw);
+      const cost = life ? `PayLife<${parseInt(life[1], 10) * age}>` : Array(age).fill(raw).join(' ');
+      log(state, ctx, r.controller, `${r.sourceName} gets an age counter (${age}).`);
+      r.splice('_kw', { line: `DB$ Sacrifice | Defined$ Self | UnlessCost$ ${cost} | UnlessPayer$ You | SpellDescription$ Sacrifice it unless you pay the upkeep cost.` });
+      return 'ok';
+    }
+    case '_LivingWeapon': {
+      if (!onBf) return 'ok';
+      const germ: TokenData = { name: 'Phyrexian Germ', typeLine: 'Token Creature — Phyrexian Germ', colors: ['B'], power: '0', toughness: '0', oracle: '', keywords: [] };
+      const inst = createTokenInstance(state, ctx, r.controller, germ, false);
+      onBf.attachedTo = inst.iid;
+      log(state, ctx, r.controller, `${pname(state, r.controller)} creates a 0/0 black Phyrexian Germ token and attaches ${r.sourceName} to it.`);
+      return 'ok';
+    }
+    case '_Ravenous': {
+      const x = onBf ? onBf.castInfo?.x ?? onBf.counters['+1/+1'] ?? 0 : 0;
+      if (x >= 5) {
+        const got = drawCards(state, player(state, r.controller), 1);
+        log(state, ctx, r.controller, `${pname(state, r.controller)} draws ${got} card (ravenous).`);
+      }
+      return 'ok';
+    }
+    case '_Backup': {
+      const n = r.amount(p.Num, 1) ?? 1;
+      const t = (r.ownTargets() ?? []).find((x) => x.kind === 'card');
+      const c = t && t.kind === 'card' ? state.cards[t.iid] : undefined;
+      if (!c || c.zone !== 'battlefield') return 'ok';
+      c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + n;
+      log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gets ${n} +1/+1 counter${n === 1 ? '' : 's'} (backup).`);
+      const svar = p.Abilities;
+      if (c.iid !== r.sourceIid && svar && r.svars[svar]) r.splice('_kw', { line: `${r.svars[svar]} | Defined$ Targeted` });
+      return 'ok';
+    }
+    case '_Cascade': {
+      const src = r.trig?.card ?? r.sourceIid;
+      const c = src ? state.cards[src] : undefined;
+      const mv = c?.cardId ? ctx.lookup(c.cardId)?.cmc ?? 0 : 0;
+      const me = player(state, r.controller);
+      const exiled: string[] = [];
+      let hit: string | undefined;
+      while (me.zones.library.length) {
+        const top = me.zones.library[0];
+        moveCard(state, ctx, top, 'exile');
+        if (state.cards[top]?.zone !== 'exile') break;
+        exiled.push(top);
+        const card = state.cards[top];
+        const cmc = card.cardId ? ctx.lookup(card.cardId)?.cmc ?? 0 : 0;
+        if (!faceOf(card, ctx.lookup).types.includes('Land') && cmc < mv) { hit = top; break; }
+      }
+      log(state, ctx, r.controller, `Cascade: ${pname(state, r.controller)} exiles ${names(state, ctx, exiled)}.`);
+      if (hit) {
+        r.remember([hit]);
+        r.splice('_kw', { line: 'DB$ Play | Defined$ Remembered | WithoutManaCost$ True | Optional$ True | ValidSA$ Spell | SpellDescription$ You may cast it without paying its mana cost.' });
+      }
+      if (exiled.length) r.splice('_kw', { line: `DB$ _PutBottom | Cards$ ${exiled.join(',')} | SpellDescription$ Put the exiled cards on the bottom in a random order.` });
+      return 'ok';
+    }
+    case '_PutBottom': {
+      const cards = (p.Cards ?? '').split(',').filter((x) => state.cards[x]?.zone === 'exile');
+      for (let k = cards.length - 1; k > 0; k--) { const j = Math.floor(ctx.rng() * (k + 1)); [cards[k], cards[j]] = [cards[j], cards[k]]; }
+      for (const iid of cards) moveCard(state, ctx, iid, 'library', { position: 'bottom' });
+      if (cards.length) log(state, ctx, r.controller, `${cards.length} card${cards.length === 1 ? ' is' : 's are'} put on the bottom of the library in a random order.`);
+      return 'ok';
+    }
+    case '_Storm': {
+      const st = turnStats(state);
+      const before = Object.values(st.cast).reduce((a, b) => a + b, 0) - 1;
+      if (before <= 0) { log(state, ctx, r.controller, `Storm: no spells were cast before ${r.sourceName} this turn.`); return 'ok'; }
+      log(state, ctx, r.controller, `Storm count ${before}.`);
+      r.splice('_kw', { line: `DB$ CopySpellAbility | Defined$ TriggeredSpellAbility | Amount$ ${before} | MayChooseTarget$ True | SpellDescription$ Copy it.` });
+      return 'ok';
+    }
+  }
+  return 'ok';
+}
+
 // ------------------------------------------------------------------ Play: cast a card during the resolution
 
 function play(state: GameState, ctx: Ctx, r: MoreRun): Result {
@@ -1028,6 +1138,11 @@ export function answerMoreTargets(state: GameState, ctx: Ctx, pend: Pending, tar
 export function moreDefinedValue(state: GameState, r: { remembered: string[]; sourceIid?: string; trig?: AutoInfo['trigger']; item: StackItem; chosen?: AutoCont['chosen'] }, value: string | undefined): Objs | undefined {
   switch (value) {
     case 'Imprinted': return { cards: [...(r.chosen?.imprinted ?? [])], players: [] };
+    case 'Remembered.ExiledWithSource': {
+      const mem = r.remembered.length ? r.remembered : (r.sourceIid ? state.remembered?.[r.sourceIid] ?? [] : []);
+      const ex = new Set(exiledWithSource(state, r.sourceIid));
+      return { cards: mem.filter((x) => ex.has(x)), players: [] };
+    }
     case 'ReplacedCard': return { cards: r.trig?.card ? [r.trig.card] : [], players: [] };
     case 'TriggeredSpellAbility': return { cards: r.trig?.card ? [r.trig.card] : [], players: [] };
     case 'TriggeredCardOpponent': {
@@ -1043,7 +1158,7 @@ export function moreDefinedValue(state: GameState, r: { remembered: string[]; so
       const ps = r.remembered.map((x) => (isPlayer(state, x) ? x : value === 'RememberedOwner' ? state.cards[x]?.owner : state.cards[x]?.controller));
       return { cards: [], players: [...new Set(ps.filter((x): x is string => !!x))] };
     }
-    case 'ExiledWith': return { cards: r.sourceIid ? [...(state.remembered?.[r.sourceIid] ?? [])] : [], players: [] };
+    case 'ExiledWith': return { cards: exiledWithSource(state, r.sourceIid), players: [] };
   }
   return undefined;
 }
@@ -1078,6 +1193,12 @@ export function moreVar(state: GameState, r: { controller: string; sourceIid?: s
     const on = m[1] === 'Monarch' ? d.includes('Monarch') : m[1] === 'Initiative' ? d.includes('Initiative') : m[1] === 'Blessing' ? d.includes("City's Blessing")
       : m[1] === 'AltCost' ? /^alt/.test(ci?.option ?? '') : m[1] === 'Surged' ? ci?.option === 'surge' : m[1] === 'Kicked' ? !!ci?.kicked : attacked;
     return parseInt(on ? m[2] : m[3], 10);
+  }
+  if ((m = /^Count\$YourCounters(\w+)$/.exec(v))) return me?.counters[m[1].toLowerCase()] ?? 0;
+  if ((m = /^Count\$wasCastFrom(Exile|Graveyard|Hand)\.(-?\d+)\.(-?\d+)$/.exec(v))) {
+    const ci = r.item.castInfo ?? (r.sourceIid ? state.cards[r.sourceIid]?.castInfo : undefined);
+    const from = ci ? ci.from ?? 'hand' : undefined;
+    return parseInt(from === m[1].toLowerCase() ? m[2] : m[3], 10);
   }
   if (v === 'Count$AttackersDeclared' || v === 'Count$YouAttackedThisTurn') return state.turnInfo?.turn === state.turn ? state.turnInfo.activations[`attacks|${r.controller}`] ?? 0 : 0;
   if (v === 'DungeonsCompleted$Amount') return me?.counters.dungeons ?? 0;

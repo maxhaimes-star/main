@@ -25,7 +25,8 @@ import { moreVar } from './more.ts';
 import { designationTriggers } from './designations.ts';
 import { turnInfo } from './durations.ts';
 import { conditionTrue, evalCount } from './counts.ts';
-import { parseCostTokens } from './paycost.ts';
+import { canPayCost, parseCostTokens } from './paycost.ts';
+import { keywordTriggers } from './kwtriggers.ts';
 import { wardReminders } from './keyword-play.ts';
 import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
 
@@ -37,12 +38,12 @@ let budget = MAX_TRIGGERS_PER_ACTION;
 export const SUPPORTED_MODES = new Set([
   'ChangesZone', 'ChangesZoneAll', 'Phase', 'Attacks', 'AttackersDeclared', 'Blocks', 'SpellCast', 'Drawn', 'DamageDone',
   'DamageDoneOnce', 'DamageDealtOnce', 'Sacrificed', 'Discarded', 'DiscardedAll', 'LandPlayed', 'Exiled',
-  'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch', 'SearchedLibrary',
+  'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch', 'SearchedLibrary', 'DamageAll',
 ]);
 
 /** Trigger parameters the engine understands; a trigger with any other parameter is left to the players. */
 const KNOWN_PARAMS = new Set([
-  'Mode', 'Execute', 'TriggerDescription', 'ValidCard', 'ValidCards', 'Origin', 'Destination', 'TriggerZones', 'ValidPlayer', 'Phase',
+  'Mode', 'Execute', 'TriggerDescription', 'Alone', 'ValidCard', 'ValidCards', 'Origin', 'Destination', 'TriggerZones', 'ValidPlayer', 'Phase',
   'OptionalDecider', 'ValidActivatingPlayer', 'ValidSource', 'ValidTarget', 'Static', 'Secondary', 'CombatDamage', 'IsPresent',
   'PresentCompare', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
   'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA', 'CheckDefinedPlayer', 'FirstAttack', 'Delirium', 'ResolvedLimit',
@@ -280,6 +281,8 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       r = matchC(c, p.ValidCard, env);
       // FirstAttack$ True: "attacks for the first time each turn" (the attack being processed is counted already).
       if (p.FirstAttack === 'True' && (turnInfo(state).activations[`attacked|${ev.iid}`] ?? 0) > 1) r = false;
+      // Alone$ True (exalted): the only attacking creature.
+      if (p.Alone === 'True' && state.battlefield.filter((x) => state.cards[x].attacking).length !== 1) r = false;
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: c?.controller, defender: ev.defender };
     }
@@ -310,7 +313,7 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: ev.pid };
     }
-    case 'DamageDone': case 'DamageDoneOnce': case 'DamageDealtOnce': {
+    case 'DamageDone': case 'DamageDoneOnce': case 'DamageDealtOnce': case 'DamageAll': {
       if (ev.t !== 'damage') return null;
       if (p.CombatDamage === 'True' && !ev.combat) return null;
       if (p.CombatDamage === 'False' && ev.combat) return null;
@@ -389,7 +392,7 @@ function staticCleanup(state: GameState, ctx: Ctx, host: Host, p: Record<string,
 /** "Once"/"All" modes trigger once per batch (per target / per source for the damage ones). */
 function onceKey(mode: string, hit: TriggerContext): string | null {
   switch (mode) {
-    case 'ChangesZoneAll': case 'DiscardedAll': case 'AttackersDeclared': return '';
+    case 'ChangesZoneAll': case 'DiscardedAll': case 'AttackersDeclared': case 'DamageAll': return '';
     case 'DamageDoneOnce': return `t:${hit.target}`;
     case 'DamageDealtOnce': return `s:${hit.source}`;
   }
@@ -484,6 +487,17 @@ function detect(state: GameState, ctx: Ctx) {
           const hit = matchEvent(state, ctx, host, p, ev, env);
           if (hit && hit !== 'unknown') found.push({ controller: c.controller, q: queueFor(state, ctx, host, -1, p, hit, PROWESS_LINE) });
         }
+        // Triggered keywords (Annihilator, Exalted, Persist, Living Weapon, Fading, Cascade, Storm ...): engine/kwtriggers.ts.
+        if (host.id && !host.effect && !c.faceDown) {
+          for (const kt of keywordTriggers(getScript(host.id)?.[host.face]?.keywords ?? [])) {
+            if (!hostZoneOk(host, kt.params, ev)) continue;
+            const hit = matchEvent(state, ctx, host, kt.params, ev, env);
+            if (!hit || hit === 'unknown') continue;
+            const ok = onceKey(kt.params.Mode, hit);
+            if (ok != null) { const key = `${c.iid}|kw${kt.kw}|${ok}`; if (once.has(key)) continue; once.add(key); }
+            found.push({ controller: c.controller, q: queueFor(state, ctx, host, -1, kt.params, hit, kt.line) });
+          }
+        }
         if (!host.id && !host.effect && !c.animations) continue;
         // The card's T: lines (a copy: the copied card's), triggers granted by animate effects, or an effect's triggers.
         const own = host.effect ? host.effect.triggers : host.id ? triggersOf(host.id, host.face) : [];
@@ -491,7 +505,8 @@ function detect(state: GameState, ctx: Ctx) {
           const p = t.params;
           if (p.Static === 'True') {
             const ch = host.id ? triggerChain(host.id, host.face, p.Execute) : undefined;
-            if (ch?.api === 'Cleanup' || p.Mode === 'TapsForMana' || p.Mode === 'ChangesZone' && /^(Cleanup|Forget)/.test(ch?.api ?? '')) { staticCleanup(state, ctx, host, p, ev, env); continue; }
+            const forgetOnly = ch?.api === 'Pump' && !ch.sub && Object.keys(ch.params).every((k) => /^(Forget|Defined$|StackDescription$|SpellDescription$)/.test(k));
+            if (ch?.api === 'Cleanup' || forgetOnly || p.Mode === 'TapsForMana' || p.Mode === 'ChangesZone' && /^(Cleanup|Forget)/.test(ch?.api ?? '')) { staticCleanup(state, ctx, host, p, ev, env); continue; }
             // Other "static" triggers (an effect's "exiled until an opponent becomes the monarch") use the stack like any trigger.
           }
           if (!SUPPORTED_MODES.has(p.Mode)) continue;
@@ -538,6 +553,8 @@ function detect(state: GameState, ctx: Ctx) {
       }
     }
     if (ev.t === 'phase') delayedFor(state, ctx, ev, found);
+    else eventDelayedFor(state, ctx, ev, found);
+    if (ev.t === 'drawn' && ev.nth === 1) miracle(state, ctx, ev, found);
   }
   // APNAP: the active player's triggers go on the stack first, then the others' in turn order.
   const order = state.players.map((p) => p.pid);
@@ -547,11 +564,53 @@ function detect(state: GameState, ctx: Ctx) {
   (state.triggerQueue ??= []).push(...found.map((f) => f.q));
 }
 
+/** Miracle: the first card a player draws in a turn may be revealed and cast for its miracle cost. */
+function miracle(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'drawn' }>, found: Detected[]) {
+  const c = state.cards[ev.iid];
+  if (!c || c.zone !== 'hand' || !c.cardId) return;
+  const kw = getScript(c.cardId)?.[0]?.keywords.find((k) => /^Miracle:/.test(k));
+  if (!kw) return;
+  const cost = kw.split(':')[1].trim();
+  if (/X/.test(cost)) return; // X miracle costs: not offered automatically
+  if (state.players.find((p) => p.pid === ev.pid)?.autoTriggers === false) return;
+  const { toks, unknown } = parseCostTokens(cost);
+  if (unknown.length || !canPayCost(state, ctx, ev.pid, undefined, toks, 0)) return; // can't cast it: no need to reveal
+  const name = cardName(c, ctx.lookup);
+  const line = `DB$ Play | Defined$ TriggeredCard | PlayCost$ ${cost} | Optional$ True | SpellDescription$ Miracle — you may cast it by paying ${cost}.`;
+  found.push({ controller: ev.pid, q: { id: randomId(ctx.rng), controller: ev.pid, sourceIid: c.iid, sourceName: name, text: `${name}: Miracle — you may cast it for its miracle cost`,
+    auto: { cardId: c.cardId, face: 0, source: 'trigger', index: -1, line, targets: [], trigger: { mode: 'Drawn', card: c.iid, player: ev.pid } } } });
+  log(state, ctx, ev.pid, `${player(state, ev.pid).name} reveals ${name} (miracle).`);
+}
+
+/** Event-based delayed triggers ("when you cast your next instant or sorcery spell this turn", "when CARDNAME leaves the battlefield"). */
+function eventDelayedFor(state: GameState, ctx: Ctx, ev: GameEvent, found: Detected[]) {
+  const list = state.delayedTriggers ?? [];
+  if (!list.some((d) => d.event)) return;
+  const keep = [];
+  for (const d of list) {
+    if (!d.event || d.thisTurn && state.turn > d.turn) { if (!d.event || !d.thisTurn || state.turn <= d.turn) keep.push(d); continue; }
+    const c = (d.sourceIid && state.cards[d.sourceIid]) || ({ iid: d.sourceIid ?? '', cardId: d.auto.cardId, controller: d.controller, owner: d.controller, zone: 'command', counters: {} } as unknown as CardInstance);
+    const host: Host = { c, face: d.auto.face ?? 0, id: d.auto.cardId, lki: false };
+    const env: MatchEnv = { controller: d.controller, sourceIid: c.iid, lookup: ctx.lookup, attachedTo: c.attachedTo ?? '', turnInfo: turnInfo(state) };
+    let hit: Hit = null;
+    try { hit = matchEvent(state, ctx, host, d.event, ev, env); } catch { hit = null; }
+    if (!hit || hit === 'unknown') { keep.push(d); continue; }
+    if (state.players.find((p) => p.pid === d.controller)?.autoTriggers === false) { log(state, ctx, d.controller, `Reminder (automatic triggers are off): ${d.text}`); continue; }
+    const prev = d.auto.trigger;
+    const auto: AutoInfo = { ...d.auto, trigger: { ...hit, remembered: prev?.remembered ?? [], lki: { ...(hit.lki ?? {}), ...(prev?.lki ?? {}) } } };
+    found.push({ controller: d.controller, q: { id: d.id, controller: d.controller, sourceIid: d.sourceIid && state.cards[d.sourceIid] ? d.sourceIid : undefined, sourceName: d.sourceName, text: d.text, auto } });
+  }
+  state.delayedTriggers = keep;
+}
+
 function delayedFor(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'phase' }>, found: Detected[]) {
   const list = state.delayedTriggers ?? [];
   if (!list.length) return;
   const keep = [];
   for (const d of list) {
+    if (d.thisTurn && ev.turn > d.turn) continue; // expired
+    if (d.event) { keep.push(d); continue; }
+    if (d.pid && ev.active !== d.pid) { keep.push(d); continue; }
     const stepMatch = ev.step === d.step || (d.step === 'end' && ev.step === 'cleanup');
     const next = ev.turn > d.turn || STEPS.indexOf(d.createdStep) < STEPS.indexOf(d.step);
     if (!stepMatch || !next) { keep.push(d); continue; }

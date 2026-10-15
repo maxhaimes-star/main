@@ -298,7 +298,7 @@ describe('divided damage', () => {
     expect([gg, th, qb].map((i) => g.cards[i].zone)).toEqual(['graveyard', 'graveyard', 'graveyard']);
   });
 
-  it('without a division, several targets fall back to resolve-by-hand', () => {
+  it('without a division, the caster divides the damage on resolution (Pending divide)', () => {
     const { g, ctx } = setup(['fire_covenant'], ['goblin_guide', 'questing_beast']);
     const gg = put(g, ctx, 'b', 'goblin_guide');
     const qb = put(g, ctx, 'b', 'questing_beast');
@@ -306,7 +306,13 @@ describe('divided damage', () => {
     act(g, ctx, 'a', { t: 'cast', iid: fc, x: 2, targets: [[cardRef(gg), cardRef(qb)]] });
     act(g, ctx, 'b', { t: 'pass' });
     expect(g.cards[gg].damage + g.cards[qb].damage).toBe(0);
-    expect(log(g)).toMatch(/Not automated/);
+    const q = g.pending[0];
+    expect(q.pid).toBe('a');
+    expect(q.divide).toMatchObject({ total: 2, min: 1, targets: [{ key: gg }, { key: qb }] });
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: q.options[0].value }); // the suggested even split
+    expect(g.cards[gg].damage).toBe(1);
+    expect(g.cards[qb].damage).toBe(1);
+    expect(log(g)).not.toMatch(/Not automated/);
   });
 });
 

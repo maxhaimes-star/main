@@ -1,3 +1,5 @@
+import { TRIGGER_KEYWORDS } from './kwtriggers.ts';
+
 /**
  * Keyword mechanics (Forge K: lines): which ones the engine handles, for coverage tools.
  */
@@ -9,6 +11,8 @@ export const HANDLED_KEYWORDS = new Set([
   'Cycling', 'TypeCycling', 'Equip', 'Reconfigure', 'Level up', 'Crew', 'Ninjutsu', 'Chapter', 'Hideaway',
   'ETBReplacement', 'etbCounter', 'Enchant',
   'Flashback', 'Evoke', 'Overload', 'Kicker', 'Escape', 'Dash', 'Buyback', 'Delve', 'Surge',
+  // Triggered keywords synthesized as triggers (engine/kwtriggers.ts), rebound (resolve.ts).
+  ...TRIGGER_KEYWORDS,
   // No effect in a two-player cube game.
   'Companion', 'CARDNAME can be your commander.', 'Choose a Background', 'MayEffectFromOpeningDeck',
 ]);
@@ -16,6 +20,7 @@ export const HANDLED_KEYWORDS = new Set([
 /** Why a K: line isn't handled automatically (null = handled). */
 export function keywordGap(k: string): string | null {
   const head = k.split(':')[0].trim();
+  if (head === 'Miracle' && /X/.test(k.split(':')[1] ?? '')) return 'Miracle (X cost)';
   if (HANDLED_KEYWORDS.has(head) || /^Protection from /.test(head)) return null;
   return head;
 }

@@ -263,6 +263,9 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
   for (const k of f?.keywords ?? []) {
     const m = /^etbCounter:([A-Za-z0-9]+):(\d+)(:|$)/.exec(k);
     if (m) counters.push([counterKind(m[1]), parseInt(m[2], 10)]);
+    // Fading N / Vanishing N: it enters with N fade / time counters (the upkeep part is engine/kwtriggers.ts).
+    const fv = /^(Fading|Vanishing):(\d+)/.exec(k);
+    if (fv) counters.push([fv[1] === 'Fading' ? 'fade' : 'time', parseInt(fv[2], 10)]);
   }
   // "Doesn't untap during your untap step" (Monoliths): show the flag.
   const noUntap = own(c, 'Untap').some((r) => r.params.Layer === 'CantHappen' && /Self/.test(r.params.ValidCard ?? ''));

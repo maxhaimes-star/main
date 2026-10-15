@@ -8,6 +8,7 @@
  * Not covered: Chrome Mox (imprint isn't tracked — use the manual tap), loyalty abilities that add
  * mana, City of Traitors' "sacrifice when you play another land" (a trigger).
  */
+import { foreignManaLines } from './grants.ts';
 import { getCard } from '../cube.ts';
 import { cardName, faceOf, hasKeyword, isCreature, type Lookup, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player } from '../game/state.ts';
@@ -16,7 +17,7 @@ import { isHidden } from '../game/types.ts';
 import { parseCost } from './costs.ts';
 import { type CountState, evalCount } from './counts.ts';
 import { parseAbility, scriptFaceOf } from './script.ts';
-import { activateRestriction, staticMods } from './statics.ts';
+import { activateRestriction, staticMods, type StaticsState } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 import { chapterManaLines } from './turns.ts';
 import { manaTapped } from './manatriggers.ts';
@@ -54,10 +55,12 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
   const face = scriptFaceOf(c); // a copy: the copied card's mana abilities
   let scripted = false;
   // A: lines, plus mana abilities a Saga's chapters granted (Urza's Saga, turns.ts).
-  const lines: [string, string | number][] = [...(face?.abilities ?? []).map((l, i) => [l, i] as [string, number]), ...chapterManaLines(c as CardInstance)];
-  if (face) lines.forEach(([line, index]) => {
+  const lines: [string, string | number, Record<string, string>?, string?][] = [...(face?.abilities ?? []).map((l, i) => [l, i] as [string, number]), ...chapterManaLines(c as CardInstance)];
+  // Mana abilities other permanents grant it (Joraga Treespeaker, Goldspan Dragon): engine/grants.ts.
+  if ('effects' in state || 'battlefield' in state) for (const g of foreignManaLines(state as unknown as StaticsState, c.iid, lookup)) lines.push([g.line, g.id, g.svars, g.name]);
+  if (face || lines.length) lines.forEach(([line, index, svars, faceName]) => {
     if (!/^\s*AB\$\s*Mana\b/.test(line)) return;
-    const ab = parseAbility(line, face.svars, face.name);
+    const ab = parseAbility(line, svars ?? face?.svars ?? {}, faceName ?? face?.name ?? name);
     if (!ab || ab.params.Planeswalker === 'True') return;
     scripted = true;
     const n = amountOf(ab.params.Amount, ab, state, c, lookup);

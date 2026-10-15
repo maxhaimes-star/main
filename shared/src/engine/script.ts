@@ -362,7 +362,7 @@ export function amountSupported(raw: string | undefined, svars: Record<string, s
   if (raw == null) return true;
   const s = raw.trim().replace(/^[+-]/, '');
   if (/^\d+$/.test(s)) return true;
-  return supportedVar(svars?.[s]);
+  return supportedVar(svars?.[s] ?? (/\$/.test(s) ? s : undefined));
 }
 
 /** Reason this step can't be automated, or null. */
@@ -378,7 +378,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   const ext = EXT_APIS.has(api); // Animate, Effect, Clone ... (engine/ext.ts)
   if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api) && !ext) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;
-  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined) && !MORE_DEFINED.has(p.Defined) && !/^Valid [A-Za-z.+,!]+$/.test(p.Defined) && !(ext && extDefinedOk(p.Defined))) return `${api} (Defined$ ${p.Defined})`;
+  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined) && !MORE_DEFINED.has(p.Defined) && !/^Valid [A-Za-z.+,!]+$/.test(p.Defined) && !/^Targeted\.[!A-Za-z.+]+$/.test(p.Defined) && !(ext && extDefinedOk(p.Defined))) return `${api} (Defined$ ${p.Defined})`;
   if (p.UnlessCost && api !== 'Counter' && !unlessCostSupported(p.UnlessCost)) return `${api} (UnlessCost)`;
   if (p.Condition && !KNOWN_CONDITIONS.has(p.Condition)) return `${api} (Condition$ ${p.Condition})`;
   for (const k of AMOUNT_PARAMS) {
@@ -388,10 +388,11 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   if (ext) return extUnsupported(step);
   switch (api) {
     case 'Discard': if (p.Mode && !['Random', 'TgtChoose', 'RevealYouChoose', 'Hand'].includes(p.Mode)) return `Discard (Mode$ ${p.Mode})`; break;
-    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any') return 'Mana (choice)'; break;
+    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any' && !/^Combo (Any|[WUBRGC]( [WUBRGC])*)$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
     case 'DelayedTrigger':
-      if (step.kind !== 'DB' || p.Mode !== 'Phase' || !PHASES[p.Phase ?? ''] || !p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
-      if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
+      if (!p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
+      if (p.Mode === 'Phase' ? step.kind !== 'DB' || !PHASES[p.Phase ?? ''] : !['SpellCast', 'ChangesZone'].includes(p.Mode ?? '')) return 'DelayedTrigger';
+      if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects) && !MORE_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
       break;
     case 'ImmediateTrigger': if (step.kind === 'SP' || !p.Execute || !step.svars?.[p.Execute] || (p.TriggerAmount && p.TriggerAmount !== 'Remembered$Amount')) return 'ImmediateTrigger'; break;
     case 'Investigate': if (p.Num && !amountSupported(p.Num, step.svars)) return 'Investigate'; break;
@@ -408,7 +409,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     case 'Pump': case 'PumpAll':
       if (p.PumpZone && !(api === 'Pump' && /^(Flashback|Retrace)$/.test(p.KW ?? ''))) return `${api} (special keyword)`;
       if (p.KW && /HIDDEN|:/.test(p.KW) && !/^Protection/.test(p.KW)) return `${api} (special keyword)`;
-      if (p.Defined && ['You', 'Player', 'Opponent', 'TargetedPlayer'].includes(p.Defined)) return `${api} (player)`;
+      if (p.Defined && ['You', 'Player', 'Opponent', 'TargetedPlayer'].includes(p.Defined) && (api === 'PumpAll' || !p.KW || p.NumAtt || p.NumDef)) return `${api} (player)`;
       break;
   }
   return null;

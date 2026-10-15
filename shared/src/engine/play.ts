@@ -3,6 +3,7 @@ import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
 import { abilityAt, abilityLine, getScript, GRANT_BASE, scriptRef, spellAbility, targetSpecs } from './script.ts';
+import { FOREIGN_BASE, foreignAbility } from './grants.ts';
 import { hasGrantedAbility } from './animate.ts';
 import { divisionError } from './divide.ts';
 import { afterActivation, checkActivation } from './keyword-play.ts';
@@ -98,13 +99,17 @@ function counterKind(forge: string): string {
  * Returns an error (nothing changed) or null. The caller hands priority over.
  */
 export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardInstance, a: ActivateAction): string | null {
-  const ref = c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined; // a copy: the copied card's
+  // An ability another object grants (Splinter Twin, Koth's emblem): its script is the granting card's (engine/grants.ts).
+  const foreign = a.ability! >= FOREIGN_BASE ? foreignAbility(state, c.iid, a.ability!, ctx.lookup) : undefined;
+  if (a.ability! >= FOREIGN_BASE && !foreign) return 'No such ability';
+  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined; // a copy: the copied card's
   if (!ref) return 'That card has no abilities';
   const { cardId, face } = ref;
-  const line = abilityLine(cardId, face, a.ability!);
+  const scriptIndex = foreign ? foreign.scriptIndex : a.ability!;
+  const line = abilityLine(cardId, face, scriptIndex);
   if (!line || !/^\s*AB\$/.test(line)) return 'No such ability';
-  if (a.ability! >= GRANT_BASE && !hasGrantedAbility(c, a.ability!)) return 'No such ability';
-  const ab = abilityAt(cardId, face, a.ability!);
+  if (!foreign && a.ability! >= GRANT_BASE && !hasGrantedAbility(c, a.ability!)) return 'No such ability';
+  const ab = abilityAt(cardId, face, scriptIndex);
   if (!ab) return 'No such ability';
   const src = cardName(c, ctx.lookup);
   if (!a.force) {
@@ -123,7 +128,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const num = (v: string) => (v === 'X' ? x : parseInt(v, 10) || 0);
 
   // ---- plan costs (validate first, then pay)
-  const cost = ab.params.Cost ?? '';
+  // Waterbend {N}: paid as generic mana (tapping artifacts / creatures for it isn't offered).
+  const cost = (ab.params.Cost ?? '').replace(/\bWaterbend<(\d+)>/g, '$1');
   const tokens = cost.match(/\S+<[^>]*>|\S+/g) ?? [];
   let mana = '';
   let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false, discardSelf = false;
@@ -178,7 +184,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
     c.counters[k] = (c.counters[k] ?? 0) + d;
     if (!c.counters[k] && k !== 'loyalty') delete c.counters[k];
   }
-  const auto: AutoInfo = { cardId, face, source: 'ability', index: a.ability!, targets: res.targets, targetZones: res.targetZones };
+  const auto: AutoInfo = { cardId, face, source: 'ability', index: scriptIndex, targets: res.targets, targetZones: res.targetZones };
   if (a.x != null) auto.x = a.x;
   if (a.division) auto.division = { ...a.division };
   recordActivation(state, c, ab, a.ability!, counterDelta.loyalty != null);

@@ -26,6 +26,10 @@ export interface MatchEnv {
   chosen?: import('./types.ts').Chosen;
   /** Objects the source / effect remembered (IsRemembered); absent = unknown. */
   remembered?: string[];
+  /** Cards in exile that were exiled with the source (ExiledWithSource). */
+  exiledWith?: string[];
+  /** Cards chosen during this resolution (ChosenCard). */
+  chosenCards?: string[];
   /** This turn's bookkeeping (attackedThisCombat / attackedThisTurn / ThisTurnEntered); absent = unknown. */
   turnInfo?: { turn: number; activations: Record<string, number> };
   /** The trigger's defending player (DefenderCtrl). */
@@ -128,6 +132,8 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'NamedCard': return env.chosen === undefined ? 'unknown' : !!env.chosen.name && fx.name === env.chosen.name;
     case 'ChosenColor': return env.chosen === undefined ? 'unknown' : !!env.chosen.color && fx.colors.includes(COLOR_WORDS[env.chosen.color] ?? env.chosen.color);
     case 'IsRemembered': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.iid);
+    case 'ChosenCard': return env.chosenCards === undefined ? 'unknown' : env.chosenCards.includes(c.iid);
+    case 'ExiledWithSource': case 'ExiledWithSourceLKI': return env.exiledWith === undefined ? 'unknown' : env.exiledWith.includes(c.iid);
     // How / where it was cast (CastInfo.from is set when not cast from the hand).
     case 'wasCast': return !!c.castInfo;
     case 'wasCastByYou': return !!c.castInfo && c.controller === env.controller;

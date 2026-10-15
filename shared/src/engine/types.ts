@@ -185,6 +185,12 @@ export interface DelayedTrigger {
   turn: number;
   createdStep: import('../game/types.ts').Step;
   auto: AutoInfo;
+  /** Event-based delayed trigger ("when you cast your next instant or sorcery spell this turn"): trigger params (Mode$ ...); `step` is then unused. Fires once. */
+  event?: Record<string, string>;
+  /** Fires only in this player's turn (rebound: "at the beginning of your next upkeep"). */
+  pid?: string;
+  /** Expires at the end of the turn it was created in (ThisTurn$ True). */
+  thisTurn?: boolean;
 }
 
 /** How a spell was cast (alternative / additional costs). Kept on the stack item and on the card while it's on the stack/battlefield. */
@@ -204,6 +210,8 @@ export interface CastInfo {
   /** Zone it was cast from (when not the hand), e.g. 'exile' for "whenever you cast a spell from exile". */
   from?: string;
   colorsSpent?: string[];
+  /** X paid (permanents keep it: ravenous). */
+  x?: number;
 }
 
 /** One way to cast a card (normal cost, alternative cost, kicker ...). */

@@ -8,6 +8,7 @@ export const MORE_APIS = new Set([
   'Branch', 'RepeatEach', 'Repeat', 'GenericChoice', 'ChooseCard', 'ChooseNumber', 'TapOrUntap', 'Amass', 'Proliferate', 'Connive',
   'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'DamageResolve',
   'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType', '_Throne',
+  'AddPhase', '_Fading', '_CumUpkeep', '_Cascade', '_Storm', '_LivingWeapon', '_Ravenous', '_Backup', '_PutBottom',
 ]);
 
 /** Defined$ values more.ts resolves (beyond script.ts SUPPORTED_DEFINED). */
@@ -15,7 +16,7 @@ export const MORE_DEFINED = new Set([
   'ChosenCard', 'ChosenCardLKI', 'ChosenCardController', 'ChosenCardOwner', 'Imprinted', 'ReplacedCard', 'TriggeredSpellAbility', 'TriggeredCardOpponent',
   'TriggeredDefender', 'TargetedOrController', 'ExiledWith', 'Remembered', 'RememberedController', 'RememberedOwner', 'ThisTargetedCard', 'ThisTargetedPlayer',
   'TriggeredDefender.Opponent & Valid Planeswalker.TriggeredDefender', 'Enchanted', 'TriggeredAttackingPlayer', 'TriggeredActivator', 'Player.Opponent',
-  'TriggeredStackItem', 'TopOfLibrary', 'Player.IsRemembered', 'NonRememberedController',
+  'TriggeredStackItem', 'TopOfLibrary', 'Player.IsRemembered', 'NonRememberedController', 'Remembered.ExiledWithSource',
 ]);
 
 /** Counting variables more.ts evaluates. */
@@ -41,7 +42,8 @@ export function moreVarSupported(v: string | undefined): boolean {
     || /^TriggeredCard\$CardCounters\.\w+$/.test(v) || /^Sacrificed\$Card(ManaCost|Power)(\/Plus\.\d+)?$/.test(v)
     || /^Count\$Valid .+ControlledBy \w+$/.test(v)
     || /^(Remembered|RememberedLKI|Targeted|TargetedLKI)\$Card(Power|Toughness|ManaCost)\/(HalfUp|HalfDown|Twice)$/.test(v)
-    || /^RememberedLKI\$Valid .+$/.test(v);
+    || /^RememberedLKI\$Valid .+$/.test(v)
+    || /^Count\$YourCounters\w+$/.test(v) || /^Count\$wasCastFrom(Exile|Graveyard|Hand)\.-?\d+\.-?\d+$/.test(v);
 }
 
 /** Reason the step can't be automated: undefined = not a more.ts API, null = supported. */
@@ -56,6 +58,7 @@ export function moreReason(step: ParsedAbility): string | null | undefined {
     case 'ChooseCard': return null;
     case 'Play': return null;
     case 'CopySpellAbility': return null;
+    case 'AddPhase': return p.ExtraPhase === 'Combat' ? null : `AddPhase (${p.ExtraPhase})`;
   }
   return null;
 }

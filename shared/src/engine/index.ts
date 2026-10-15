@@ -36,6 +36,7 @@ import type { Lookup } from '../game/rules.ts';
 export * from './types.ts';
 export { getScript, spellAbility, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility, scriptRef, scriptFaceOf, GRANT_BASE } from './script.ts';
 export { abilitiesOfInstance, grantedAbilities } from './animate.ts';
+export { FOREIGN_BASE, foreignAbilities, type ForeignAbility } from './grants.ts';
 export { becomeCopy, tokenCopy } from './copy.ts';
 export { activeEffects } from './effects.ts';
 export { EXT_APIS } from './ext.ts';

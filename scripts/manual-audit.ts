@@ -17,7 +17,7 @@ function costTokenGap(tok: string): string | null {
   if (/^(\d+|[WUBRGCSX]|[WUBRG2]\/[WUBRGP]|[WUBRG]{2})$/.test(tok) || tok === 'T' || tok === 'Q') return null;
   if (/^PayLife<(\d+|X)>$/.test(tok) || /^(Sac|Exile|ExileFromGrave|Discard)<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) return null;
   if (/^(Add|Sub)Counter<(\d+|X)\/[A-Za-z0-9]+>$/.test(tok) || isUniqueCost(tok)) return null;
-  if (/^XMin\d+$/.test(tok)) return null;
+  if (/^XMin\d+$/.test(tok) || /^Waterbend<\d+>$/.test(tok)) return null;
   return `cost ${tok.replace(/<.*/, '')}`;
 }
 
@@ -38,7 +38,7 @@ for (const card of CUBE.cards) {
     for (const line of f.abilities) {
       if (!/^\s*AB\$\s*Mana\b/.test(line)) continue;
       const ab = parseAbility(line, f.svars, f.name);
-      if (!ab) continue;
+      if (!ab || ab.params.Planeswalker === 'True') continue; // loyalty abilities use the stack (play.ts)
       for (const p of parseCost(ab.params.Cost ?? '').parts) if (p.kind === 'other' || p.kind === 'discard' || p.kind === 'sac' || p.kind === 'exileHand' || p.kind === 'exileGrave' || p.kind === 'return') gaps.push(`mana cost: ${p.text}`);
       for (let s = ab.sub; s; s = s.sub) if (!(s.api === 'DealDamage' && s.params.Defined === 'You')) gaps.push(`mana sub: ${s.api}`);
       if (ab.params.Produced && !/^(Any|Combo [WUBRGC ]+|[WUBRGC]( [WUBRGC])*)$/.test(ab.params.Produced)) gaps.push(`mana: Produced$ ${ab.params.Produced}`);

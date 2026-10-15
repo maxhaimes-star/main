@@ -11,6 +11,7 @@
  *   library lose, legend rule (a Pending choice), illegal auras, +1/+1 and -1/-1 counters annihilate.
  * - Combat legality: attackError / blockError / blockersError.
  */
+import { FOREIGN_BASE, foreignAbility } from './grants.ts';
 import { parseManaSymbols } from '../cards.ts';
 import { getCard } from '../cube.ts';
 import { cardName, faceOf, hasKeyword, isCreature, type Lookup } from '../game/rules.ts';
@@ -283,10 +284,11 @@ export function abilityUsability(state: AnyState, pid: string, iid: string, abil
   const pe = priorityError(state, pid);
   if (pe) return { ok: false, reason: pe };
   if (c.zone === 'battlefield' ? c.controller !== pid : c.owner !== pid) return { ok: false, reason: "You don't control that card" };
-  const ref = c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
+  const foreign = abilityIndex >= FOREIGN_BASE ? foreignAbility(state as StaticsState, iid, abilityIndex, lookup) : undefined; // engine/grants.ts
+  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
   if (!ref) return { ok: false, reason: 'That card has no abilities' };
-  const line = abilityLine(ref.cardId, ref.face, abilityIndex);
-  const ab = abilityAt(ref.cardId, ref.face, abilityIndex);
+  const line = abilityLine(ref.cardId, ref.face, foreign ? foreign.scriptIndex : abilityIndex);
+  const ab = abilityAt(ref.cardId, ref.face, foreign ? foreign.scriptIndex : abilityIndex);
   if (!line || !ab) return { ok: false, reason: 'No such ability' };
   const name = cardName(c, lookup);
   const banned = activateRestriction(state as StaticsState, iid, pid, lookup);

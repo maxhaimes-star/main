@@ -46,6 +46,7 @@ export function supportedCount(v: string): boolean {
   if (/^(Converge|TimesKicked|Domain|YourStartingLife)$/.test(body)) return true;
   if (/^CardCounters\.\w+$/.test(body)) return true;
   if (/^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) \S+$/.test(body)) return true;
+  if (/^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) [^\s$]+\$CardTypes$/.test(body)) return true;
   return false;
 }
 
@@ -116,8 +117,9 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     const src = env.sourceIid ? s.cards[env.sourceIid] : undefined;
     const kind = m[1].toUpperCase() === 'P1P1' ? '+1/+1' : m[1].toUpperCase() === 'M1M1' ? '-1/-1' : m[1].toLowerCase();
     n = src && !isHidden(src) ? src.counters[kind] ?? 0 : 0;
-  } else if ((m = /^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) (\S+)$/.exec(body))) {
+  } else if ((m = /^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) ([^\s$]+)(\$CardTypes)?$/.exec(body))) {
     const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
+    const types = m[3] ? new Set<string>() : undefined; // "$CardTypes": the number of card types among them
     let pool: CardInstance[];
     if (m[1] === 'Valid') pool = s.battlefield.map((i) => s.cards[i]).filter((c): c is CardInstance => !!c && !isHidden(c));
     else pool = s.players.flatMap((p) => zoneCards(s, p.pid, ZONED[m![1] as keyof typeof ZONED]));
@@ -125,9 +127,9 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     for (const c of pool) {
       const r = matchCard(c, m[2], menv);
       if (r === 'unknown') return undefined;
-      if (r) count++;
+      if (r) { count++; if (types) for (const t of faceOf(c, env.lookup).types) if (CARD_TYPES.includes(t)) types.add(t); }
     }
-    n = count;
+    n = types ? types.size : count;
   }
   return n == null ? undefined : applyMods(n, mods);
 }
