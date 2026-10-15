@@ -21,7 +21,7 @@ import { cardName } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
 import { startCostPicks, type CostData } from './costs.ts';
-import { getScript, parseAbility, parseParams, triggersOf } from './script.ts';
+import { getScript, parseAbility, parseParams, triggersOf, scriptRef } from './script.ts';
 import { matchCard } from './targets.ts';
 import { conditionHolds } from './triggers.ts';
 import { oathApplies } from './unique.ts';
@@ -242,10 +242,12 @@ export function uniqueTriggers(state: GameState, ctx: Ctx) {
 function alwaysTriggers(state: GameState, ctx: Ctx) {
   for (const iid of [...state.battlefield]) {
     const c = state.cards[iid];
-    if (!c?.cardId || c.faceDown) continue;
+    if (!c || c.faceDown) continue;
     if (state.players.find((p) => p.pid === c.controller)?.autoTriggers === false) continue; // checked every action: no reminders
-    const face = c.transformed ? 1 : 0;
-    for (const t of triggersOf(c.cardId, face)) {
+    const ref = scriptRef(c); // a copy (Thespian's Stage copying Dark Depths): the copied card's triggers
+    if (!ref) continue;
+    const { cardId, face } = ref;
+    for (const t of triggersOf(cardId, face)) {
       const p = t.params;
       if (p.Mode !== 'Always') continue;
       const pending = state.stack.some((s) => s.sourceIid === iid && s.auto?.index === t.index && s.kind === 'trigger')
@@ -253,10 +255,10 @@ function alwaysTriggers(state: GameState, ctx: Ctx) {
       if (pending) continue;
       const cond: Record<string, string> = {};
       for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare']) if (p[k]) cond[k] = p[k];
-      if (conditionHolds(state, ctx, cond, c.controller, iid, c.cardId, face) !== true) continue;
-      const line = uniqueTriggerLine(c.cardId, face, p);
-      const f = getScript(c.cardId)?.[face];
-      const auto: AutoInfo = { cardId: c.cardId, face, source: 'trigger', index: t.index, targets: [], trigger: { mode: 'Always', card: iid, player: c.controller, condition: cond } };
+      if (conditionHolds(state, ctx, cond, c.controller, iid, cardId, face) !== true) continue;
+      const line = uniqueTriggerLine(cardId, face, p);
+      const f = getScript(cardId)?.[face];
+      const auto: AutoInfo = { cardId, face, source: 'trigger', index: t.index, targets: [], trigger: { mode: 'Always', card: iid, player: c.controller, condition: cond } };
       if (line) auto.line = line; else if (p.Execute) auto.svar = p.Execute;
       queue(state, ctx, c, (p.TriggerDescription ?? 'State trigger').replace(/CARDNAME/g, f?.name ?? 'it'), auto, { targetsChosen: true });
     }

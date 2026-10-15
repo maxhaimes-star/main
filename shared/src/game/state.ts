@@ -2,6 +2,7 @@ import type { TokenData } from '../cards.ts';
 import type { Rng } from '../draft.ts';
 import { afterMove, beforeMove } from '../engine/durations.ts';
 import { faceOf, type Lookup } from './rules.ts';
+import { moveHooks, type MoveOpts } from './hooks.ts';
 import type { CardInstance, GameEvent, GamePlayer, GameState, PlayerZone, Zone } from './types.ts';
 
 /** Low-level state helpers shared by the reducer and the card-effects engine. */
@@ -121,15 +122,8 @@ export function resetPermanentState(inst: CardInstance) {
   inst.tempKeywords = undefined;
 }
 
-export interface MoveOpts { position?: 'top' | 'bottom' | number; faceDown?: boolean; tapped?: boolean; controller?: string; cause?: 'discard' | 'sacrifice' }
-
-/**
- * Zone-change replacement hook, installed by engine/replacements.ts (R: lines such as "enters tapped",
- * "exile it instead"). `before` may change the destination / options and return work to do after the move.
- */
-export const moveHooks: {
-  before?: (state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts) => { to: Zone; opts: MoveOpts; after?: () => void } | undefined;
-} = {};
+// Zone-change replacement hook: game/hooks.ts (import-free, so engine modules in import cycles can install it).
+export { moveHooks, type MoveOpts } from './hooks.ts';
 
 /** Move a card between zones, applying replacement effects (see moveHooks). */
 export function moveCard(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts = {}) {

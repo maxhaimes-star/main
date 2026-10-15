@@ -170,6 +170,8 @@ export interface QueuedTrigger {
   targetsChosen?: boolean;
   /** Not automatable (e.g. an optional cost): goes on the stack without `auto`, resolved by hand. */
   manual?: boolean;
+  /** Exert (OptionalAttackCost Exert<1/CARDNAME>): this attacking creature is exerted when the trigger is used. */
+  exert?: string;
 }
 
 /** Stage 2: a delayed trigger ("at the beginning of the next end step, return it"). Engine-internal. */
@@ -212,6 +214,10 @@ export interface CastInfo {
   colorsSpent?: string[];
   /** X paid (permanents keep it: ravenous). */
   x?: number;
+  /** Cast for its bestow cost: an Aura spell / Aura (not a creature) while attached (game/rules.ts faceOf). */
+  bestowed?: boolean;
+  /** Life paid for Phyrexian mana symbols (Compleated: two fewer loyalty counters per {P} paid with life). */
+  phyrexianLife?: number;
   /** Multikicker: times kicked; Replicate: times replicated (engine/castkw.ts). */
   timesKicked?: number;
   replicated?: number;
@@ -278,6 +284,8 @@ export interface EffectRecord {
   until: EffectDuration;
   /** The permanent that created it (UntilHostLeavesPlay). */
   hostIid?: string;
+  /** The card whose ability created it (EFFECTSOURCE: Gideon's "attacks Gideon if able"). */
+  source?: string;
   /** Script that holds the SVars (statics / triggers / their Execute$ chains). */
   cardId: string;
   face: number;
@@ -309,6 +317,8 @@ export interface CopyExtra {
   nonLegendary?: boolean;
   /** The copy effect ends at cleanup (Saheeli, Sublime Artificer). */
   until?: 'eot';
+  /** "Except it has this ability" (Thespian's Stage): A: lines of other scripts the copy also has (engine/copy.ts KEPT_BASE). */
+  abilities?: { cardId: string; face: number; index: number }[];
 }
 
 /** An Animate effect on a permanent (engine/animate.ts). Applied by faceOf(); ends per `until`. */

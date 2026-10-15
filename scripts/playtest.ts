@@ -3,6 +3,11 @@
  * engine is checked for problems along the way.
  *
  *   npx tsx scripts/playtest.ts [games=100] [firstSeed=1] [--turns=30] [--json=out.json] [--quiet]
+ *                               [--pool=cube|standard|set:CODE[+CODE...]] [--force=card_id,card_id]
+ *
+ * --pool draws the random decks from the card database (data/carddb, server/src/carddb.ts) instead of the cube:
+ * Standard-legal cards, or the cards of one or more sets. --force puts these cards into every deck (when their
+ * colors fit), to exercise specific cards.
  *
  * The agents only use legal actions: play one land per turn, cast spells they can pay for (tapping their mana
  * sources first; in strict mode the server's auto-pay does it) with random legal targets / modes / X, activate
@@ -22,7 +27,7 @@ import { CUBE, getCard } from '../shared/src/cube.ts';
 import {
   abilitiesOfInstance, activatedAbilitiesOf, adjustCost, applyAction, castOptions, type CardData, type Color, createGame, type Ctx,
   effectivePT, faceOf, landPlaysAllowed, landPlaysLeft, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
-  parseManaSymbols, type Pending, spellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
+  parseManaSymbols, type Pending, castSpellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
 } from '../shared/src/index.ts';
 
 // ------------------------------------------------------------------ rng
@@ -51,11 +56,12 @@ const COLORS: Color[] = ['W', 'U', 'B', 'R', 'G'];
 const BASIC_ID: Record<Color, string> = { W: 'basic_plains', U: 'basic_island', B: 'basic_swamp', R: 'basic_mountain', G: 'basic_forest' };
 
 /** A random 40-card deck: two colors, 23 spells of those colors (or colorless), up to 7 fitting nonbasic lands, basics. */
-export function randomDeck(rng: Rng): { deck: string[]; colors: Color[] } {
+export function randomDeck(rng: Rng, pool: CardData[] = CUBE.cards, force: CardData[] = []): { deck: string[]; colors: Color[] } {
   const colors = shuffled(rng, COLORS).slice(0, 2);
   const fits = (c: CardData) => c.colors.every((x) => colors.includes(x));
-  const spells = shuffled(rng, CUBE.cards.filter((c) => !c.types.includes('Land') && fits(c))).slice(0, 23);
-  const lands = shuffled(rng, CUBE.cards.filter((c) => c.types.includes('Land')
+  const forced = force.filter((c) => !c.types.includes('Land') && fits(c));
+  const spells = [...forced, ...shuffled(rng, pool.filter((c) => !c.types.includes('Land') && fits(c) && !forced.includes(c))).slice(0, 23 - forced.length)];
+  const lands = shuffled(rng, pool.filter((c) => c.types.includes('Land')
     && (c.producedMana.length ? c.producedMana.some((m) => colors.includes(m as Color)) && c.producedMana.every((m) => colors.includes(m as Color) || m === 'C') : rng() < 0.3)))
     .slice(0, 7);
   const deck = [...spells, ...lands].map((c) => c.id);
@@ -70,14 +76,17 @@ export interface Issue { kind: IssueKind; card: string; text: string; seed: numb
 
 export const MANUAL_RE = /by hand|not automated|check by hand|manual|reminder|handle it|do it yourself/i;
 
-const NAMES: string[] = (() => {
-  const s = new Set<string>();
-  for (const c of CUBE.cards) {
+let NAMES: string[] = [];
+/** Card names the report attributes issues to (the cube's, plus a database pool's). */
+function addNames(cards: CardData[]) {
+  const s = new Set<string>(NAMES);
+  for (const c of cards) {
     s.add(c.name);
     for (const f of c.faces ?? []) if (f.name.length > 3) s.add(f.name);
   }
-  return [...s].sort((a, b) => b.length - a.length);
-})();
+  NAMES = [...s].sort((a, b) => b.length - a.length);
+}
+addNames(CUBE.cards);
 
 /** The first cube card named in a text. */
 function cardIn(text: string): string | undefined {
@@ -267,7 +276,7 @@ function castPlays(G: Game, pid: string): Play[] {
         out.push({
           label: `cast ${data.name}${face ? ` (face ${face})` : ''} [${o.id}]`, card: data.name,
           run: () => {
-            const sp = spellAbility(c.cardId!, face ?? 0);
+            const sp = castSpellAbility(c.cardId!, face ?? 0, o.id);
             let modes: string[] | undefined;
             if (sp?.ability.choices?.length) {
               const lo = sp.ability.charmMin ?? 1, hi = Math.min(sp.ability.charmMax ?? 1, sp.ability.choices.length);
@@ -481,11 +490,11 @@ function checkLeaks(G: Game) {
 
 export interface GameResult { seed: number; turns: number; actions: number; winner: string | null; end: 'win' | 'turns' | 'stall' | 'actions'; issues: Issue[]; decks: string[][] }
 
-export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: number; leakEvery?: number; trace?: boolean } = {}): GameResult {
+export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: number; leakEvery?: number; trace?: boolean; pool?: CardData[]; force?: CardData[] } = {}): GameResult {
   const rng = seeded(seed * 7919 + 13);
   const maxTurns = opts.maxTurns ?? 30;
   const stallAfter = opts.stallAfter ?? 400;
-  const d1 = randomDeck(rng), d2 = randomDeck(rng);
+  const d1 = randomDeck(rng, opts.pool, opts.force), d2 = randomDeck(rng, opts.pool, opts.force);
   const ctx: Ctx = { rng: seeded(seed), lookup: getCard, now: 0 };
   const g = createGame(`pt${seed}`, [{ pid: 'p1', name: 'Bot1', deck: d1.deck, side: [] }, { pid: 'p2', name: 'Bot2', deck: d2.deck, side: [] }], rng() < 0.5 ? 'p1' : 'p2', ctx);
   const G: Game = { g, ctx, rng, seed, issues: [], context: '(game)', strict: 'strict' in g && !!(g as { strict?: boolean }).strict, activations: 0, activationTurn: 0, trail: [] };
@@ -549,7 +558,13 @@ export interface PlaytestSummary { games: number; results: GameResult[]; byKind:
 
 export function playtest(n: number, firstSeed = 1, opts: Parameters<typeof playGame>[1] = {}): PlaytestSummary {
   const results: GameResult[] = [];
-  for (let k = 0; k < n; k++) results.push(playGame(firstSeed + k, opts));
+  if (opts.pool) addNames(opts.pool);
+  for (let k = 0; k < n; k++) {
+    try { results.push(playGame(firstSeed + k, opts)); } catch (e) {
+      // a crash outside applyAction (deck building, invariants ...): report it, keep going
+      results.push({ seed: firstSeed + k, turns: 0, actions: 0, winner: null, end: 'stall', decks: [], issues: [{ kind: 'exception', card: '(game)', text: `playGame: ${(e as Error).stack?.split('\n').slice(0, 3).join(' | ')}`, seed: firstSeed + k, turns: 0 } as unknown as Issue] });
+    }
+  }
   const byKind = { exception: 0, stall: 0, manual: 0, invariant: 0, leak: 0 } as Record<IssueKind, number>;
   for (const r of results) for (const i of r.issues) byKind[i.kind]++;
   const cardsPlayed = new Map<string, number>();
@@ -583,6 +598,34 @@ export function formatReport(s: PlaytestSummary, top = 40): string {
   return lines.join('\n');
 }
 
+// ------------------------------------------------------------------ card database pools
+
+/**
+ * Cards for --pool: 'standard' (Standard-legal sets minus bans) or 'set:CODE[+CODE]', from data/carddb via
+ * server/src/carddb.ts. Their rules scripts are registered for the engine; basic lands are left out (decks add them).
+ */
+export async function databasePool(spec: string): Promise<CardData[]> {
+  const db = await import('../server/src/carddb.ts');
+  const rc = await import('../server/src/roomcards.ts');
+  if (!rc.installCardDb()) throw new Error('No card database (copy data/carddb first)');
+  let ids: string[] = [];
+  if (spec === 'standard') {
+    const f = db.getFormat('Standard');
+    if (!f) throw new Error('No Standard format in formats.json');
+    const banned = new Set(f.banned);
+    for (const code of f.sets) for (const p of db.getSet(code)?.cards ?? []) if (!banned.has(p[0])) ids.push(p[0]);
+  } else if (spec.startsWith('set:')) {
+    for (const code of spec.slice(4).split('+')) {
+      const s = db.getSet(code);
+      if (!s) throw new Error(`Unknown set ${code}`);
+      ids.push(...s.cards.map((p) => p[0]));
+    }
+  } else throw new Error(`Unknown pool ${spec}`);
+  ids = [...new Set(ids)];
+  rc.ensureCards(ids);
+  return ids.map((id) => getCard(id)).filter((c): c is CardData => !!c && !/\bBasic\b/.test(c.typeLine) && c.layout !== 'token' && !/\b(Conspiracy|Scheme|Plane|Phenomenon|Vanguard|Dungeon)\b/.test(c.typeLine));
+}
+
 // ------------------------------------------------------------------ CLI
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -592,7 +635,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const n = parseInt(pos[0] ?? '100', 10);
   const seed = parseInt(pos[1] ?? '1', 10);
   const t0 = Date.now();
-  const s = playtest(n, seed, { maxTurns: parseInt(flag('turns') ?? '30', 10), trace: args.includes('--trace') });
+  const poolSpec = flag('pool') ?? 'cube';
+  const pool = poolSpec === 'cube' ? undefined : await databasePool(poolSpec);
+  if (pool) console.log(`Pool ${poolSpec}: ${pool.length} cards`);
+  const force = (flag('force') ?? '').split(',').filter(Boolean).map((id) => getCard(id)).filter((c): c is CardData => !!c);
+  const s = playtest(n, seed, { maxTurns: parseInt(flag('turns') ?? '30', 10), trace: args.includes('--trace'), ...(pool ? { pool } : {}), ...(force.length ? { force } : {}) });
   console.log(formatReport(s, parseInt(flag('top') ?? '40', 10)));
   console.log(`(${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   const out = flag('json');

@@ -51,6 +51,7 @@ let reverting = 0;
 /** Called by moveCard after the card moved. */
 export function afterMove(state: GameState, ctx: Ctx, inst: CardInstance, from: Zone, to: Zone) {
   if (inst.castInfo && to !== 'stack' && !(from === 'stack' && to === 'battlefield') && from !== to) inst.castInfo = undefined;
+  if (inst.unlocked && from === 'battlefield' && to !== 'battlefield') delete inst.unlocked; // Rooms
   extAfterMove(state, ctx, inst, from, to); // animations / copies / effects (engine/ext.ts)
   if (from !== to && state.effects?.some((e) => e.kind === 'grant' && e.iid === inst.iid)) {
     const earthbend = state.effects.find((e) => e.kind === 'grant' && e.iid === inst.iid && e.keyword === 'Earthbend');

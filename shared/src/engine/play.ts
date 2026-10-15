@@ -1,18 +1,20 @@
+import { anyColorCost } from './permissions.ts';
+import { keptAbility } from './copy.ts';
 /** Casting / activating with the engine: target validation and cost payment. */
 import { cardName, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
-import { abilityAt, abilityLine, getScript, GRANT_BASE, scriptRef, spellAbility, targetSpecs } from './script.ts';
+import { abilityAt, abilityLine, castSpellAbility, getScript, GRANT_BASE, scriptRef, targetSpecs } from './script.ts';
 import { FOREIGN_BASE, foreignAbility } from './grants.ts';
 import { hasGrantedAbility } from './animate.ts';
 import { divisionError } from './divide.ts';
 import { afterActivation, checkActivation, specialAction } from './keyword-play.ts';
 import { isValidTarget } from './targets.ts';
-import { activateRestriction, adjustCost } from './statics.ts';
+import { activateRestriction, adjustCost, manaConvertApplies } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 import { isUniqueCost, payUniqueCosts, uniqueActivationError, uniqueCostError } from './turns.ts';
-import { abilityPayment, executeAutoPay } from './strict.ts';
+import { abilityPayment, executeAutoPay, reduceGeneric, waterbendOf } from './strict.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
 type ActivateAction = Extract<GameAction, { t: 'activate' }>;
@@ -71,7 +73,7 @@ function charmModes(ab: ParsedAbility, modes: string[] | undefined): string | nu
 export function prepareCast(state: GameState, inst: CardInstance, pid: string, a: CastAction, ctx: Ctx): { auto?: AutoInfo; error?: string } {
   if (a.manual || a.faceDown || !inst.cardId) return {};
   const face = a.face ?? 0;
-  const sp = spellAbility(inst.cardId, face);
+  const sp = castSpellAbility(inst.cardId, face, a.costOption); // bestow: the Aura spell
   if (!sp) return {};
   const specs = targetSpecs(sp.ability, a.modes);
   if (specs.length && a.targets === undefined) return {};
@@ -102,13 +104,14 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   // An ability another object grants (Splinter Twin, Koth's emblem): its script is the granting card's (engine/grants.ts).
   const foreign = a.ability! >= FOREIGN_BASE ? foreignAbility(state, c.iid, a.ability!, ctx.lookup) : undefined;
   if (a.ability! >= FOREIGN_BASE && !foreign) return 'No such ability';
-  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined; // a copy: the copied card's
+  const kept = keptAbility(c, a.ability!); // a copy's "except it has this ability" (Thespian's Stage)
+  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : kept ? { cardId: kept.cardId, face: kept.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined; // a copy: the copied card's
   if (!ref) return 'That card has no abilities';
   const { cardId, face } = ref;
-  const scriptIndex = foreign ? foreign.scriptIndex : a.ability!;
+  const scriptIndex = foreign ? foreign.scriptIndex : kept ? kept.index : a.ability!;
   const line = abilityLine(cardId, face, scriptIndex);
   if (!line || !/^\s*AB\$/.test(line)) return 'No such ability';
-  if (!foreign && a.ability! >= GRANT_BASE && !hasGrantedAbility(c, a.ability!)) return 'No such ability';
+  if (!foreign && !kept && a.ability! >= GRANT_BASE && !hasGrantedAbility(c, a.ability!)) return 'No such ability';
   const ab = abilityAt(cardId, face, scriptIndex);
   if (!ab) return 'No such ability';
   const src = cardName(c, ctx.lookup);
@@ -130,8 +133,9 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const num = (v: string) => (v === 'X' ? x : parseInt(v, 10) || 0);
 
   // ---- plan costs (validate first, then pay)
-  // Waterbend {N}: paid as generic mana (tapping artifacts / creatures for it isn't offered).
-  const cost = (ab.params.Cost ?? '').replace(/\bWaterbend<(\d+)>/g, '$1');
+  // Waterbend {N}: N generic mana; in strict mode untapped artifacts / creatures may help pay it (engine/strict.ts).
+  const rawCost = ab.params.Cost ?? '';
+  const cost = rawCost.replace(/\bWaterbend<(\d+)>/g, '$1');
   const tokens = cost.match(/\S+<[^>]*>|\S+/g) ?? [];
   let mana = '';
   let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false, discardSelf = false;
@@ -163,7 +167,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   // Strict mode (engine/strict.ts): {T} needs no summoning sickness; mana is auto-paid (pool, then untapped sources).
   let strictPlan: import('../game/manapay.ts').PayResult | null = null;
   if (state.strict) {
-    const pay = abilityPayment(state, pid, c, cost, x, ctx.lookup);
+    const pay = abilityPayment(state, pid, c, rawCost, x, ctx.lookup);
     if ('error' in pay) { if (!(state.fixMode?.on && a.force)) return pay.error; }
     else strictPlan = pay.plan;
   }
@@ -174,9 +178,12 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (tap) c.tapped = true;
   if (untap) c.tapped = false;
   if (mana) {
-    if (strictPlan) executeAutoPay(state, ctx, pid, strictPlan);
+    const wb = waterbendOf(rawCost);
+    const helped = strictPlan ? executeAutoPay(state, ctx, pid, strictPlan, { label: 'waterbend' }) : 0;
     const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
     if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
+    if (helped) mana = reduceGeneric(mana, Math.min(helped, wb), x);
+    if (manaConvertApplies(state, c.iid, pid, ctx.lookup)) mana = anyColorCost(mana); // Agatha's Soul Cauldron
     const paid = payFromPool(mana, me.manaPool, x);
     if (paid) { me.manaPool = paid.pool; if (paid.lifePaid) { me.life -= paid.lifePaid; notes.push(`paid ${paid.lifePaid} life`); } }
     else notes.push('mana not deducted');

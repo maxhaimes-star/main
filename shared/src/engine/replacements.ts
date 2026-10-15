@@ -18,9 +18,10 @@
  *  - counterAmount   (Event$ AddCounter -> ReplaceCounter, "that many plus one")
  */
 import { cardName, type Lookup } from '../game/rules.ts';
-import { type Ctx, emit, log, moveCard, moveHooks, type MoveOpts, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
+import { type Ctx, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
+import { moveHooks, type MoveOpts } from '../game/hooks.ts';
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
-import { getScript, parseParams, SCRIPTS, scriptRef } from './script.ts';
+import { getScript, parseParams, SCRIPTS, scriptRef, isRoomCard } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';
 import { playerProtectedFrom, protectedFrom } from './protection.ts';
 import { untapLimits } from './statics.ts';
@@ -235,6 +236,13 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
     }
   }
 
+  // Rooms: the door that was cast is unlocked; a Room put onto the battlefield otherwise has both doors locked.
+  if (isRoomCard(c.cardId) && !c.faceDown) {
+    const data = ctx.lookup(c.cardId!);
+    const door = from !== 'stack' ? -1 : c.castAs ? data?.faces?.findIndex((f) => f.name === c.castAs) ?? -1 : 0; // no castAs: the left door
+    afters.push(() => { const inst = state.cards[c.iid]; if (inst?.zone === 'battlefield') inst.unlocked = door >= 0 ? [door] : []; });
+  }
+
   // The card's own "as it enters" replacements.
   const nm = cardName(c, ctx.lookup);
   const counters: [string, number][] = [];
@@ -290,6 +298,16 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
       if (sv === 'Count$TimesKicked') n = c.castInfo?.timesKicked ?? (c.castInfo?.kicked ? 1 : 0);
       else if (sv === 'Count$xPaid') n = c.castInfo?.x ?? 0;
       if (n) counters.push([counterKind(m[1]), n]);
+    }
+    // Compleated: two fewer loyalty counters for each {P} paid with life (2 life each).
+    if (k === 'Compleated' && c.castInfo?.phyrexianLife) {
+      const fewer = c.castInfo.phyrexianLife;
+      afters.push(() => {
+        const inst = state.cards[c.iid];
+        if (inst?.zone !== 'battlefield') return;
+        inst.counters.loyalty = Math.max(0, (inst.counters.loyalty ?? 0) - fewer);
+        log(state, ctx, controller, `${nm} enters with ${fewer} fewer loyalty counters (compleated — life was paid for Phyrexian mana).`);
+      });
     }
     // Fading N / Vanishing N: it enters with N fade / time counters (the upkeep part is engine/kwtriggers.ts).
     const fv = /^(Fading|Vanishing):(\d+)/.exec(k);
@@ -392,6 +410,11 @@ export function cantBeCountered(state: GameState, ctx: Ctx, item: StackItem): st
  * Meekstone) or a stun counter (one is removed instead).
  */
 export function untapPrevented(state: GameState, ctx: Ctx, c: CardInstance): boolean {
+  const exerted = state.remembered?.[`exerted|${c.iid}`];
+  if (exerted && parseInt(exerted[0], 10) < state.turn) {
+    delete state.remembered![`exerted|${c.iid}`];
+    if (c.tapped) { log(state, ctx, c.controller, `${cardName(c, ctx.lookup)} stays tapped (exerted).`); return true; }
+  }
   if (!c.tapped) return false;
   if ((c.counters.stun ?? 0) > 0) {
     c.counters.stun--;
@@ -447,6 +470,40 @@ export function damagePrevented(state: GameState, lookup: Lookup, target: string
     return e.name;
   }
   return undefined;
+}
+
+/** Effects' "it deals double that damage instead" replacements (Lightning, Army of One's stagger): ReplaceWith a ReplaceEffect of DamageAmount. */
+function doublingReplacement(r: RLine): boolean {
+  const sv = svarParams(r, r.params.ReplaceWith);
+  if (sv?.api !== 'ReplaceEffect' || sv.params.VarName !== 'DamageAmount') return false;
+  const value = r.svars?.[sv.params.VarValue ?? ''] ?? sv.params.VarValue ?? '';
+  return /^ReplaceCount\$DamageAmount\/Twice$/.test(value);
+}
+
+/**
+ * Damage after "deals double that damage instead" effects (Lightning, Army of One): `amount` doubled once per
+ * applicable effect. `target` is a player id or a permanent's iid.
+ */
+export function modifiedDamage(state: GameState, lookup: Lookup, target: string, source: string | undefined, amount: number): number {
+  if (amount <= 0 || !state.effects?.length) return amount;
+  const isPlayer = state.players.some((p) => p.pid === target);
+  const tgt = isPlayer ? undefined : state.cards[target];
+  let n = amount;
+  for (const { e, r } of effectReplacements(state, 'DamageDone')) {
+    if (r.params.Prevent === 'True' || !doublingReplacement(r)) continue;
+    const env: MatchEnv = { controller: e.controller, sourceIid: e.hostIid, lookup, remembered: e.remembered };
+    const ok = (r.params.ValidTarget ?? 'Any').split(',').some((alt) => {
+      const v = alt.trim();
+      // "Permanent.ControlledBy Player.IsRemembered": a permanent a remembered player controls
+      if (/^Permanent\.ControlledBy Player\.IsRemembered$/.test(v)) return !!tgt && tgt.zone === 'battlefield' && e.remembered.includes(tgt.controller);
+      if (isPlayer) return /^Player\b/.test(v) && matchPlayer(target, v, env) === true;
+      return !!tgt && /^(Card|Permanent|Creature|Planeswalker)\b/.test(v) && matchCard(tgt, v, env) === true;
+    });
+    if (!ok) continue;
+    void source;
+    n *= 2;
+  }
+  return n;
 }
 
 const PHASES: Partial<Record<Step, string>> = { upkeep: 'Upkeep', draw: 'Draw', end: 'End of Turn' };

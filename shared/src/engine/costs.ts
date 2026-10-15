@@ -17,7 +17,7 @@ import { prepareCast } from './play.ts';
 import { divisionError } from './divide.ts';
 import { getScript, parseParams, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard } from './targets.ts';
-import { adjustCost, castRestriction } from './statics.ts';
+import { adjustCost, castRestriction, staticLineActive } from './statics.ts';
 import { castTimingError } from './timing.ts';
 import { applyPermissions } from './permissions.ts';
 import { applyCastKeywords, escalateParts } from './castkw.ts';
@@ -167,6 +167,7 @@ const KEYWORD_OPTIONS: Record<string, { id: string; label: string; zone?: string
   Spectacle: { id: 'spectacle', label: 'Spectacle', zone: 'hand', flags: {}, note: 'Only if an opponent lost life this turn' },
   Surge: { id: 'surge', label: 'Surge', zone: 'hand', flags: {}, note: 'Only if you or a teammate cast another spell this turn' },
   Miracle: { id: 'miracle', label: 'Miracle', zone: 'hand', flags: {}, note: 'Only as the first card you drew this turn is revealed' },
+  Bestow: { id: 'bestow', label: 'Bestow', flags: { bestowed: true }, note: 'Cast as an Aura (enchant creature); becomes a creature again if it becomes unattached' },
 };
 
 function optionDefs(state: GameState, c: CardInstance, pid: string, face: number | undefined, lookup: Lookup, x: number): OptionDef[] {
@@ -210,7 +211,7 @@ function optionDefs(state: GameState, c: CardInstance, pid: string, face: number
     if (p.IsPresent && !state.battlefield.some((iid) => matchCard(state.cards[iid], p.IsPresent, env) === true)) def.unavailable = `Needs ${describeValid(p.IsPresent.replace(/\.YouCtrl|\+YouCtrl/, ''))} you control`;
     if (p.Condition === 'PlayerTurn' && state.activePlayer !== pid) def.unavailable = 'Only during your turn';
     if (p.Condition === 'NotPlayerTurn' && state.activePlayer === pid) def.unavailable = "Only when it's not your turn";
-    if (p.CheckSVar) def.parts = [...def.parts, { kind: 'other', n: '0', valid: '', text: 'Check the condition by hand' }];
+    if (p.CheckSVar && staticLineActive(state, line, script?.svars ?? {}, c.iid, pid, lookup) !== true) def.unavailable = p.Description ? `Condition not met: ${p.Description.replace(/CARDNAME/g, name)}` : 'Condition not met';
     defs.push(def);
   }
   applyCastKeywords(state, c, pid, face, defs, name, parseCost, lookup); // spectacle, multikicker, mayhem ... (engine/castkw.ts)
@@ -314,7 +315,7 @@ function spentColors(before: Record<string, number>, after: Record<string, numbe
 }
 
 /** Pay the mana part of a planned cast from the pool. Returns a note for the log (or ''). */
-export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, plan: CastPlan, lookup: Lookup = getCard): { note: string; colors: string[]; deferred: boolean } {
+export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, plan: CastPlan, lookup: Lookup = getCard): { note: string; colors: string[]; deferred: boolean; lifePaid?: number } {
   // Static cost increases / reductions (Thalia, Sphere ...) apply to whichever cost was chosen.
   let note = '';
   if (plan.def.id !== 'faceDown') {
@@ -329,7 +330,7 @@ export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, p
   if (res) {
     me.manaPool = res.pool;
     if (res.lifePaid) { me.life -= res.lifePaid; note += ` (paid ${res.lifePaid} life)`; }
-    return { note, colors: spentColors(before, me.manaPool), deferred: false };
+    return { note, colors: spentColors(before, me.manaPool), deferred: false, ...(res.lifePaid ? { lifePaid: res.lifePaid } : {}) };
   }
   if (plan.def.id === 'faceDown') return { note, colors: [], deferred: false };
   if (Object.values(me.manaPool).some((v) => v > 0)) return { note: `${note} (mana pool did not cover the cost — not deducted)`, colors: [], deferred: false };
@@ -432,9 +433,10 @@ export function answerCostPending(state: GameState, ctx: Ctx, _pid: string, d: C
 /**
  * After the spell is on the stack: record how it was cast, pay life / other costs, ask for choices.
  */
-export function finishCast(state: GameState, ctx: Ctx, pid: string, c: CardInstance, item: StackItem, plan: CastPlan, paid: { colors: string[]; deferred: boolean }, a: CastAction) {
+export function finishCast(state: GameState, ctx: Ctx, pid: string, c: CardInstance, item: StackItem, plan: CastPlan, paid: { colors: string[]; deferred: boolean; lifePaid?: number }, a: CastAction) {
   const me = player(state, pid);
   const info: CastInfo = { option: plan.def.id, ...plan.def.flags };
+  if (paid.lifePaid) info.phyrexianLife = paid.lifePaid;
   if (plan.kicked) info.kicked = true;
   if (plan.x) info.x = plan.x;
   if (paid.colors.length) info.colorsSpent = paid.colors;

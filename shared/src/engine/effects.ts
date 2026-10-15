@@ -47,7 +47,9 @@ export function effectUnsupported(step: ParsedAbility): string | null {
       // Supported: "if a card would be put into a graveyard, exile it instead" (Yawgmoth's Will), damage prevention.
       const moved = rp.Event === 'Moved' && rp.Destination === 'Graveyard' && rw?.api === 'ChangeZone';
       const prevent = rp.Event === 'DamageDone' && rp.Prevent === 'True';
-      if (!moved && !prevent) return 'Effect (replacement)';
+      // "it deals double that damage instead" (replacements.ts modifiedDamage)
+      const doubled = rp.Event === 'DamageDone' && rw?.api === 'ReplaceEffect' && rw.params.VarName === 'DamageAmount' && /^ReplaceCount\$DamageAmount\/Twice$/.test(sv[rw.params.VarValue ?? ''] ?? '');
+      if (!moved && !prevent && !doubled) return 'Effect (replacement)';
     }
   }
   if (p.Duration && !DURATIONS[p.Duration]) return `Effect (Duration$ ${p.Duration})`;
@@ -101,6 +103,7 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
     statics: list(p.StaticAbilities), triggers: list(p.Triggers), remembered: [...new Set(remembered)], turn: state.turn,
   };
   if (p.ReplacementEffects) rec.replacements = list(p.ReplacementEffects);
+  if (api.sourceIid && state.cards[api.sourceIid]) rec.source = api.sourceIid;
   if (emblem) rec.emblem = true;
   if (p.Image) rec.image = p.Image;
   if (watch && ZONES[watch]) rec.watchZone = ZONES[watch];
@@ -132,9 +135,10 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
   const mayPlay = rec.statics.some((s) => f?.svars[s] && isPermission(parseStatic(f.svars[s]).params));
   if (mayPlay) {
     const cards = rec.remembered.filter((x) => state.cards[x]);
-    const zone = cards[0] ? state.cards[cards[0]].zone : 'exile';
+    const permLine = rec.statics.map((s) => f?.svars[s]).find((l) => l && isPermission(parseStatic(l).params));
+    const zone = cards[0] ? state.cards[cards[0]].zone : (permLine ? parseStatic(permLine).params.AffectedZone ?? 'Exile' : 'Exile').toLowerCase();
     const shown = cards.filter((x) => !state.cards[x].faceDown);
-    log(state, ctx, owner, `${who} may play ${shown.length ? shown.map((x) => cardName(state.cards[x], ctx.lookup)).join(', ') : cards.length ? `${cards.length} card${cards.length === 1 ? '' : 's'}` : 'those cards'} from ${zone === 'graveyard' ? 'their graveyard' : zone}.`);
+    log(state, ctx, owner, `${who} may play ${shown.length ? shown.map((x) => cardName(state.cards[x], ctx.lookup)).join(', ') : cards.length ? `${cards.length} card${cards.length === 1 ? '' : 's'}` : zone === 'graveyard' ? 'cards' : 'those cards'} from ${zone === 'graveyard' ? 'their graveyard' : zone}.`);
   }
 }
 

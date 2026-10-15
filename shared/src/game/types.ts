@@ -69,6 +69,8 @@ export interface CardInstance {
   tempKeywords?: string[];
   /** How it was cast (kicked, evoked, flashback...). Kept while on the stack and when it resolves onto the battlefield. */
   castInfo?: CastInfo;
+  /** Rooms on the battlefield: the unlocked doors (0 = left, 1 = right), engine/script.ts roomScript. */
+  unlocked?: number[];
 }
 
 export interface StackItem {
@@ -170,6 +172,8 @@ export interface GameState {
   remembered?: Record<string, string[]>;
   /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
   turnStats?: { cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number> };
+  /** Whole-game counters: spells each player cast this game (Count$YouCastThisGame: Once Upon a Time). */
+  gameStats?: { cast: Record<string, number> };
   /** Extra turns (engine/turns.ts): player ids, the LAST one is taken next ("after this one" stacks LIFO). */
   extraTurns?: string[];
   /** Whose regular turn is due once the extra turns are over (set when an extra turn interrupts the rotation). */

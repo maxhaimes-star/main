@@ -34,6 +34,8 @@ export interface StaticsState {
   turn?: number;
   /** Effect records (engine/effects.ts): emblems and "this turn" effects with static abilities. */
   effects?: TimedEffect[];
+  /** Whole-game counters (spells each player cast this game: Once Upon a Time). */
+  gameStats?: { cast: Record<string, number> };
 }
 
 /** One static ability of a permanent (or a card being cast, for EffectZone$ All). */
@@ -49,6 +51,8 @@ export interface StaticAbility {
   /** Effects (engine/effects.ts): the effect's name ("Emblem — ...") and remembered objects. */
   sourceName?: string;
   remembered?: string[];
+  /** Effects: the card that created the effect (EFFECTSOURCE). */
+  effectSource?: string;
 }
 
 /** How fully the engine handles a static. */
@@ -215,6 +219,7 @@ function effectStatics(st: StaticsState): StaticAbility[] {
       out.push({
         sourceIid: `effect:${e.id}`, controller: e.controller, modes: (params.Mode ?? '').split(',').map((m) => m.trim()).filter(Boolean),
         params, svars: f.svars, line, description: nameText((params.Description ?? e.text).replace(/EFFECTSOURCE/g, f.name), f.name), sourceName: e.name, remembered: e.remembered,
+        ...(e.source ? { effectSource: e.source } : {}),
       });
     }
   }
@@ -322,6 +327,7 @@ class Evaluator {
     }
     switch (e) {
       case 'Count$CardsInYourHand': return handSize(this.st, s.controller);
+      case 'Count$YouCastThisGame': return this.st.gameStats?.cast[s.controller] ?? 0;
       case 'Count$YourLifeTotal': return this.st.players.find((p) => p.pid === s.controller)?.life;
       case 'Count$Domain': {
         const env = this.env(s);
@@ -453,12 +459,29 @@ function computed(st: StaticsState, lookup: Lookup): Computed {
   return result;
 }
 
-/** Active Continuous statics with AddAbility$ and the permanents they affect (engine/grants.ts). */
+/** Active Continuous statics with AddAbility$ / AddTrigger$ and the permanents they affect (engine/grants.ts). */
 export function abilityGrants(st: StaticsState, lookup: Lookup): { s: StaticAbility; iids: string[] }[] {
   const ev = new Evaluator(st, lookup, true);
   return computed(st, lookup).statics
-    .filter((s) => s.modes.includes('Continuous') && !!s.params.AddAbility && (!s.params.AffectedZone || s.params.AffectedZone === 'Battlefield') && ev.active(s) === true)
+    .filter((s) => s.modes.includes('Continuous') && (!!s.params.AddAbility || !!s.params.AddTrigger || !!s.params.GainsAbilitiesOf) && (!s.params.AffectedZone || s.params.AffectedZone === 'Battlefield') && ev.active(s) === true)
     .map((s) => ({ s, iids: affectedCards(st, ev, s).map((c) => c.iid) }));
+}
+
+/**
+ * ManaConvert statics (Agatha's Soul Cauldron: "you may spend mana as though it were mana of any color to activate
+ * abilities of creatures you control"): does one apply to activating an ability of `iid` for `pid`?
+ */
+export function manaConvertApplies(st: StaticsState, iid: string, pid: string, lookup: Lookup): boolean {
+  const c = visible(st, iid);
+  if (!c || c.zone !== 'battlefield') return false;
+  for (const { s, ev } of active(st, lookup, 'ManaConvert')) {
+    const p = s.params;
+    if (p.ManaConversion !== 'AnyType->AnyColor' || (p.ValidSA && p.ValidSA !== 'Activated') || s.controller !== pid) continue;
+    if (p.ValidPlayer && p.ValidPlayer !== 'You') continue;
+    if (p.ValidCard && matchCard(c, p.ValidCard.replace(/\+inZoneBattlefield/, ''), ev.env(s)) !== true) continue;
+    return true;
+  }
+  return false;
 }
 
 /** Continuous-effect modifications to a permanent (undefined when none apply). */
@@ -475,10 +498,18 @@ const CONT_HANDLED_KEYS = new Set([
   'Mode', 'Affected', 'AffectedDefined', 'AddPower', 'AddToughness', 'SetPower', 'SetToughness', 'CharacteristicDefining',
   'AddKeyword', 'RemoveKeyword', 'AddType', 'RemoveType', 'RemoveCardTypes', 'Condition', 'IsPresent', 'PresentCompare', 'PresentZone',
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone', 'AddAbility',
+  // granted triggered abilities (Kaldra Compleat, Nadu): grants.ts foreignTriggers, detected by triggers.ts
+  'AddTrigger', 'ExcludeZone',
+  // "have all activated abilities of all creature cards exiled with CARDNAME" (Agatha's Soul Cauldron): grants.ts
+  'GainsAbilitiesOf', 'GainsAbilitiesOfZones',
 ]);
 const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated', 'CantGainLife', 'CastWithFlash',
   // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)
-  'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost']);
+  'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost',
+  // triggers.ts exertOffer (Exert as it attacks), extraTriggerCount (Panharmonicon: Sanctum of All)
+  'OptionalAttackCost', 'Panharmonicon',
+  // strict.ts manaConverted (Agatha's Soul Cauldron: spend mana as though any color for creatures' abilities)
+  'ManaConvert']);
 /** Modes that are listed and logged as reminders. */
 const REMINDER_MODES = new Set<string>([]);
 
@@ -505,6 +536,8 @@ export function staticGaps(s: Pick<StaticAbility, 'params' | 'svars' | 'modes'> 
       const PERM_KEYS = new Set(['MayPlay', 'MayPlayLimit', 'MayPlayWithoutManaCost', 'MayPlayIgnoreColor', 'MayPlayIgnoreType', 'MayPlayAltManaCost', 'MayPlayPlayer', 'ValidAfterStack', 'MayLookAt', 'AdjustLandPlays', 'SetMaxHandSize', 'Duration']);
       for (const k of Object.keys(p)) if (!CONT_HANDLED_KEYS.has(k) && !((permission || playerRule) && PERM_KEYS.has(k))) gaps.push(k);
       if (outside && !permission) gaps.push(`AffectedZone$ ${p.AffectedZone}`);
+      // ExcludeZone$ Battlefield on Card.Self: a characteristic outside the battlefield (outsideBattlefieldChars, rules.ts faceOf).
+      if (p.ExcludeZone && !(p.ExcludeZone === 'Battlefield' && p.Affected === 'Card.Self' && !!p.AddType)) gaps.push('ExcludeZone');
       if (p.Affected && PLAYER_AFFECTED.test(p.Affected) && !playerRule) gaps.push('player effect');
       if (p.Affected && /ChosenPlayer|ChosenCard|Remembered|ExiledWith|TopLibrary/.test(p.Affected) && !permission) gaps.push(`Affected$ ${p.Affected}`);
       if (p.AffectedDefined && !['Self', 'Equipped', 'Enchanted'].includes(p.AffectedDefined)) gaps.push(`AffectedDefined$ ${p.AffectedDefined}`);
@@ -538,6 +571,33 @@ export function parseStatic(line: string, svars: Record<string, string> = {}): P
 }
 
 // ------------------------------------------------------------------ public queries
+
+const outsideCache = new Map<string, { types: string[]; subtypes: string[]; power?: string; toughness?: string } | null>();
+
+/**
+ * "As long as CARDNAME isn't on the battlefield, it's a 1/1 Insect creature in addition to its other types" (Grist):
+ * S:Mode$ Continuous | Affected$ Card.Self | ExcludeZone$ Battlefield | AddType$ ... | SetPower$ / SetToughness$.
+ * game/rules.ts faceOf applies it to the card in every other zone.
+ */
+export function outsideBattlefieldChars(cardId: string, face: number): { types: string[]; subtypes: string[]; power?: string; toughness?: string } | undefined {
+  const key = `${cardId}|${face}`;
+  if (outsideCache.has(key)) return outsideCache.get(key) ?? undefined;
+  let out: { types: string[]; subtypes: string[]; power?: string; toughness?: string } | null = null;
+  for (const line of getScript(cardId)?.[face]?.statics ?? []) {
+    const p = parseParams(line).params;
+    if (p.Mode !== 'Continuous' || p.Affected !== 'Card.Self' || p.ExcludeZone !== 'Battlefield' || !p.AddType) continue;
+    const added = p.AddType.split('&').map((t) => t.trim()).filter(Boolean);
+    out = { types: added.filter((t) => CARD_TYPES.includes(t)), subtypes: added.filter((t) => !CARD_TYPES.includes(t)), power: p.SetPower, toughness: p.SetToughness };
+  }
+  outsideCache.set(key, out);
+  return out ?? undefined;
+}
+
+/** Condition$ / IsPresent$ / CheckSVar$ of a static line of a card not (necessarily) on the battlefield (alternative costs). */
+export function staticLineActive(st: StaticsState, line: string, svars: Record<string, string>, sourceIid: string, controller: string, lookup: Lookup): Tri {
+  const ps = parseStatic(line, svars);
+  return new Evaluator(st, lookup, true).active({ ...ps, sourceIid, controller, description: '' });
+}
 
 /** Can `pid` gain life (CantGainLife statics: Screaming Nemesis' "can't gain life for the rest of the game")? Reason or null. */
 export function lifeGainPrevented(st: StaticsState, pid: string, lookup: Lookup): string | null {
@@ -871,7 +931,7 @@ export function mayPlayPermission(st: StaticsState, iid: string, pid: string, lo
   const zoneName = c.zone.charAt(0).toUpperCase() + c.zone.slice(1);
   for (const { s, ev } of active(st, lookup, 'Continuous')) {
     const p = s.params;
-    if (p.MayPlay !== 'True') continue;
+    if (p.MayPlay !== 'True' || p.MayPlayLimit) continue; // once-per-turn permissions: permissions.ts (bestPermission) counts their uses
     if (!(p.AffectedZone ?? '').split(',').includes(zoneName)) continue;
     const who = p.MayPlayPlayer === 'CardOwner' ? c.owner : s.controller;
     if (who !== pid) continue;

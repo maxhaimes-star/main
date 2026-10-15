@@ -8,7 +8,8 @@
  */
 import type { Lookup } from '../game/rules.ts';
 import type { CardInstance } from '../game/types.ts';
-import { type ActivatedEntry, GRANT_BASE, getScript, parseAbility, scriptRef } from './script.ts';
+import { type ActivatedEntry, activatedAbilitiesOf, GRANT_BASE, getScript, parseAbility, scriptRef, parseParams } from './script.ts';
+import { matchCard } from './targets.ts';
 import { abilityGrants, type StaticsState } from './statics.ts';
 
 export const FOREIGN_BASE = 4000;
@@ -43,13 +44,45 @@ export function foreignAbilities(st: StaticsState, iid: string, lookup: Lookup):
     const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
     if (!ref || !f) continue;
     const keys = Object.keys(f.svars);
-    for (const name of s.params.AddAbility.split('&').map((x) => x.trim())) {
+    for (const name of (s.params.AddAbility ?? '').split('&').map((x) => x.trim()).filter(Boolean)) {
       const line = f.svars[name];
       const k = keys.indexOf(name);
       if (!line || k < 0 || !/^\s*AB\$/.test(line) || /^\s*AB\$\s*Mana\b/.test(line)) continue;
       const ability = parseAbility(line, f.svars, f.name);
       if (!ability) continue;
       out.push({ index: FOREIGN_BASE + out.length, ability, cost: ability.params.Cost ?? '', cardId: ref.cardId, face: ref.face, scriptIndex: GRANT_BASE + k, grantor: s.sourceIid });
+    }
+  }
+  // Activated abilities of cards exiled with Agatha's Soul Cauldron (their own A: lines, the permanent as the source).
+  for (const card of gainedFrom(st, iid, lookup, grants)) {
+    for (const e of activatedAbilitiesOf(card.cardId!, 0)) {
+      if (e.zone || e.index >= GRANT_BASE) continue;
+      out.push({ ...e, index: FOREIGN_BASE + out.length, cardId: card.cardId!, face: 0, scriptIndex: e.index, grantor: card.iid });
+    }
+  }
+  return out;
+}
+
+/**
+ * Triggered abilities other permanents grant to permanent `iid` (S:Mode$ Continuous | AddTrigger$: Kaldra Compleat's
+ * equipped creature, Nadu's creatures). `ref` is the granting card's script (the Execute$ chain's SVars); "Self" in
+ * the trigger is the permanent that has it. Indexes start at 700.
+ */
+export function foreignTriggers(st: StaticsState, iid: string, lookup: Lookup): { index: number; params: Record<string, string>; ref: { cardId: string; face: number } }[] {
+  const c = st.cards[iid] as CardInstance | undefined;
+  if (!c || c.zone !== 'battlefield') return [];
+  let grants: ReturnType<typeof abilityGrants>;
+  try { grants = abilityGrants(st, lookup); } catch { return []; }
+  const out: { index: number; params: Record<string, string>; ref: { cardId: string; face: number } }[] = [];
+  for (const { s, iids } of grants) {
+    if (!s.params.AddTrigger || !iids.includes(iid) || s.sourceIid.startsWith('effect:')) continue;
+    const src = st.cards[s.sourceIid] as CardInstance | undefined;
+    const ref = src ? scriptRef(src) : undefined;
+    const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
+    if (!ref || !f) continue;
+    for (const name of s.params.AddTrigger.split('&').map((x) => x.trim())) {
+      const line = f.svars[name];
+      if (line) out.push({ index: 700 + out.length, params: parseParams(line).params, ref });
     }
   }
   return out;
@@ -68,9 +101,35 @@ export function foreignManaLines(st: StaticsState, iid: string, lookup: Lookup):
     const ref = src ? scriptRef(src) : undefined;
     const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
     if (!f) continue;
-    for (const name of s.params.AddAbility.split('&').map((x) => x.trim())) {
+    for (const name of (s.params.AddAbility ?? '').split('&').map((x) => x.trim())) {
       const line = f.svars[name];
       if (line && /^\s*AB\$\s*Mana\b/.test(line)) out.push({ line, id: `g:${s.sourceIid}:${name}`, svars: f.svars, name: f.name });
+    }
+  }
+  // Mana abilities of creature cards exiled with Agatha's Soul Cauldron.
+  for (const card of gainedFrom(st, iid, lookup, grants)) {
+    const f = getScript(card.cardId!)?.[0];
+    f?.abilities.forEach((line, k) => { if (/^\s*AB\$\s*Mana\b/.test(line)) out.push({ line, id: `x:${card.iid}:${k}`, svars: f.svars, name: f.name }); });
+  }
+  return out;
+}
+
+/**
+ * GainsAbilitiesOf$ (Agatha's Soul Cauldron: "creatures you control with +1/+1 counters on them have all activated
+ * abilities of all creature cards exiled with CARDNAME"): the cards whose activated abilities `iid` gains.
+ */
+function gainedFrom(st: StaticsState, iid: string, lookup: Lookup, grants: ReturnType<typeof abilityGrants>): CardInstance[] {
+  const out: CardInstance[] = [];
+  const mem = (st as { remembered?: Record<string, string[]> }).remembered ?? {};
+  for (const { s, iids } of grants) {
+    if (!s.params.GainsAbilitiesOf || !iids.includes(iid) || s.sourceIid.startsWith('effect:')) continue;
+    if ((s.params.GainsAbilitiesOfZones ?? 'Exile') !== 'Exile') continue;
+    const valid = s.params.GainsAbilitiesOf.replace(/\.ExiledWithSource$|\+ExiledWithSource/, '');
+    for (const x of [...(mem[`exiled|${s.sourceIid}`] ?? []), ...(mem[s.sourceIid] ?? [])]) {
+      const card = st.cards[x] as CardInstance | undefined;
+      if (!card || card.zone !== 'exile' || !card.cardId || out.includes(card)) continue;
+      if (matchCard(card, valid, { controller: s.controller, sourceIid: s.sourceIid, lookup }) !== true) continue;
+      out.push(card);
     }
   }
   return out;

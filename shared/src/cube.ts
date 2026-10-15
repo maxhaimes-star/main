@@ -1,6 +1,12 @@
-import type { CardData, CubeData } from './cards.ts';
+import { basicLandCard, type CardData, type Color, type CubeData } from './cards.ts';
 import cubeJson from '../data/cube.json' with { type: 'json' };
-import { withBasics } from './game/reducer.ts';
+
+/** The lookup plus the five basic lands (same as game/reducer.ts withBasics; kept here so cube.ts has no engine imports). */
+function withBasics(lookup: (id: string) => CardData | undefined): (id: string) => CardData | undefined {
+  const basics: Record<string, CardData> = {};
+  for (const c of ['W', 'U', 'B', 'R', 'G'] as Color[]) { const b = basicLandCard(c); basics[b.id] = b; }
+  return (id) => basics[id] ?? lookup(id);
+}
 
 export const CUBE = cubeJson as unknown as CubeData;
 const byId = new Map<string, CardData>(CUBE.cards.map((c) => [c.id, c]));

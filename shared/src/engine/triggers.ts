@@ -15,8 +15,9 @@ import { type Ctx, log, player, randomId } from '../game/state.ts';
 import { type CardInstance, type GameEvent, type GameState, type StackItem, STEPS, type Zone } from '../game/types.ts';
 import { checkTargets } from './play.ts';
 import { answerResolveTargets, lkiOf } from './resolve.ts';
-import { chainOf, describe, getScript, isAutomatable, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
+import { chainOf, describe, getScript, isAutomatable, parseParams, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
 import { extraTriggerHosts, grantedTriggers } from './effects.ts';
+import { foreignTriggers } from './grants.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { uniqueVar } from './unique.ts';
@@ -76,7 +77,15 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
     if (ch?.api === 'Cleanup' && SUPPORTED_MODES.has(p.Mode)) return { detect: true, chain: true };
     // "Forget it" bookkeeping (Chrome Mox, Spell Queller): what is remembered is looked up live, so nothing to do.
     if (ch?.api === 'Pump' && !ch.sub && Object.keys(ch.params).every((k) => /^(Forget|Defined$|StackDescription$|SpellDescription$)/.test(k))) return { detect: true, chain: true };
+    // "If you do, it gains <trigger>" (Serra Paragon): applied to cards played with the host's permission (playGrants).
+    if (/MayPlaySource/.test(p.ValidSA ?? '') && (p.Mode === 'SpellCast' || p.Mode === 'LandPlayed') && ch?.api === 'Animate' && ch.params.Triggers && !ch.sub) return { detect: true, chain: true };
     return { detect: false, chain: false, reason: 'static' };
+  }
+  // Rooms: "When you unlock this door" is queued by the unlock special action (keyword-play.ts unlockDoor).
+  if (p.Mode === 'UnlockDoor' && p.ThisDoor === 'True') {
+    const ch = triggerChain(cardId, face, p.Execute);
+    const un = ch ? isAutomatable(ch).unsupported : ['no chain'];
+    return un.length ? { detect: true, chain: false, reason: `effect ${un[0].split(' ')[0]}` } : { detect: true, chain: true };
   }
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
   const unknown = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
@@ -139,13 +148,51 @@ function cmp(left: number, expr: string, right: (s: string) => number | undefine
   }
 }
 
+/**
+ * Serra Paragon: a card played with a permanent's MayPlay permission gains a trigger ("If you do, it gains 'When this
+ * permanent is put into a graveyard from the battlefield ...'"). The host's Static$ True SpellCast / LandPlayed trigger
+ * with ValidSA$ ...MayPlaySource names an Animate with Triggers$: remembered here, granted as the permanent enters.
+ */
+function playGrants(state: GameState, iid: string, permission: string | undefined, mode: 'SpellCast' | 'LandPlayed') {
+  const m = /^static\|([^|]+)\|\d+$/.exec(permission ?? '');
+  const host = m ? state.cards[m[1]] : undefined;
+  const ref = host ? scriptRef(host) : undefined;
+  const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
+  if (!ref || !f) return;
+  for (const t of triggersOf(ref.cardId, ref.face)) {
+    const p = t.params;
+    if (p.Static !== 'True' || p.Mode !== mode || !/MayPlaySource/.test(p.ValidSA ?? '') || !p.Execute) continue;
+    const ch = triggerChain(ref.cardId, ref.face, p.Execute);
+    if (ch?.api !== 'Animate' || !ch.params.Triggers) continue;
+    (state.remembered ??= {})[`playGrant|${iid}`] = [ref.cardId, String(ref.face), ...ch.params.Triggers.split(',').map((s) => s.trim())];
+  }
+}
+
+function applyPlayGrant(state: GameState, ctx: Ctx, iid: string, entered: boolean) {
+  const g = state.remembered?.[`playGrant|${iid}`];
+  if (!g) return;
+  delete state.remembered![`playGrant|${iid}`];
+  const c = state.cards[iid];
+  if (!entered || !c || c.zone !== 'battlefield') return;
+  const [cardId, face, ...triggers] = g;
+  (c.animations ??= []).push({ id: randomId(ctx.rng), controller: c.controller, until: 'permanent', turn: state.turn, grant: { cardId, face: parseInt(face, 10), triggers } });
+  const text = getScript(cardId)?.[parseInt(face, 10)]?.svars[triggers[0]];
+  const desc = text ? parseParams(text).params.TriggerDescription : undefined;
+  log(state, ctx, c.controller, `${cardName(c, ctx.lookup)} gains "${desc ?? 'a triggered ability'}".`);
+}
+
 /** This turn's history from the action's events: attackers, permanents that entered, permissions used, the city's blessing. */
 function trackTurnEvents(state: GameState, ctx: Ctx) {
   const evs = state.events ?? [];
   if (!evs.length) return;
   const ti = turnInfo(state);
   for (const ev of evs) {
-    if (ev.t === 'cast') notePermissionUse(state, state.cards[ev.iid]?.castInfo?.permission); // once-per-turn permissions (Lurrus)
+    if (ev.t === 'cast') {
+      notePermissionUse(state, state.cards[ev.iid]?.castInfo?.permission); // once-per-turn permissions (Lurrus)
+      playGrants(state, ev.iid, state.cards[ev.iid]?.castInfo?.permission, 'SpellCast');
+    } else if (ev.t === 'landPlayed') playGrants(state, ev.iid, state.remembered?.[`playedWith|${ev.iid}`]?.[0], 'LandPlayed');
+    if (ev.t === 'zone' && ev.from === 'stack') applyPlayGrant(state, ctx, ev.iid, ev.to === 'battlefield');
+    if (ev.t === 'landPlayed') applyPlayGrant(state, ctx, ev.iid, true);
     else if (ev.t === 'attacks') {
       ti.activations[`attacked|${ev.iid}`] = (ti.activations[`attacked|${ev.iid}`] ?? 0) + 1;
       const who = state.cards[ev.iid]?.controller;
@@ -533,10 +580,12 @@ function detect(state: GameState, ctx: Ctx) {
             found.push({ controller: c.controller, q: queueFor(state, ctx, host, -1, kt.params, hit, kt.line) });
           }
         }
-        if (!host.id && !host.effect && !c.animations) continue;
+        // Triggers other permanents grant it (Kaldra Compleat, Nadu): engine/grants.ts.
+        const foreign = host.effect || host.lki ? [] : foreignTriggers(state, c.iid, ctx.lookup);
+        if (!host.id && !host.effect && !c.animations && !foreign.length) continue;
         // The card's T: lines (a copy: the copied card's), triggers granted by animate effects, or an effect's triggers.
         const own = host.effect ? host.effect.triggers : host.id ? triggersOf(host.id, host.face) : [];
-        for (const t of [...own, ...(host.effect ? [] : grantedTriggers(c))] as { index: number; params: Record<string, string>; ref?: { cardId: string; face: number } }[]) {
+        for (const t of [...own, ...(host.effect ? [] : grantedTriggers(c)), ...foreign] as { index: number; params: Record<string, string>; ref?: { cardId: string; face: number } }[]) {
           const p = t.params;
           if (p.Static === 'True') {
             const ch = host.id ? triggerChain(host.id, host.face, p.Execute) : undefined;
@@ -581,7 +630,12 @@ function detect(state: GameState, ctx: Ctx) {
           budget--;
           if (uniqueTriggerSkip(state, ctx, t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p, hit.player)) continue;
           if (host.effect) hit.effectRemembered = [...host.effect.remembered];
-          found.push({ controller: c.controller, q: queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p), t.ref) });
+          const q = queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p), t.ref);
+          found.push({ controller: c.controller, q });
+          // Panharmonicon-style statics (Sanctum of All): the ability triggers additional times.
+          if (!host.effect) for (let k = extraTriggerCount(state, ctx, c, p); k > 0; k--) {
+            found.push({ controller: c.controller, q: { ...JSON.parse(JSON.stringify(q)) as QueuedTrigger, id: randomId(ctx.rng) } });
+          }
         }
       } catch (e) {
         log(state, ctx, null, `Trigger detection error (${hostLabel(host, ctx)}): ${(e as Error).message} — handle it by hand.`);
@@ -590,6 +644,7 @@ function detect(state: GameState, ctx: Ctx) {
     if (ev.t === 'phase') delayedFor(state, ctx, ev, found);
     else eventDelayedFor(state, ctx, ev, found);
     if (ev.t === 'drawn' && ev.nth === 1) miracle(state, ctx, ev, found);
+    if (ev.t === 'attacks') exertOffer(state, ctx, ev, found);
   }
   // APNAP: the active player's triggers go on the stack first, then the others' in turn order.
   const order = state.players.map((p) => p.pid);
@@ -606,7 +661,6 @@ function miracle(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'drawn'
   const kw = getScript(c.cardId)?.[0]?.keywords.find((k) => /^Miracle:/.test(k));
   if (!kw) return;
   const cost = kw.split(':')[1].trim();
-  if (/X/.test(cost)) return; // X miracle costs: not offered automatically
   if (state.players.find((p) => p.pid === ev.pid)?.autoTriggers === false) return;
   const { toks, unknown } = parseCostTokens(cost);
   if (unknown.length || !canPayCost(state, ctx, ev.pid, undefined, toks, 0)) return; // can't cast it: no need to reveal
@@ -615,6 +669,60 @@ function miracle(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'drawn'
   found.push({ controller: ev.pid, q: { id: randomId(ctx.rng), controller: ev.pid, sourceIid: c.iid, sourceName: name, text: `${name}: Miracle — you may cast it for its miracle cost`,
     auto: { cardId: c.cardId, face: 0, source: 'trigger', index: -1, line, targets: [], trigger: { mode: 'Drawn', card: c.iid, player: ev.pid } } } });
   log(state, ctx, ev.pid, `${player(state, ev.pid).name} reveals ${name} (miracle).`);
+}
+
+/**
+ * Exert (Glorybringer: S:Mode$ OptionalAttackCost | Cost$ Exert<1/CARDNAME> | Trigger$ X): "you may exert it as it
+ * attacks. When you do, <X>". Offered as an optional trigger; using it exerts the creature (it doesn't untap during
+ * its controller's next untap step, replacements.ts untapPrevented).
+ */
+function exertOffer(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'attacks' }>, found: Detected[]) {
+  const c = state.cards[ev.iid];
+  const ref = c ? scriptRef(c) : undefined;
+  const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
+  if (!c || !ref || !f || c.zone !== 'battlefield') return;
+  for (const line of f.statics) {
+    const p = parseParams(line).params;
+    if (p.Mode !== 'OptionalAttackCost' || p.ValidCard !== 'Card.Self' || !/^Exert<1\/(CARDNAME|Self|NICKNAME)>$/.test(p.Cost ?? '') || !p.Trigger || !f.svars[p.Trigger]) continue;
+    const name = cardName(c, ctx.lookup);
+    const desc = (p.Description ?? 'You may exert it as it attacks.').replace(/CARDNAME/g, name);
+    found.push({ controller: c.controller, q: {
+      id: randomId(ctx.rng), controller: c.controller, sourceIid: c.iid, sourceName: name, text: `${name}: ${desc}`, optional: true, exert: c.iid,
+      auto: { cardId: ref.cardId, face: ref.face, source: 'trigger', index: -1, svar: p.Trigger, targets: [], trigger: { mode: 'Attacks', card: c.iid, player: c.controller, defender: ev.defender } },
+    } });
+  }
+}
+
+/** Panharmonicon statics (S:Mode$ Panharmonicon | ValidCard$ | IsPresent$ | PresentCompare$): how many extra times a trigger of `c` triggers. */
+export function extraTriggerCount(state: GameState, ctx: Ctx, c: CardInstance, p: Record<string, string>): number {
+  if (c.zone !== 'battlefield') return 0;
+  let n = 0;
+  for (const iid of state.battlefield) {
+    const src = state.cards[iid];
+    if (!src || src.faceDown || src.controller !== c.controller) continue;
+    const f = scriptRef(src) ? getScript(scriptRef(src)!.cardId)?.[scriptRef(src)!.face] : undefined;
+    for (const line of f?.statics ?? []) {
+      const sp = parseParams(line).params;
+      if (sp.Mode !== 'Panharmonicon' || Object.keys(sp).some((k) => !['Mode', 'ValidCard', 'IsPresent', 'PresentCompare', 'Description', 'ValidMode'].includes(k))) continue;
+      if (sp.ValidMode && !sp.ValidMode.split(',').includes(p.Mode)) continue;
+      const env: MatchEnv = { controller: src.controller, sourceIid: src.iid, lookup: ctx.lookup };
+      if (sp.ValidCard && matchCard(c, sp.ValidCard, env) !== true) continue;
+      if (sp.IsPresent) {
+        const have = state.battlefield.filter((x) => matchCard(state.cards[x], sp.IsPresent, env) === true).length;
+        if (cmp(have, sp.PresentCompare ?? 'GE1', () => undefined) !== true) continue;
+      }
+      n++;
+    }
+  }
+  return n;
+}
+
+/** Mark a creature exerted: it doesn't untap during its controller's next untap step. */
+export function exert(state: GameState, ctx: Ctx, iid: string) {
+  const c = state.cards[iid];
+  if (!c || c.zone !== 'battlefield') return;
+  (state.remembered ??= {})[`exerted|${iid}`] = [String(state.turn)];
+  log(state, ctx, c.controller, `${player(state, c.controller).name} exerts ${cardName(c, ctx.lookup)} (it won't untap during their next untap step).`);
 }
 
 /** Event-based delayed triggers ("when you cast your next instant or sorcery spell this turn", "when CARDNAME leaves the battlefield"). */
@@ -675,6 +783,7 @@ function targetName(state: GameState, ctx: Ctx, ref: TargetRef): string {
 }
 
 function push(state: GameState, ctx: Ctx, t: QueuedTrigger) {
+  if (t.exert) exert(state, ctx, t.exert);
   const item: StackItem = { id: randomId(ctx.rng), kind: 'trigger', controller: t.controller, text: t.text };
   if (t.sourceIid) item.sourceIid = t.sourceIid;
   if (!t.manual) item.auto = t.auto;

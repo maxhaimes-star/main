@@ -1,3 +1,5 @@
+import { anyColorCost } from './permissions.ts';
+import { keptAbility } from './copy.ts';
 /**
  * Strict rules enforcement (GameState.strict, on for new games): MTG Arena-style play.
  *
@@ -22,8 +24,9 @@ import { isHidden } from '../game/types.ts';
 import { castOptions } from './costs.ts';
 import { activateMana, manaPlansFor } from './mana.ts';
 import { stateBasedActions } from './resolve.ts';
-import { abilityAt, abilityLine, scriptRef } from './script.ts';
-import { activateRestriction, adjustCost, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
+import { abilityAt, abilityLine, getScript, scriptRef } from './script.ts';
+import { noteTapped } from './manatriggers.ts';
+import { activateRestriction, adjustCost, manaConvertApplies, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
 import { activationError, castTimingError } from './timing.ts';
 
 type AnyState = GameState | GameView;
@@ -94,31 +97,106 @@ export function manaSources(state: AnyState, pid: string, lookup: Lookup = getCa
     const f = faceOf(c, lookup);
     const base = f.types.includes('Land') ? 0 : isCreature(c, lookup, state as StaticsState) ? 3 : 1;
     const options = plans.filter((o) => {
-      if (!o.produces || o.byHand.length || o.discardHand || o.mana) return false;
+      if (!o.produces || o.byHand.length || o.discardHand || o.mana || o.tapOther) return false;
       if (o.sideEffects.some((s) => /^Spend only/.test(s))) return false;
       if (o.tap) return !c.tapped && !sick;
       return o.sacSelf; // untapped-free abilities must at least use the source up
     }).map((o) => ({ id: o.id, produces: o.produces, penalty: base + (o.life + o.selfDamage) * 5 + (o.sacSelf ? 40 : 0) }));
-    if (options.length) out.push({ key: iid, options });
+    const mine = out.find((s) => s.key === iid);
+    if (mine) mine.options.unshift(...options); else if (options.length) out.push({ key: iid, options });
+    // "Tap an untapped artifact you control: add {U}" (Urza): each such permanent is a source of its own.
+    for (const o of plans) {
+      if (!o.tapOther || !o.produces || o.byHand.length || o.mana || o.life || (o.tap && (c.tapped || sick)) || exclude.has(o.tapOther)) continue;
+      const opt = { id: `via:${iid}:${o.id}`, produces: o.produces, penalty: 2 };
+      const have = out.find((s) => s.key === o.tapOther);
+      if (have) have.options.push(opt); else out.push({ key: o.tapOther, options: [opt] });
+    }
   }
   return out;
 }
 
-/** Plan paying `cost` (pool first, then untapped sources). null = can't be paid. */
-export function planAutoPay(state: AnyState, pid: string, cost: string, x: number, lookup: Lookup = getCard, exclude: Set<string> = new Set()): PayResult | null {
+/**
+ * Permanents that may be tapped to help pay generic mana: Improvise (artifacts), Convoke (creatures), Waterbend
+ * (artifacts and creatures, up to the waterbend amount). Each tapped one pays for {1}.
+ */
+export interface PayHelp { artifacts?: boolean; creatures?: boolean; max?: number; label: string }
+
+/** Improvise / Convoke on the card being cast (script K: lines). */
+export function castHelp(c: CardInstance, face?: number): PayHelp | undefined {
+  const ref = c.cardId ? { cardId: c.cardId, face: face ?? 0 } : undefined;
+  const kws = ref ? getScript(ref.cardId)?.[ref.face]?.keywords ?? [] : [];
+  const improvise = kws.includes('Improvise'), convoke = kws.includes('Convoke');
+  if (!improvise && !convoke) return undefined;
+  return { artifacts: improvise, creatures: convoke, label: improvise && convoke ? 'improvise / convoke' : improvise ? 'improvise' : 'convoke' };
+}
+
+/** Waterbend<N> in an ability cost: N generic mana that untapped artifacts / creatures may help pay. */
+export function waterbendOf(cost: string): number {
+  let n = 0;
+  for (const m of cost.matchAll(/\bWaterbend<(\d+)>/g)) n += parseInt(m[1], 10);
+  return n;
+}
+
+const HELP_OPTION = 'help';
+
+function helpSources(state: AnyState, pid: string, help: PayHelp, lookup: Lookup, exclude: Set<string>, sources: PaySource[]): PaySource[] {
+  const byKey = new Map(sources.map((s) => [s.key, s]));
+  const out = sources.map((s) => ({ ...s, options: [...s.options] }));
+  const outByKey = new Map(out.map((s) => [s.key, s]));
+  for (const iid of state.battlefield) {
+    if (exclude.has(iid)) continue;
+    const c = visibleCard(state, iid);
+    if (!c || c.controller !== pid || c.tapped) continue;
+    const creature = isCreature(c, lookup, state as StaticsState);
+    const artifact = faceOf(c, lookup).types.includes('Artifact');
+    if (!((help.artifacts && artifact) || (help.creatures && creature))) continue;
+    const opt = { id: HELP_OPTION, produces: '*', penalty: creature ? 4 : 2 };
+    if (byKey.has(iid)) outByKey.get(iid)!.options.push(opt);
+    else out.push({ key: iid, options: [opt] });
+  }
+  return out;
+}
+
+/** Plan paying `cost` (pool first, then untapped sources; `help`: Improvise / Convoke / Waterbend). null = can't be paid. */
+export function planAutoPay(state: AnyState, pid: string, cost: string, x: number, lookup: Lookup = getCard, exclude: Set<string> = new Set(), help?: PayHelp): PayResult | null {
   const p = state.players.find((q) => q.pid === pid);
   if (!p) return null;
   if (!parseManaSymbols(cost).length) return { picks: [], lifePaid: 0, spent: [] };
-  return solveMana(cost, x, [...poolSources(p.manaPool), ...manaSources(state, pid, lookup, exclude)], p.life);
+  let sources = [...poolSources(p.manaPool), ...manaSources(state, pid, lookup, exclude)];
+  if (help && (help.max ?? 1) > 0) sources = helpSources(state, pid, help, lookup, exclude, sources);
+  return solveMana(cost, x, sources, p.life, help?.max ?? Infinity);
 }
 
-/** Activate the mana abilities a plan picked (mana goes to the pool; the caller then pays from the pool). */
-export function executeAutoPay(state: GameState, ctx: Ctx, pid: string, plan: PayResult) {
+/**
+ * Activate the mana abilities a plan picked (mana goes to the pool; the caller then pays from the pool).
+ * Permanents tapped to help (Improvise / Convoke / Waterbend) are tapped here: returns how many generic mana they paid,
+ * which the caller removes from the cost before paying the rest from the pool (reduceGeneric).
+ */
+export function executeAutoPay(state: GameState, ctx: Ctx, pid: string, plan: PayResult, help?: PayHelp): number {
+  let helped = 0;
+  const names: string[] = [];
   for (const pk of plan.picks) {
     if (pk.pool) continue;
-    const err = activateMana(state, ctx, pid, { t: 'activateMana', iid: pk.key, option: pk.option });
+    if (pk.option === HELP_OPTION) {
+      const c = state.cards[pk.key];
+      if (!c || c.tapped || c.zone !== 'battlefield') continue;
+      c.tapped = true;
+      noteTapped(state, c.iid, pid);
+      names.push(cardName(c, ctx.lookup));
+      helped++;
+      continue;
+    }
+    const via = /^via:([^:]+):(.+)$/.exec(pk.option); // a mana ability of another permanent that taps this one (Urza)
+    const err = via ? activateMana(state, ctx, pid, { t: 'activateMana', iid: via[1], option: via[2] }) : activateMana(state, ctx, pid, { t: 'activateMana', iid: pk.key, option: pk.option });
     if (err) log(state, ctx, pid, `Auto-pay: ${err}`);
   }
+  if (helped) log(state, ctx, pid, `${player(state, pid).name} taps ${names.join(', ')} (${help?.label ?? 'help'}: pays {${helped}}).`);
+  return helped;
+}
+
+/** Remove up to `n` generic mana from a cost (X counts as generic = x). */
+export function reduceGeneric(mana: string, n: number, x: number): string {
+  return n > 0 ? reduceGenericBy(mana, n, x) : mana;
 }
 
 /** Tap sources for `cost` if the pool doesn't cover it. Returns false if it can't be paid. */
@@ -183,7 +261,7 @@ export function autoPayPreview(state: AnyState, pid: string, iid: string, face?:
   const free = c.zone !== 'hand' ? mayPlayPermission(state as StaticsState, iid, pid, lookup, asGame(state).remembered)?.free : false;
   const delve = opt.extra.some((e) => /^Delve/.test(e));
   const cost = free ? '' : castManaCost(state, pid, c, face, opt.cost, { delve, x: x ?? 0 }, lookup);
-  const plan = planAutoPay(state, pid, cost, x ?? 0, lookup);
+  const plan = planAutoPay(state, pid, cost, x ?? 0, lookup, undefined, castHelp(c, face));
   if (!plan) return { ok: false, taps: [], reason: 'Not enough mana', cost };
   return { ok: true, taps: plan.picks.filter((p) => !p.pool).map((p) => ({ iid: p.key, mana: p.produces })), cost, ...(plan.lifePaid ? { life: plan.lifePaid } : {}) };
 }
@@ -251,6 +329,7 @@ function abilityCost(cost: string, x: number): AbilityCost {
   for (const tok of cost.match(/\S+<[^>]*>|\S+/g) ?? []) {
     let m: RegExpExecArray | null;
     if (/^(\d+|[WUBRGCSX]|[WUBRG2]\/[WUBRGP])$/.test(tok)) out.mana += `{${tok === 'X' ? x : tok}}`;
+    else if ((m = /^Waterbend<(\d+)>$/.exec(tok))) out.mana += `{${m[1]}}`;
     else if (tok === 'T') out.tap = true;
     else if (tok === 'Q') out.untap = true;
     else if ((m = /^SubCounter<(\d+|X)\/([A-Za-z0-9]+)>$/.exec(tok))) {
@@ -270,9 +349,11 @@ export function abilityPayment(state: AnyState, pid: string, c: CardInstance, co
   const name = cardName(c, lookup);
   if ((parsed.tap || parsed.untap) && c.zone === 'battlefield' && summoningSick(state, c, lookup)) return { error: `${name} has summoning sickness` };
   if (!parsed.mana) return { plan: null, mana: '' };
-  const mana = adjustCost(state as StaticsState, c, pid, parsed.mana, 'Ability', lookup).cost;
+  let mana = adjustCost(state as StaticsState, c, pid, parsed.mana, 'Ability', lookup).cost;
+  if (manaConvertApplies(state as StaticsState, c.iid, pid, lookup)) mana = anyColorCost(mana); // Agatha's Soul Cauldron
   const exclude = new Set(parsed.tap || /\bSac<1\/(CARDNAME|Self|NICKNAME)>/.test(cost) ? [c.iid] : []);
-  const plan = planAutoPay(state, pid, mana, x, lookup, exclude);
+  const wb = waterbendOf(cost);
+  const plan = planAutoPay(state, pid, mana, x, lookup, exclude, wb ? { artifacts: true, creatures: true, max: wb, label: 'waterbend' } : undefined);
   if (!plan) return { error: 'Not enough mana' };
   return { plan, mana };
 }
@@ -285,10 +366,12 @@ export function abilityUsability(state: AnyState, pid: string, iid: string, abil
   if (pe) return { ok: false, reason: pe };
   if (c.zone === 'battlefield' ? c.controller !== pid : c.owner !== pid) return { ok: false, reason: "You don't control that card" };
   const foreign = abilityIndex >= FOREIGN_BASE ? foreignAbility(state as StaticsState, iid, abilityIndex, lookup) : undefined; // engine/grants.ts
-  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
+  const kept = keptAbility(c, abilityIndex); // Thespian's Stage
+  const ref = foreign ? { cardId: foreign.cardId, face: foreign.face } : kept ? { cardId: kept.cardId, face: kept.face } : c.zone === 'battlefield' ? scriptRef(c) : c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
   if (!ref) return { ok: false, reason: 'That card has no abilities' };
-  const line = abilityLine(ref.cardId, ref.face, foreign ? foreign.scriptIndex : abilityIndex);
-  const ab = abilityAt(ref.cardId, ref.face, foreign ? foreign.scriptIndex : abilityIndex);
+  const sIndex = foreign ? foreign.scriptIndex : kept ? kept.index : abilityIndex;
+  const line = abilityLine(ref.cardId, ref.face, sIndex);
+  const ab = abilityAt(ref.cardId, ref.face, sIndex);
   if (!line || !ab) return { ok: false, reason: 'No such ability' };
   const name = cardName(c, lookup);
   const banned = activateRestriction(state as StaticsState, iid, pid, lookup);
@@ -447,7 +530,13 @@ export function checkStateBased(state: GameState, ctx: Ctx) {
       const f = faceOf(c, ctx.lookup);
       const to = c.attachedTo;
       const targetOk = !!to && (state.cards[to]?.zone === 'battlefield' || state.players.some((p) => p.pid === to && !p.conceded));
-      if (/\bAura\b/.test(f.typeLine) && !targetOk && !isCreature(c, ctx.lookup, state)) {
+      if (c.castInfo?.bestowed && (!targetOk || (to && state.cards[to] && !isCreature(state.cards[to], ctx.lookup, state)))) {
+        // Bestow: an unattached bestowed Aura becomes a creature again (702.103f).
+        delete c.castInfo.bestowed;
+        c.attachedTo = undefined;
+        log(state, ctx, null, `${cardName(c, ctx.lookup)} is no longer attached — it's a creature again (bestow).`);
+        changed = true;
+      } else if (/\bAura\b/.test(f.typeLine) && !targetOk && !isCreature(c, ctx.lookup, state)) {
         moveCard(state, ctx, iid, 'graveyard');
         log(state, ctx, null, `${f.name} is put into its owner's graveyard (not attached to a legal object).`);
         changed = true;

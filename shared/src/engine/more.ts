@@ -867,9 +867,24 @@ function askPlay(state: GameState, ctx: Ctx, d: MData): boolean {
     log(state, ctx, d.pid, `${pname(state, d.pid)} can't pay to cast ${nm(state, ctx, iid)} (${d.source}).`);
     return askPlay(state, ctx, { ...d, queue: queue.slice(1) });
   }
+  // An X in the cost (Entreat the Angels' miracle cost {X}{W}{W}): choose X among the payable values.
+  const xs = cost && /(^|\s)X(\s|$)/.test(cost) ? payableXs(state, ctx, d.pid, cost) : null;
+  if (xs) {
+    ask(state, ctx, d.pid, `${d.source}: cast ${nm(state, ctx, iid)} by paying ${cost}? Choose X`,
+      [...xs.map((x) => ({ value: `x:${x}`, label: `Cast ${nm(state, ctx, iid)} with X=${x}` })), { value: 'no', label: "Don't" }], { ...d, queue });
+    return true;
+  }
   ask(state, ctx, d.pid, `${d.source}: cast ${nm(state, ctx, iid)}${cost ? ` by paying ${cost}` : ' without paying its mana cost'}?`,
     [{ value: 'yes', label: `Cast ${nm(state, ctx, iid)}` }, { value: 'no', label: "Don't" }], { ...d, queue });
   return true;
+}
+
+/** The values of X `pid` can pay a Forge cost with (highest first). */
+function payableXs(state: GameState, ctx: Ctx, pid: string, cost: string): number[] {
+  const { toks } = parseCostTokens(cost);
+  const out: number[] = [];
+  for (let x = 0; x <= 30 && canPayCost(state, ctx, pid, undefined, toks, x); x++) out.unshift(x);
+  return out;
 }
 
 /** '' = free; a Forge cost text; null = can't be paid. */
@@ -887,7 +902,7 @@ function playCost(state: GameState, ctx: Ctx, d: MData, iid: string): string | n
  * (data.m 'castTargets'), then the spell goes on the stack and the resolution continues with `cont`.
  * Returns true when a question was asked.
  */
-export function castDuringResolution(state: GameState, ctx: Ctx, pid: string, iid: string, via: string, cont: AutoCont | undefined, extra: { cost?: string; after?: MData } = {}): boolean {
+export function castDuringResolution(state: GameState, ctx: Ctx, pid: string, iid: string, via: string, cont: AutoCont | undefined, extra: { cost?: string; after?: MData; x?: number } = {}): boolean {
   const c = state.cards[iid];
   if (!c) { if (cont) resumeAuto(state, ctx, cont); return !!cont; }
   if (faceOf(c, ctx.lookup).types.includes('Land')) {
@@ -898,7 +913,7 @@ export function castDuringResolution(state: GameState, ctx: Ctx, pid: string, ii
     return !!cont;
   }
   const sp = c.cardId ? spellAbility(c.cardId, 0) : undefined;
-  const d: MData = { kind: 'more', m: 'castTargets', cont: cont ?? (null as unknown as AutoCont), pid, iid, via, modes: undefined, cost: extra.cost ?? '', ...(extra.after ? { after: extra.after } : {}) };
+  const d: MData = { kind: 'more', m: 'castTargets', cont: cont ?? (null as unknown as AutoCont), pid, iid, via, modes: undefined, cost: extra.cost ?? '', ...(extra.after ? { after: extra.after } : {}), ...(extra.x != null ? { x: extra.x } : {}) };
   if (sp?.ability.api === 'Charm' && sp.ability.choices?.length) {
     const ab = sp.ability;
     ask(state, ctx, pid, `${via}: ${cardName(c, ctx.lookup)} — choose ${ab.charmMax === 1 ? 'a mode' : 'the modes'}`,
@@ -944,8 +959,9 @@ function finishCast(state: GameState, ctx: Ctx, d: MData, targets: TargetRef[][]
   if (cost) {
     const mv = c.cardId ? ctx.lookup(c.cardId)?.cmc ?? 0 : 0;
     const { toks } = parseCostTokens(cost.replace(/ConvertedManaCost/g, String(mv)));
-    payCostNow(state, ctx, pid, undefined, toks, 0);
+    payCostNow(state, ctx, pid, undefined, toks, typeof d.x === 'number' ? d.x : 0);
   }
+  const x = typeof d.x === 'number' ? d.x : undefined;
   const from = c.zone;
   c.faceDown = false;
   detach(state, c);
@@ -954,21 +970,23 @@ function finishCast(state: GameState, ctx: Ctx, d: MData, targets: TargetRef[][]
   c.revealedTo = [];
   c.castAs = undefined;
   c.transformed = false;
-  c.castInfo = { option: 'free', ...(from !== 'hand' ? { from } : {}) };
+  c.castInfo = { option: 'free', ...(from !== 'hand' ? { from } : {}), ...(x != null ? { x } : {}) };
   const name = cardName(c, ctx.lookup);
-  const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid: c.iid, controller: pid, text: name, castInfo: { ...c.castInfo } };
+  const item: StackItem = { id: randomId(ctx.rng), kind: 'spell', iid: c.iid, controller: pid, text: name, castInfo: { ...c.castInfo }, ...(x != null ? { x } : {}) };
   const sp = c.cardId ? spellAbility(c.cardId, 0) : undefined;
   if (sp) {
-    item.auto = { cardId: c.cardId!, face: 0, source: 'spell', index: sp.index, targets, targetZones, costOption: 'free' };
+    item.auto = { cardId: c.cardId!, face: 0, source: 'spell', index: sp.index, targets, targetZones, costOption: 'free', ...(x != null ? { x } : {}) };
     const modes = d.modes as string[] | undefined;
     if (modes) item.auto.modes = modes;
   }
   state.stack.push(item);
   const st = turnStats(state);
   st.cast[pid] = (st.cast[pid] ?? 0) + 1;
+  const gs = (state.gameStats ??= { cast: {} });
+  gs.cast[pid] = (gs.cast[pid] ?? 0) + 1;
   emit(state, { t: 'cast', iid: c.iid, pid, nth: st.cast[pid] });
   const tn = targets.flat().map((t) => (t.kind === 'player' ? pname(state, t.pid) : t.kind === 'card' ? nm(state, ctx, t.iid) : 'a spell'));
-  log(state, ctx, pid, `${pname(state, pid)} casts ${name}${cost ? '' : ' without paying its mana cost'} (${d.via})${tn.length ? ` targeting ${tn.join(', ')}` : ''}.`);
+  log(state, ctx, pid, `${pname(state, pid)} casts ${name}${x != null ? ` (X=${x})` : ''}${cost ? '' : ' without paying its mana cost'} (${d.via})${tn.length ? ` targeting ${tn.join(', ')}` : ''}.`);
   continueAfterCast(state, ctx, d);
 }
 
@@ -1111,10 +1129,11 @@ export function answerMorePending(state: GameState, ctx: Ctx, pend: Pending, val
     }
     case 'play': {
       const [iid, ...rest] = d.queue as string[];
-      if (value === 'yes' && iid) {
+      const xm = /^x:(\d+)$/.exec(value);
+      if ((value === 'yes' || xm) && iid) {
         const cost = playCost(state, ctx, d, iid);
         // The remaining cards (if any) are offered after this one is on the stack.
-        castDuringResolution(state, ctx, d.pid, iid, d.source as string, d.cont, { cost: cost && d.cost ? (d.cost as string) : '', after: rest.length ? { ...d, queue: rest } : undefined });
+        castDuringResolution(state, ctx, d.pid, iid, d.source as string, d.cont, { cost: cost && d.cost ? (d.cost as string) : '', after: rest.length ? { ...d, queue: rest } : undefined, ...(xm ? { x: parseInt(xm[1], 10) } : {}) });
         return null;
       }
       if (iid) log(state, ctx, d.pid, `${who} doesn't cast ${nm(state, ctx, iid)} (${d.source}).`);

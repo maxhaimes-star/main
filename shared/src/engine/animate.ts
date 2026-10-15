@@ -1,3 +1,4 @@
+import { keptAbilities } from './copy.ts';
 /**
  * Forge "Animate" / "AnimateAll": "becomes a 3/3 red and green Elemental creature until end of turn" (creature lands,
  * Life // Death, Kytheon, Oko, Figure of Destiny, Koth ...).
@@ -141,7 +142,7 @@ export function grantedAbilities(c: Pick<CardInstance, 'cardId' | 'copyOf' | 'co
  */
 export function abilitiesOfInstance(c: CardInstance, state?: StaticsState, lookup?: Lookup): ActivatedEntry[] {
   const ref = scriptRef(c);
-  return [...(ref ? activatedAbilitiesOf(ref.cardId, ref.face) : []), ...grantedAbilities(c), ...(state && lookup ? foreignAbilities(state, c.iid, lookup) : [])];
+  return [...(ref ? activatedAbilitiesOf(ref.cardId, ref.face) : []), ...keptAbilities(c), ...grantedAbilities(c), ...(state && lookup ? foreignAbilities(state, c.iid, lookup) : [])];
 }
 
 /** Is ability index `index` (>= GRANT_BASE) currently granted to `c`? */

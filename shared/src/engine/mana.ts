@@ -20,7 +20,8 @@ import { parseAbility, scriptFaceOf } from './script.ts';
 import { activateRestriction, staticMods, type StaticsState } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 import { chapterManaLines } from './turns.ts';
-import { manaTapped } from './manatriggers.ts';
+import { manaTapped, noteTapped } from './manatriggers.ts';
+import { matchCard } from './targets.ts';
 
 const BASIC: Record<string, string> = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' };
 const ANY = ['W', 'U', 'B', 'R', 'G'];
@@ -35,6 +36,8 @@ export interface Planned extends ManaOption {
   discardHand: boolean;
   selfDamage: number;
   byHand: string[];
+  /** tapXType<1/valid> (Urza, Lord High Artificer: "tap an untapped artifact you control"): the permanent tapped. */
+  tapOther?: string;
 }
 
 function sym(s: string) {
@@ -71,7 +74,10 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
       sideEffects: [], tap: tokens.includes('T'), mana: cost.mana, life: 0, sacSelf: false, discardHand: false, selfDamage: 0, byHand: [],
     };
     if (cost.mana) base.sideEffects.push(`Pay ${cost.mana}`);
+    let tapType: string | undefined;
     for (const part of cost.parts) {
+      const tm = /^tapXType<1\/([^>]+)> \(by hand\)$/.exec(part.text);
+      if (tm) { tapType = tm[1]; continue; }
       if (part.kind === 'life') { base.life += parseInt(part.n, 10) || 0; base.sideEffects.push(part.text); }
       else if (part.kind === 'sacSelf') { base.sacSelf = true; base.sideEffects.push(part.text); }
       else if (part.kind === 'discardHand') { base.discardHand = true; base.sideEffects.push(part.text); }
@@ -90,9 +96,16 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
     else if (/^Combo /.test(produced)) choices = produced.slice(6).split(/\s+/).filter((x) => /^[WUBRGC]$/.test(x));
     else if (/^[WUBRGC]( [WUBRGC])*$/.test(produced)) choices = [produced.replace(/ /g, '')];
     else return;
-    for (const ch of choices) {
-      const produces = ch.repeat(n);
-      out.push({ ...base, sideEffects: [...base.sideEffects], id: choices.length > 1 ? `${index}:${ch}` : String(index), label: produces ? `Add ${sym(produces)}${ch.length === 1 && choices.length > 1 ? ` (${NAMES[ch]})` : ''}` : 'Add nothing', produces });
+    // "Tap an untapped artifact you control": one option per permanent that can be tapped (id "<index>@<iid>").
+    const others: (string | undefined)[] = tapType ? untappedOfType(state, c, tapType, lookup) : [undefined];
+    for (const other of others) {
+      const oc = other ? state.cards[other] as CardInstance : undefined;
+      for (const ch of choices) {
+        const produces = ch.repeat(n);
+        const id = `${choices.length > 1 ? `${index}:${ch}` : String(index)}${other ? `@${other}` : ''}`;
+        const extra = oc ? [`Tap ${cardName(oc, lookup)}`] : [];
+        out.push({ ...base, sideEffects: [...extra, ...base.sideEffects], id, label: `${produces ? `Add ${sym(produces)}${ch.length === 1 && choices.length > 1 ? ` (${NAMES[ch]})` : ''}` : 'Add nothing'}${oc ? ` (tap ${cardName(oc, lookup)})` : ''}`, produces, ...(other ? { tapOther: other } : {}) });
+      }
     }
   });
   if (!scripted) {
@@ -106,6 +119,16 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
     }
   }
   return out;
+}
+
+/** Untapped permanents matching `valid` that `c`'s controller controls (tapXType costs). */
+function untappedOfType(state: CountState, c: CardInstance, valid: string, lookup: Lookup): string[] {
+  if (!('battlefield' in state)) return [];
+  return state.battlefield.filter((iid) => {
+    const o = state.cards[iid];
+    if (!o || isHidden(o) || o.controller !== c.controller || o.tapped) return false;
+    return matchCard(o, valid.replace(/;/g, ','), { controller: c.controller, sourceIid: c.iid, lookup }) === true;
+  });
 }
 
 /** Mana options of a permanent (empty = no scripted / basic-type mana ability: fall back to manual tapping). */
@@ -141,6 +164,12 @@ export function activateMana(state: GameState, ctx: Ctx, pid: string, a: Extract
     if (!paid) return `${name}: add ${opt.mana} to your mana pool first`;
     me.manaPool = paid.pool;
     if (paid.lifePaid) me.life -= paid.lifePaid;
+  }
+  if (opt.tapOther) {
+    const o = state.cards[opt.tapOther];
+    if (!o || o.zone !== 'battlefield' || o.tapped) return `${name}: that permanent can't be tapped`;
+    o.tapped = true;
+    noteTapped(state, o.iid, pid);
   }
   if (opt.tap) c.tapped = true;
   if (opt.life) me.life -= opt.life;

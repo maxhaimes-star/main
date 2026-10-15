@@ -17,7 +17,7 @@
 import { type ForgeFace, SYNTH_BASE } from './types.ts';
 
 /** Effect APIs that only synthesized keyword abilities use (executed by keyword-play.ts). */
-export const KEYWORD_APIS = new Set(['Unattach', 'Crew', 'Ninjutsu', '_Foretell']);
+export const KEYWORD_APIS = new Set(['Unattach', 'Crew', 'Ninjutsu', '_Foretell', '_Unlock']);
 
 export interface SynthAbility {
   index: number;

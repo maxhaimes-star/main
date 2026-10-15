@@ -3,6 +3,7 @@
  * and "can the engine run this" checks.
  */
 import data from '../../data/scripts.json' with { type: 'json' };
+import { getCard } from '../cube.ts';
 import { KNOWN_CONDITIONS, supportedCount } from './counts.ts';
 import { type Animation, type AutoInfo, type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
 import { KEYWORD_APIS, synthAbilities, synthLine } from './keywords.ts';
@@ -19,7 +20,59 @@ export function unlessCostSupported(cost: string): boolean {
 export const SCRIPTS = data as unknown as ScriptData;
 
 export function getScript(cardId: string): ForgeFace[] | undefined {
-  return SCRIPTS.cards[cardId];
+  const s = SCRIPTS.cards[cardId];
+  if (s || !cardId.endsWith(ROOM_SUFFIX)) return s;
+  return roomScript(cardId.slice(0, -ROOM_SUFFIX.length));
+}
+
+// ------------------------------------------------------------------ Rooms
+
+/**
+ * Rooms (split enchantments with two doors): on the battlefield a Room uses the virtual script "<id>#doors", whose face
+ * index is the set of unlocked doors as a bit mask (1 = left door, 2 = right door). That face has the unlocked doors'
+ * abilities, triggers and statics, plus an "Unlock <door>" special action (AB$ _Unlock, keyword-play.ts) for each locked
+ * door. CardInstance.unlocked lists the unlocked doors.
+ */
+export const ROOM_SUFFIX = '#doors';
+const roomCache = new Map<string, ForgeFace[] | null>();
+
+function forgeCost(mana: string): string {
+  return (mana.match(/\{([^}]+)\}/g) ?? []).map((m) => m.slice(1, -1).replace('/', '')).join(' ') || '0';
+}
+
+function roomScript(base: string): ForgeFace[] | undefined {
+  if (roomCache.has(base)) return roomCache.get(base) ?? undefined;
+  const faces = SCRIPTS.cards[base];
+  const data = getCard(base);
+  let out: ForgeFace[] | null = null;
+  if (faces && faces.length >= 2 && data?.faces && data.faces.length >= 2) {
+    out = [0, 1, 2, 3].map((mask) => {
+      const open = [0, 1].filter((d) => mask & (1 << d));
+      const f: ForgeFace = { name: open.length ? open.map((d) => faces[d].name).join(' // ') : data.name, abilities: [], triggers: [], statics: [], replacements: [], keywords: [], svars: {} };
+      for (const d of open) {
+        const src = faces[d];
+        f.abilities.push(...src.abilities);
+        f.triggers.push(...src.triggers.filter((t) => !/Mode\$\s*UnlockDoor\b/.test(t)));
+        f.statics.push(...src.statics);
+        f.replacements.push(...src.replacements);
+        f.keywords.push(...src.keywords);
+        Object.assign(f.svars, src.svars);
+      }
+      for (const d of [0, 1]) {
+        if (open.includes(d)) continue;
+        f.abilities.push(`AB$ _Unlock | Cost$ ${forgeCost(data.faces![d].manaCost)} | Door$ ${d} | SorcerySpeed$ True | SpellDescription$ Unlock ${faces[d].name} (${data.faces![d].manaCost}, as a sorcery)`);
+      }
+      return f;
+    });
+  }
+  roomCache.set(base, out);
+  return out ?? undefined;
+}
+
+/** Is this card a Room? */
+export function isRoomCard(cardId: string | undefined): boolean {
+  const d = cardId ? getCard(cardId) : undefined;
+  return !!d && d.layout === 'split' && /\bRoom\b/.test(d.typeLine) && (SCRIPTS.cards[cardId!]?.length ?? 0) >= 2;
 }
 
 /**
@@ -32,7 +85,7 @@ export function registerScripts(cards: Record<string, ForgeFace[]>, tokens?: Rec
 }
 
 /** The parts of a CardInstance that decide which script it uses. */
-type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[] };
+type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[]; unlocked?: number[] };
 
 /**
  * The script (card id + face) an instance uses: a copy (copyOf, on the battlefield) uses the copied card's script, a
@@ -41,6 +94,7 @@ type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; trans
 export function scriptRef(c: ScriptHolder): { cardId: string; face: number } | undefined {
   if (c.animations?.some((a) => a.removeAllAbilities)) return undefined;
   if (c.copyOf && (c.zone === undefined || c.zone === 'battlefield')) return { cardId: c.copyOf, face: c.copyFace ?? 0 };
+  if (c.unlocked && c.cardId && (c.zone === undefined || c.zone === 'battlefield')) return { cardId: `${c.cardId}${ROOM_SUFFIX}`, face: c.unlocked.reduce((m, d) => m | (1 << d), 0) };
   return c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
 }
 
@@ -131,6 +185,7 @@ export function abilityLine(cardId: string, face: number, index: number): string
   const f = getScript(cardId)?.[face];
   if (!f) return undefined;
   if (index === -1) return auraLine(f);
+  if (index === BESTOW_INDEX) return bestowLine(f);
   if (index >= GRANT_BASE) { const sv = f.svars[Object.keys(f.svars)[index - GRANT_BASE] ?? '']; return sv && /^\s*AB\$/.test(sv) ? sv : undefined; }
   if (index >= SYNTH_BASE) return synthLine(f, index);
   return f.abilities[index];
@@ -180,6 +235,24 @@ const trigCache = new Map<string, { index: number; params: Record<string, string
 /** Human text with CARDNAME replaced. */
 export function describe(text: string, cardName: string): string {
   return nameText(text, cardName);
+}
+
+/** Ability index of the Aura spell a creature with bestow becomes when cast for its bestow cost. */
+export const BESTOW_INDEX = -2;
+
+/** Bestow: "K:Bestow:<cost>" -> the Aura spell "enchant creature". */
+function bestowLine(f: ForgeFace): string | undefined {
+  if (!f.keywords.some((k) => /^Bestow:/.test(k))) return undefined;
+  return 'SP$ Attach | ValidTgts$ Creature | TgtPrompt$ Choose a creature to enchant | SpellDescription$ Bestow — enchant creature';
+}
+
+/** The spell ability a cast uses: the bestow Aura spell for costOption 'bestow', else the face's spell ability. */
+export function castSpellAbility(cardId: string, face: number, costOption?: string): { index: number; ability: ParsedAbility } | undefined {
+  if (costOption === 'bestow') {
+    const ability = abilityAt(cardId, face, BESTOW_INDEX);
+    if (ability) return { index: BESTOW_INDEX, ability };
+  }
+  return spellAbility(cardId, face);
 }
 
 /** Auras: "K:Enchant:<valid>[:<description>]" -> an equivalent "SP$ Attach" line. */
@@ -392,7 +465,8 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any' && !/^Combo (Any|[WUBRGC]( [WUBRGC])*)$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
     case 'DelayedTrigger':
       if (!p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
-      if (p.Mode === 'Phase' ? step.kind !== 'DB' || !PHASES[p.Phase ?? ''] : !['SpellCast', 'ChangesZone'].includes(p.Mode ?? '')) return 'DelayedTrigger';
+      if (p.Mode === 'Phase' ? (step.kind !== 'DB' && p.Planeswalker !== 'True') || !PHASES[(p.Phase ?? '').replace(/->$/, '')] : !['SpellCast', 'ChangesZone'].includes(p.Mode ?? '')) return 'DelayedTrigger';
+      if (p.ValidPlayer && !['Player', 'Player.controlsCard.IsTriggerRemembered'].includes(p.ValidPlayer)) return 'DelayedTrigger (ValidPlayer)';
       if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects) && !MORE_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
       break;
     case 'ImmediateTrigger': if (step.kind === 'SP' || !p.Execute || !step.svars?.[p.Execute] || (p.TriggerAmount && p.TriggerAmount !== 'Remembered$Amount')) return 'ImmediateTrigger'; break;
