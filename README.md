@@ -8,23 +8,36 @@ A private, MTGO/Arena-style website for drafting and playing the **Orangejuicebo
 - **Deckbuilder**: CMC columns, mana curve, "suggest lands", and export to **XMage (.dck)**, MTGA/MTGO text, or Cockatrice (.cod).
 - **Play**: best-of-1/3/5 matches with sideboarding between games, on a synced tabletop.
 
-## Automatic card effects (Stage 1)
+## Automatic card effects
 
-Spells and activated abilities run themselves, driven by the open-source Forge card scripts in `shared/data/scripts.json`:
+Cards play themselves. The engine reads the open-source Forge card scripts (`shared/data/scripts.json`) and runs the cards' rules:
 
-- **Targets:** casting a targeted spell enters targeting mode, and only legal targets light up (hexproof and shroud are respected). Charm cards ask which modes you want.
-- **Resolving:** on resolution the engine deals damage, draws, destroys, exiles, bounces, reanimates, makes tokens, adds counters, pumps, gains or loses life, discards, mills, sacrifices and counters spells. Mana Leak-style spells ask the opponent "Pay {3}?".
-- **Choices:** scry, surveil and library searches open the right window, and the rest of the spell finishes after you choose.
-- **Activated abilities**, including planeswalker loyalty abilities, pay their own costs (tap, sacrifice, loyalty, mana from pool, life).
-- **Fizzling:** spells whose targets are all gone fizzle.
-- **Dying:** after an automatic effect, creatures with lethal damage and planeswalkers at 0 loyalty go to the graveyard.
-- **Coverage:** 203 of the 300 cube cards with spells or activated abilities are fully automatic, and 61 more are partly automatic. Anything not automated is logged ("Not automated: … resolve it by hand"). "Cast (resolve by hand)" turns the engine off for one spell.
+- **Spells and abilities:** targeting with legality checks (hexproof, shroud), modes, X, and divided damage. Casting finishes with damage, draw, destroy, exile, bounce, reanimate, tokens, counters, pumps, life, discard, mill, sacrifice and counterspells (Mana Leak asks "pay {3}?"). Scry, surveil and tutors open the right window, and the rest of the spell finishes after you choose.
+- **Costs:** alternative and additional costs (Force of Will, Daze, Snuff Out, Fireblast, evoke, flashback, escape, kicker, delve, buyback, dash, overload), Thalia-style taxes and discounts, and special mana (Ancient Tomb, Cradle, Academy, LED, Petal, Mox Diamond).
+- **Triggered abilities:** enters, dies, leaves, upkeep, end step, attacks, blocks, spells cast, draws, combat damage, landfall, sacrifice and discard. They're ordered properly when both players trigger. "May" questions and target choices pop up for the right player. Delayed and reflexive triggers work, as do Sagas.
+- **Ongoing effects:** anthems and lords, granted keywords, characteristic-defining power and toughness (goyfs, Constructs), and restrictions (Teferi, Ensnaring Bridge, Glacial Chasm, can't-block). Each restriction can be overridden with "Do it anyway?". An "Active effects" panel lists everything in play.
+- **Replacement effects:** taplands, fastlands, shocklands ("pay 2 life?"), Triomes, "can't be countered", "doesn't untap", damage prevention, Containment Priest, Dauthi Voidwalker, Hullbreacher.
+- **Keyword abilities:** Equip, Reconfigure, Cycling and typecycling, Channel, Level up, Crew, Ninjutsu.
+- **Changing and copying cards:** creature lands, animate effects, emblems and temporary effects. Copies work: Kiki-Jiki, Splinter Twin, Phyrexian Metamorph, Saheeli. So do "choose a type or name a card" (Plague Engineer, Phyrexian Revoker).
+- **Unique cards:**
+  - Extra turns.
+  - Upheaval, Timetwister, Wheel, Time Spiral, Balance, Council's Judgment voting.
+  - Liliana of the Veil, Mindslaver (you take over the opponent's turn).
+  - Karakas, Dark Depths, Shelldock Isle, Urza's Saga, Field of the Dead.
+  - Opposition, Oath of Druids, Sylvan Library, Sneak Attack, Memory Jar, Scroll Rack.
+- **Rules:** timing (sorcery speed, once-per-turn loyalty), fizzling, and state-based deaths.
 
-Not yet automated:
-- Triggered abilities like "When this enters…" (Stage 2).
-- Static effects like Thalia's tax or anthems (Stage 3).
+**Coverage:** 285 of the 329 cube cards with spells or activated abilities (87%) are fully automatic and 32 more are partly automatic. 91% of triggered abilities are detected automatically. Anything not automated is logged ("Not automated: … resolve it by hand"), and every manual tool still works. "Cast (resolve by hand)" and the per-player "Automatic triggers: off" switch turn the engine off when you want to play it like paper.
 
-`npx tsx scripts/engine-coverage.ts` prints the current coverage. To refresh the scripts: `npx tsx scripts/build-scripts.ts --forge <forge>/forge-gui/res`.
+Known gaps:
+- Amass, devotion (Thassa's Oracle) and Splinter Twin's granted ability.
+- Some "you may play that card" effects: the card is exiled automatically, but you cast it yourself.
+- A few replacement-based effects (Yawgmoth's Will, Maze of Ith's prevention).
+- Ward is only a reminder.
+
+Tools:
+- `npx tsx scripts/engine-coverage.ts` prints current coverage.
+- `npx tsx scripts/build-scripts.ts --forge <forge>/forge-gui/res` refreshes the scripts.
 
 ## What's automated and what's manual
 
