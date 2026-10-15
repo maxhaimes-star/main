@@ -1101,6 +1101,20 @@ export function moreVar(state: GameState, r: { controller: string; sourceIid?: s
     return m[2] === 'HalfDown' ? Math.floor(base / 2) : m[2] === 'HalfUp' ? Math.ceil(base / 2) : base * 2;
   }
   if ((m = /^Count\$ValidExile (.+)$/.exec(v))) return state.players.flatMap((p) => p.zones.exile).filter((x) => matchCard(state.cards[x], m![1], { controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup }) === true).length;
+  if ((m = /^(Remembered|RememberedLKI|Targeted|TargetedLKI)\$Card(Power|Toughness|ManaCost)\/(HalfUp|HalfDown|Twice)$/.exec(v))) {
+    const iid = m[1].startsWith('Remembered') ? r.remembered[0] : (r.item.auto?.targets ?? []).flat().map((t) => (t.kind === 'card' ? t.iid : '')).find(Boolean);
+    const l = iid ? (r as { lki?: Record<string, import('./types.ts').Lki> }).lki?.[iid] : undefined;
+    const c = iid ? state.cards[iid] : undefined;
+    const base = m[2] === 'ManaCost' ? (l?.mv ?? (c?.cardId ? ctx.lookup(c.cardId)?.cmc ?? 0 : 0)) : l ? (m[2] === 'Power' ? l.power : l.toughness) : c ? parseInt((m[2] === 'Power' ? faceOf(c, ctx.lookup).power : faceOf(c, ctx.lookup).toughness) ?? '0', 10) || 0 : 0;
+    return m[3] === 'HalfUp' ? Math.ceil(base / 2) : m[3] === 'HalfDown' ? Math.floor(base / 2) : base * 2;
+  }
+  if ((m = /^RememberedLKI\$Valid (.+)$/.exec(v))) {
+    // "RememberedLKI$Valid Card.RememberedPlayerCtrl" (Winds of Abandon): remembered cards controlled by the remembered player.
+    const lki = (r as { lki?: Record<string, import('./types.ts').Lki> }).lki ?? {};
+    const ps = r.remembered.filter((x) => isPlayer(state, x));
+    if (/RememberedPlayerCtrl/.test(m[1])) return Object.keys(lki).filter((x) => !isPlayer(state, x) && ps.includes(lki[x].controller)).length;
+    return Object.keys(lki).length;
+  }
   if ((m = /^Remembered\$Valid (.+)$/.exec(v))) return r.remembered.filter((x) => state.cards[x] && matchCard(state.cards[x], m![1], { controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup }) === true).length;
   if ((m = /^TriggeredCard\$Card(Power|Toughness|ManaCost)$/.exec(v))) {
     const iid = r.trig?.card;

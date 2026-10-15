@@ -177,6 +177,11 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     case 'Targeted': case 'TargetedCard': return tgt();
     case 'ParentTarget': return split(state, i > 0 ? parentTargets(r, i - 1) : []);
     case 'TargetedPlayer': return { cards: [], players: tgt().players };
+    case 'Player.IsRemembered': { const mem = r.remembered; return { cards: [], players: live.filter((p) => mem.includes(p)) }; }
+    case 'NonRememberedController': {
+      const ctrls = new Set(r.remembered.map((x) => r.lki[x]?.controller ?? state.cards[x]?.controller).filter(Boolean));
+      return { cards: [], players: live.filter((p) => !ctrls.has(p)) };
+    }
     case 'TargetedAndYou': return { cards: [], players: [...new Set([...tgt().players, r.controller])] };
     case 'TargetedController': {
       const t = parentTargets(r, i);
@@ -226,6 +231,10 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     const t = parentTargets(r, i);
     const ps = t.map((ref) => (ref.kind === 'player' ? ref.pid : ref.kind === 'card' ? state.cards[ref.iid]?.controller : undefined)).filter((x): x is string => !!x);
     return { cards: [], players: ps.length ? [...new Set(ps)] : [r.controller] };
+  }
+  if (value?.startsWith('Targeted.')) {
+    const E: MatchEnv = { controller: r.controller, sourceIid: r.sourceIid, lookup: getCard };
+    return { cards: tgt().cards.filter((x) => state.cards[x] && matchCard(state.cards[x], value.slice(9), E) === true), players: [] };
   }
   if (value === 'TopOfLibrary') { const top = player(state, r.controller).zones.library[0]; return { cards: top ? [top] : [], players: [] }; }
   if (value === 'ThisTargetedCard' || value === 'ThisTargetedPlayer') { const t = split(state, ownTargets(r, i) ?? []); return value === 'ThisTargetedCard' ? { cards: t.cards, players: [] } : { cards: [], players: t.players }; }
@@ -488,6 +497,8 @@ interface PickData {
   reveal?: string;
   /** Each pick adds 1 to the resolving ability's X ("tap X untapped Myr"). */
   countX?: boolean;
+  /** Shuffle this player's library once the picks are done (library searches). */
+  shuffle?: string;
 }
 
 /** A triggered ability's optional cost ("you may pay {E}{E}{E}. When you do ..."), asked as it resolves. */
@@ -813,29 +824,35 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         cards = r.sourceIid && state.cards[r.sourceIid] ? [r.sourceIid] : [];
       }
       if (!cards) {
-        // Hidden choice: search the library, or pick from hand / graveyard / battlefield.
+        // Hidden choice: search a library, or pick from hand / graveyard / exile / battlefield (one or more zones).
         const ownerPid = p.DefinedPlayer ? defined(state, r, i, p.DefinedPlayer)?.players[0] : pickFromPlayer ? targetPlayers!.players[0] : r.controller;
-        if (!ownerPid) return bad();
+        if (!ownerPid) { log(state, ctx, r.controller, `${r.sourceName}: no player to choose from.`); return 'ok'; }
         const chooser = player(state, ownerPid);
         const chooserPid = p.Chooser === 'You' ? r.controller : ownerPid;
-        if (origins.includes('library')) {
-          if (chooserPid !== ownerPid) return bad();
-          openPeek(state, ctx, r, i, chooser, 'search', 0);
-          log(state, ctx, chooserPid, `${chooser.name} searches their library (${r.sourceName}: ${step.description}) — choose the card.`);
-          return 'wait';
+        const search = origins.includes('library');
+        const origin = origins.find((z) => z !== 'library') ?? origins[0];
+        if (!origin) return bad();
+        // ChangeType with run-level properties: "targetedBy" (Cloak and Dagger), "inZoneHand".
+        const targeted = new Set(r.targets.flat().map((t) => (t.kind === 'card' ? t.iid : '')).filter(Boolean));
+        const alts = (p.ChangeType ?? 'Card').split(',').map((a) => ({ targetedBy: /targetedBy/.test(a), valid: a.replace(/\+?targetedBy/, '').replace(/\.$/, '') || 'Card' }));
+        const fits = (x: string) => alts.some((a) => (!a.targetedBy || targeted.has(x)) && matchCard(state.cards[x], a.valid, E) !== false);
+        const pool: string[] = [];
+        for (const z of origins) {
+          if (z === 'battlefield') pool.push(...state.battlefield.filter((x) => /YouCtrl|OppCtrl|YouOwn|targetedBy/.test(p.ChangeType ?? '') || state.cards[x].controller === ownerPid));
+          else if (z !== 'stack') pool.push(...chooser.zones[z as 'hand']);
         }
-        const origin = origins[0];
-        if (!origin || origins.length > 1) return bad();
-        const changeType = p.ChangeType ?? 'Card';
-        const pool = origin === 'battlefield' ? state.battlefield : origin === 'stack' ? [] : chooser.zones[origin as 'hand'];
-        const cands = pool.filter((x) => {
-          const c = state.cards[x];
-          if (origin === 'battlefield' && !/YouCtrl|OppCtrl|YouOwn/.test(changeType) && c.controller !== chooserPid) return false;
-          return matchCard(c, changeType, E) !== false;
-        });
+        const cands = pool.filter((x) => state.cards[x] && fits(x));
         const n = p.ChangeNum === 'All' ? cands.length : amount(state, ctx, r, p.ChangeNum, 1);
         if (n == null) return bad();
-        if (!cands.length) { log(state, ctx, chooserPid, `${r.sourceName}: no card to choose.`); return 'ok'; }
+        if (search) {
+          emit(state, { t: 'searched', pid: chooserPid, owner: ownerPid } as never);
+          log(state, ctx, chooserPid, `${pname(state, chooserPid)} searches ${chooserPid === ownerPid ? 'their' : `${chooser.name}'s`} library (${r.sourceName}).`);
+        }
+        if (!cands.length || n <= 0) {
+          log(state, ctx, chooserPid, `${r.sourceName}: no card to choose.`);
+          if (search && p.Shuffle !== 'False') shuffleLibrary(state, chooser, ctx.rng);
+          return 'ok';
+        }
         const host = untilHostLeaves(state, r, p, dest);
         if (host === 'gone') { log(state, ctx, r.controller, `${r.sourceName} already left the battlefield — nothing is exiled.`); return 'ok'; }
         const yours = ownerPid === chooserPid ? 'your' : `${chooser.name}'s`;
@@ -844,11 +861,15 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
           log(state, ctx, r.controller, `${chooser.name} reveals their hand to ${pname(state, chooserPid)}${p.Hidden ? '' : `: ${names(state, ctx, chooser.zones.hand)}`}.`);
         }
         const where = dest === 'library' ? (p.LibraryPosition === '-1' ? `on the bottom of ${yours} library` : `on top of ${yours} library`) : `to ${dest === 'battlefield' ? 'the battlefield' : dest === 'exile' ? 'exile' : `${yours} ${dest}`}`;
+        const optional = search ? p.Mandatory !== 'True' && (p.ChangeType ?? 'Card') !== 'Card' || p.Optional === 'True'
+          : p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True' || !/^\d+$/.test(p.ChangeNum ?? '1'));
         const created = startPicks(state, ctx, [{
-          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True' || !/^\d+$/.test(p.ChangeNum ?? '1')),
+          kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional,
           dest, params: p, ...(host ? { untilHost: host } : {}), ...(origin === 'hand' && ownerPid !== chooserPid ? { reveal: ownerPid } : {}),
-          label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
+          ...(search && p.Shuffle !== 'False' ? { shuffle: ownerPid } : {}),
+          label: `${r.sourceName}: ${search ? `search for ${p.ChangeTypeDesc ? `a ${p.ChangeTypeDesc}` : 'a card'} to put` : 'choose a card to put'} ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
+        if (!created && search && p.Shuffle !== 'False') shuffleLibrary(state, chooser, ctx.rng);
         return created ? 'wait' : 'ok';
       }
       const moved: string[] = [];
@@ -1701,6 +1722,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
     candidates = candidates.filter((x) => x !== value);
   } else left = 0;
   if (left > 0 && pickPending(state, ctx, { ...data, left, candidates })) return null;
+  if (data.shuffle) { const owner = state.players.find((x) => x.pid === data.shuffle); if (owner) shuffleLibrary(state, owner, ctx.rng); }
   if (startPicks(state, ctx, data.queue, data.cont)) return null;
   if (data.cont) runFrom(state, ctx, data.cont);
   else stateBasedActions(state, ctx, []);

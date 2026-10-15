@@ -37,7 +37,7 @@ let budget = MAX_TRIGGERS_PER_ACTION;
 export const SUPPORTED_MODES = new Set([
   'ChangesZone', 'ChangesZoneAll', 'Phase', 'Attacks', 'AttackersDeclared', 'Blocks', 'SpellCast', 'Drawn', 'DamageDone',
   'DamageDoneOnce', 'DamageDealtOnce', 'Sacrificed', 'Discarded', 'DiscardedAll', 'LandPlayed', 'Exiled',
-  'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch',
+  'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch', 'SearchedLibrary',
 ]);
 
 /** Trigger parameters the engine understands; a trigger with any other parameter is left to the players. */
@@ -336,6 +336,13 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (/YouCtrl/.test(vs)) r = and(r, ev.pid === env.controller);
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: isP ? undefined : ev.target, target: ev.target, source: ev.sourceIid, player: ev.pid };
+    }
+    case 'SearchedLibrary': {
+      if (ev.t !== 'searched') return null;
+      if (p.SearchOwnLibrary === 'True' && ev.owner !== ev.pid) return null;
+      r = matchP(ev.pid, p.ValidPlayer, env);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, player: ev.pid };
     }
     case 'BecomeMonarch': {
       if (ev.t !== 'monarch') return null;

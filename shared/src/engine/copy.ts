@@ -23,6 +23,7 @@ import './replacements.ts'; // installs moveHooks.before first; the ETB-replacem
 import { createTokenInstance, resumeAuto } from './resolve.ts';
 import { tokenMultiplier } from './replacements.ts';
 import { amountSupported, getScript, SUPPORTED_DEFINED } from './script.ts';
+import { MORE_DEFINED } from './more-support.ts';
 import { matchCard } from './targets.ts';
 import type { AutoCont, CopyExtra, ParsedAbility, Pending } from './types.ts';
 
@@ -37,15 +38,17 @@ const COPY_PERMANENT_KEYS = new Set([
   'Defined', 'ValidTgts', 'TgtPrompt', 'TgtZone', 'TargetMin', 'TargetMax', 'AddKeywords', 'AddTypes', 'AtEOT', 'NumCopies', 'Controller', 'SetPower', 'SetToughness',
   'NonLegendary', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'AILogic', 'Planeswalker', 'Ultimate', 'Condition', 'ConditionPresent',
   'ConditionCompare', 'ConditionDefined', 'ConditionCheckSVar', 'ConditionSVarCompare', 'ConditionDescription', 'ActivationLimit', 'SorcerySpeed',
+  'UnlessCost', 'UnlessPayer', 'UnlessSwitched', 'UnlessResolveSubs', 'RememberLKI',
 ]);
 const CLONE_KEYS = new Set([
   'Choices', 'ChoiceZone', 'ChoiceTitle', 'AddTypes', 'SetPower', 'SetToughness', 'NewName', 'AddKeywords', 'CloneTarget', 'Defined', 'ValidTgts', 'TgtPrompt',
   'Duration', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'AILogic', 'Optional', 'ConditionPresent', 'ConditionCompare', 'ConditionDefined',
+  'RememberCloneOrigin', 'Planeswalker', 'Ultimate',
 ]);
 const NAME_VALID = new Set(['Card', 'Card.nonLand', 'Creature', 'Card.Creature', 'Artifact', 'Card.Artifact']);
 
 function definedOk(v: string): boolean {
-  return SUPPORTED_DEFINED.has(v) || /^Valid [A-Za-z.+,!]+$/.test(v);
+  return SUPPORTED_DEFINED.has(v) || MORE_DEFINED.has(v) || /^Valid [A-Za-z.+,!]+$/.test(v) || /^Targeted\.[!A-Za-z.+]+$/.test(v);
 }
 
 /** Why a copy / choose step can't be automated (null = it can). */
@@ -165,18 +168,20 @@ export function execCopyStep(state: GameState, ctx: Ctx, step: ParsedAbility, ap
     case 'CopyPermanent': {
       const o = api.objects('Self');
       const n = api.amount(p.NumCopies, 1);
-      const owner = p.Controller ? api.defined(p.Controller)?.players[0] : api.controller;
-      if (!o || n == null || !owner) { api.manual(); return 'ok'; }
+      const owners = p.Controller ? api.defined(p.Controller)?.players ?? [] : [api.controller];
+      if (!o || n == null || !owners.length) { if (!o || n == null) api.manual(); return 'ok'; }
       const extra = extraOf(p, api);
       const made: string[] = [];
       for (const iid of o.cards) {
         const src = state.cards[iid];
         if (!src || src.faceDown) continue;
-        const count = n * tokenMultiplier(state, ctx, owner);
-        for (let k = 0; k < count; k++) made.push(tokenCopy(state, ctx, owner, src, extra).iid);
-        const bits = [extra.keywords?.length ? `with ${extra.keywords.join(', ').toLowerCase()}` : '', extra.addTypes?.length ? `(also ${extra.addTypes.join(' ')})` : ''].filter(Boolean).join(' ');
-        const who = state.players.find((x) => x.pid === owner)?.name ?? 'Someone';
-        log(state, ctx, owner, `${who} creates ${count === 1 ? 'a token copy' : `${count} token copies`} of ${cardName(src, ctx.lookup)}${bits ? ` ${bits}` : ''}.`);
+        for (const owner of owners) {
+          const count = n * tokenMultiplier(state, ctx, owner);
+          for (let k = 0; k < count; k++) made.push(tokenCopy(state, ctx, owner, src, extra).iid);
+          const bits = [extra.keywords?.length ? `with ${extra.keywords.join(', ').toLowerCase()}` : '', extra.addTypes?.length ? `(also ${extra.addTypes.join(' ')})` : ''].filter(Boolean).join(' ');
+          const who = state.players.find((x) => x.pid === owner)?.name ?? 'Someone';
+          log(state, ctx, owner, `${who} creates ${count === 1 ? 'a token copy' : `${count} token copies`} of ${cardName(src, ctx.lookup)}${bits ? ` ${bits}` : ''}.`);
+        }
       }
       api.remember(made);
       if (p.AtEOT && made.length) {

@@ -15,7 +15,7 @@ export const MORE_DEFINED = new Set([
   'ChosenCard', 'ChosenCardLKI', 'ChosenCardController', 'ChosenCardOwner', 'Imprinted', 'ReplacedCard', 'TriggeredSpellAbility', 'TriggeredCardOpponent',
   'TriggeredDefender', 'TargetedOrController', 'ExiledWith', 'Remembered', 'RememberedController', 'RememberedOwner', 'ThisTargetedCard', 'ThisTargetedPlayer',
   'TriggeredDefender.Opponent & Valid Planeswalker.TriggeredDefender', 'Enchanted', 'TriggeredAttackingPlayer', 'TriggeredActivator', 'Player.Opponent',
-  'TriggeredStackItem', 'TopOfLibrary',
+  'TriggeredStackItem', 'TopOfLibrary', 'Player.IsRemembered', 'NonRememberedController',
 ]);
 
 /** Counting variables more.ts evaluates. */
@@ -39,7 +39,9 @@ export function moreVarSupported(v: string | undefined): boolean {
     || /^Count\$ValidExile .+$/.test(v)
     || /^SVar\$\w+\/(Plus|Minus|Times)\.-?\d+$/.test(v) || /^SVar\$\w+\/(HalfDown|HalfUp|Twice|Negative)$/.test(v)
     || /^TriggeredCard\$CardCounters\.\w+$/.test(v) || /^Sacrificed\$Card(ManaCost|Power)(\/Plus\.\d+)?$/.test(v)
-    || /^Count\$Valid .+ControlledBy \w+$/.test(v);
+    || /^Count\$Valid .+ControlledBy \w+$/.test(v)
+    || /^(Remembered|RememberedLKI|Targeted|TargetedLKI)\$Card(Power|Toughness|ManaCost)\/(HalfUp|HalfDown|Twice)$/.test(v)
+    || /^RememberedLKI\$Valid .+$/.test(v);
 }
 
 /** Reason the step can't be automated: undefined = not a more.ts API, null = supported. */
