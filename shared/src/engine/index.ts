@@ -23,6 +23,9 @@
  *                                           (granted ones have index >= GRANT_BASE; activate them like any A: index)
  * - activeEffects(state)                    Effect records (emblems, "this turn" effects) in the command zone
  * - Animate / Effect / CopyPermanent / Clone / ChooseType / ChooseColor / NameCard / ChoosePlayer: engine/ext.ts
+ * - playPermissions / mayPlayFrom          "you may play that card" permissions (impulse draw, Hostage Taker, Lurrus,
+ *                                           Snapcaster flashback, Yawgmoth's Will, top of library ...): castOptions marks
+ *                                           casting from outside the hand unavailable without one (engine/permissions.ts)
  * - unique.ts / turns.ts                    hard cards: extra turns (state.extraTurns), Mindslaver (state.controlledBy,
  *                                           action.as, controls(state, viewer, pid)), Sagas (sagaOf, lore counters),
  *                                           Balance / votes / piles / hideaway / Oath / Sylvan Library / Dark Depths
@@ -46,7 +49,9 @@ export { turnInfo } from './durations.ts';
 export type { ActivatedEntry } from './script.ts';
 export { synthAbilities, levelStats, wardCost, KEYWORD_APIS, type LevelStats, type SynthAbility } from './keywords.ts';
 export { levelOf, levelStatsOf } from './keyword-play.ts';
-export { cantBeCountered, damagePrevented, replacementsOf } from './replacements.ts';
+export { cantBeCountered, damagePrevented, replacementGap, replacementsOf } from './replacements.ts';
+export { HANDLED_KEYWORDS, keywordGap } from './mechanics.ts';
+export { anyColorCost, bestPermission, mayPlayFrom, playPermissions, type PlayPermission } from './permissions.ts';
 export { processTriggers, queuedTriggers, triggerSupport, SUPPORTED_MODES, MAX_TRIGGERS_PER_ACTION } from './triggers.ts';
 export {
   activateRestriction, activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,

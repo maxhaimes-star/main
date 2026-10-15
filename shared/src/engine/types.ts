@@ -195,6 +195,10 @@ export interface CastInfo {
   overloaded?: boolean;
   /** Flashback / escape (non-permanent): exiled instead of going anywhere else when it leaves the stack. */
   exileOnLeave?: boolean;
+  /** Cast with a "you may play that card" permission (engine/permissions.ts key; once-per-turn limits). */
+  permission?: string;
+  /** Zone it was cast from (when not the hand), e.g. 'exile' for "whenever you cast a spell from exile". */
+  from?: string;
   colorsSpent?: string[];
 }
 
@@ -237,6 +241,8 @@ export type TimedEffect =
   | { kind: 'control'; id: string; controller: string; until: 'eot' | 'hostLeaves'; iid: string; previous: string; hostIid?: string }
   | { kind: 'exiled'; id: string; controller: string; until: 'hostLeaves'; hostIid: string; cards: { iid: string; from: string; owner: string }[] }
   | { kind: 'dash'; id: string; controller: string; until: 'eot'; iid: string }
+  /** A keyword granted to a card outside the battlefield until end of turn (Snapcaster Mage: flashback), engine/permissions.ts. */
+  | { kind: 'grant'; id: string; controller: string; until: 'eot'; iid: string; zone: string; keyword: string; source: string }
   | EffectRecord;
 
 /** When an Effect / animation ends. */
@@ -269,6 +275,8 @@ export interface EffectRecord {
   remembered: string[];
   /** ForgetOnMoved$ / ExileOnMoved$: zone the remembered cards must stay in; the effect ends when none is left there. */
   watchZone?: string;
+  /** ReplacementEffects$ SVar names (replacements.ts applies them like a permanent's R: lines, e.g. Yawgmoth's Will). */
+  replacements?: string[];
   turn: number;
 }
 
@@ -328,6 +336,25 @@ export interface Pending {
    * `options` may then hold e.g. a "no target / skip" option answerable with 'choose'.
    */
   targets?: { specs: TargetSpec[]; sourceIid?: string; controller: string; label: string };
+  /**
+   * Cards revealed to the answering player for this question (e.g. the opponent's hand for Duress / Thoughtseize /
+   * Tidehollow Sculler). `options` hold only the legal choices; every revealed card is listed here with `legal`
+   * telling whether it can be chosen, so the UI can show the whole hand with the illegal cards disabled.
+   * The revealed cards also have the answering player in their `revealedTo` until they change zones / end of turn.
+   * Only sent to the answering player (like `options`).
+   */
+  revealed?: { iid: string; label: string; legal: boolean }[];
+  /**
+   * Divided damage / counters (DividedAsYouChoose$): answer with 'choose' and a JSON value
+   * `{"<target key>": amount, ...}` (keys = card iid or player id from `targets`) that sums to `total`, each target getting
+   * at least `min` (usually 1). `options` then holds one suggested split (even division) the UI can offer as a default.
+   */
+  divide?: { total: number; min: number; targets: { key: string; label: string }[] };
+  /**
+   * Choose a number (ChooseNumber$, "pay X life", Intrepid Adversary's "any number of times"): answer with 'choose' and
+   * the number as a string, from `min` to `max`. `options` also lists every allowed value when there are few.
+   */
+  number?: { min: number; max: number };
 }
 
 /** Last-known information about a targeted / remembered card (taken before it moves). */

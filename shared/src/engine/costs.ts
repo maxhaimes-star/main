@@ -19,6 +19,7 @@ import { getScript, parseParams, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard } from './targets.ts';
 import { adjustCost, castRestriction } from './statics.ts';
 import { castTimingError } from './timing.ts';
+import { applyPermissions } from './permissions.ts';
 import type { AutoInfo, CastInfo, CastOption, TargetRef } from './types.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
@@ -107,7 +108,7 @@ function candidates(state: GameState, pid: string, spellIid: string, part: Pick<
 
 // ------------------------------------------------------------------ cast options
 
-interface OptionDef {
+export interface OptionDef {
   id: string;
   label: string;
   mana: string;
@@ -210,6 +211,7 @@ function optionDefs(state: GameState, c: CardInstance, pid: string, face: number
     if (p.CheckSVar) def.parts = [...def.parts, { kind: 'other', n: '0', valid: '', text: 'Check the condition by hand' }];
     defs.push(def);
   }
+  applyPermissions(state, c, pid, face, defs, lookup); // casting from exile / graveyard / library (engine/permissions.ts)
   // Can the non-mana parts be paid?
   for (const d of defs) {
     for (const part of d.parts) {

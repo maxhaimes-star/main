@@ -22,7 +22,7 @@ import { type Ctx, emit, log, moveCard, moveHooks, type MoveOpts, newInstance, p
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import { getScript, parseParams, SCRIPTS, scriptRef } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';
-import type { Pending } from './types.ts';
+import type { EffectRecord, Pending } from './types.ts';
 
 interface RLine { params: Record<string, string>; svars: Record<string, string>; name: string }
 
@@ -55,6 +55,23 @@ function hosted(state: GameState, event: string, except?: string): { host: CardI
     if (id === except) continue;
     const host = state.cards[id];
     for (const r of replacementsOf(host)) if (r.params.Event === event && isActive(r)) out.push({ host, r });
+  }
+  return out;
+}
+
+/** Replacement effects of Effect records (ReplacementEffects$, engine/effects.ts) for an event. */
+function effectReplacements(state: GameState, event: string): { e: EffectRecord; r: RLine }[] {
+  const out: { e: EffectRecord; r: RLine }[] = [];
+  for (const e of state.effects ?? []) {
+    if (e.kind !== 'effect' || !e.replacements?.length) continue;
+    const f = getScript(e.cardId)?.[e.face];
+    if (!f) continue;
+    for (const name of e.replacements) {
+      const line = f.svars[name];
+      if (!line) continue;
+      const r: RLine = { params: parseParams(line).params, svars: f.svars, name: e.name };
+      if (r.params.Event === event) out.push({ e, r });
+    }
   }
   return out;
 }
@@ -153,6 +170,13 @@ function toGraveyard(state: GameState, ctx: Ctx, c: CardInstance): MoveResult | 
     if (sv?.api === 'ChangeZone') return redirect(state, ctx, c, sv, r.name, 'would go to the graveyard');
   }
   if (c.token) return undefined;
+  // Effects' replacements (Yawgmoth's Will: "if a card would be put into your graveyard this turn, exile it instead").
+  for (const { e, r } of effectReplacements(state, 'Moved')) {
+    if (r.params.Destination !== 'Graveyard' || !r.params.ValidCard) continue;
+    if (!validCard(c, r.params.ValidCard, { controller: e.controller, lookup: ctx.lookup })) continue;
+    const sv = svarParams(r, r.params.ReplaceWith);
+    if (sv?.api === 'ChangeZone') return redirect(state, ctx, c, sv, e.name, 'would go to the graveyard');
+  }
   for (const { host, r } of hosted(state, 'Moved', c.iid)) {
     if (r.params.Destination !== 'Graveyard' || !r.params.ValidCard) continue;
     if (!validCard(c, r.params.ValidCard, { controller: host.controller, sourceIid: host.iid, lookup: ctx.lookup })) continue;
@@ -430,3 +454,30 @@ export function counterAmount(state: GameState, ctx: Ctx, c: CardInstance, kind:
 }
 
 moveHooks.before = beforeMove;
+
+// ------------------------------------------------------------------ coverage
+
+/** Why an R: line isn't handled automatically (null = handled), for coverage tools. */
+export function replacementGap(line: string, svars: Record<string, string>): string | null {
+  const p = parseParams(line).params;
+  const sv = p.ReplaceWith && svars[p.ReplaceWith] ? parseParams(svars[p.ReplaceWith]) : undefined;
+  const active = /Battlefield/.test(p.ActiveZones ?? '');
+  switch (p.Event) {
+    case 'Moved':
+      if (p.Destination === 'Battlefield' && !active) {
+        if (p.ReplaceWith === 'PayBeforeETB' || sv?.api === 'Tap' || sv?.api === 'Discard') return sv?.api === 'Tap' && sv.params.UnlessCost && !/^PayLife<\d+>$/.test(sv.params.UnlessCost) ? 'Moved (enters tapped unless cost)' : null;
+        return 'Moved (as it enters)';
+      }
+      if (p.Destination === 'Battlefield' && active) return sv?.api === 'ChangeZone' || sv?.api === 'Tap' ? null : 'Moved (other enters)';
+      if (p.Destination === 'Graveyard') return sv?.api === 'ChangeZone' ? null : 'Moved (to graveyard)';
+      return `Moved (to ${p.Destination ?? '?'})`;
+    case 'Counter': return p.Layer === 'CantHappen' ? null : 'Counter';
+    case 'Untap': return p.Layer === 'CantHappen' ? null : 'Untap';
+    case 'DamageDone': return p.Prevent === 'True' && p.ValidTarget === 'You' ? null : 'DamageDone';
+    case 'BeginPhase': return p.Skip === 'True' ? null : 'BeginPhase';
+    case 'Draw': return sv?.api === 'Token' ? null : 'Draw';
+    case 'CreateToken': return sv?.api === 'ReplaceToken' ? null : 'CreateToken';
+    case 'AddCounter': return sv?.api === 'ReplaceCounter' ? null : 'AddCounter';
+  }
+  return p.Event ?? '?';
+}

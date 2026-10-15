@@ -20,6 +20,7 @@ import { extraTriggerHosts, grantedTriggers } from './effects.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { uniqueVar } from './unique.ts';
+import { notePermissionUse } from './permissions.ts';
 import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
 
 /** Max triggered abilities detected per player action (loop guard). */
@@ -535,6 +536,7 @@ function flush(state: GameState, ctx: Ctx): string[] {
  */
 export function processTriggers(state: GameState, ctx: Ctx): boolean {
   if (state.phase !== 'playing') { state.events = []; return false; }
+  for (const ev of state.events ?? []) if (ev.t === 'cast') notePermissionUse(state, state.cards[ev.iid]?.castInfo?.permission); // once-per-turn permissions (Lurrus)
   uniqueTriggers(state, ctx); // Sagas, Hideaway, Mode$ Always, Saga sacrifice (turns.ts)
   try { detect(state, ctx); } catch (e) { log(state, ctx, null, `Trigger detection error: ${(e as Error).message}`); }
   const pushed = flush(state, ctx);

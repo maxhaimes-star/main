@@ -4,9 +4,9 @@
  * triggers.ts like a permanent's) and remembered objects (RememberObjects$). Emblems (Name$ "Emblem — ...") are
  * permanent effects; others last until end of turn / your next turn / as long as the host or remembered card stays.
  *
- * "You may play that card" (MayPlay statics: impulse draw, Ragavan, Hostage Taker ...) is a permission: the table
- * already lets players cast from exile, so the effect is recorded and shown, and the cast itself is by the player.
- * Replacement effects (ReplacementEffects$) are not automated.
+ * "You may play that card" (MayPlay statics: impulse draw, Ragavan, Hostage Taker ...) is a permission that the normal
+ * cast action honors (engine/permissions.ts). Replacement effects (ReplacementEffects$): "exile it instead of putting it
+ * into a graveyard" (Yawgmoth's Will) and damage prevention, applied by replacements.ts.
  */
 import { cardName } from '../game/rules.ts';
 import { type Ctx, log, randomId } from '../game/state.ts';
@@ -23,7 +23,7 @@ const DURATIONS: Record<string, EffectDuration> = {
 };
 const ZONES: Record<string, Zone> = { Battlefield: 'battlefield', Exile: 'exile', Graveyard: 'graveyard', Hand: 'hand', Library: 'library' };
 
-/** "You may play / cast that card" statics (MayPlay$ True): a permission the players use by hand. */
+/** "You may play / cast that card" statics (MayPlay$ True): a permission (engine/permissions.ts). */
 const isPermission = (params: Record<string, string>) => params.MayPlay === 'True';
 /** RememberObjects$ values beyond SUPPORTED_DEFINED. */
 const REMEMBER_ALIASES: Record<string, string> = { RememberedCard: 'Remembered', RememberedLKI: 'Remembered' };
@@ -34,14 +34,25 @@ const list = (v: string | undefined, sep: string | RegExp = ',') => (v ? v.split
 export function effectUnsupported(step: ParsedAbility): string | null {
   const p = step.params;
   const sv = step.svars ?? {};
-  if (p.ReplacementEffects) return 'Effect (replacement)';
+  if (p.ReplacementEffects) {
+    for (const name of list(p.ReplacementEffects)) {
+      const line = sv[name];
+      if (!line) return `Effect (missing SVar ${name})`;
+      const rp = parseParams(line).params;
+      const rw = rp.ReplaceWith && sv[rp.ReplaceWith] ? parseParams(sv[rp.ReplaceWith]) : undefined;
+      // Supported: "if a card would be put into a graveyard, exile it instead" (Yawgmoth's Will), damage prevention.
+      const moved = rp.Event === 'Moved' && rp.Destination === 'Graveyard' && rw?.api === 'ChangeZone';
+      const prevent = rp.Event === 'DamageDone' && rp.Prevent === 'True';
+      if (!moved && !prevent) return 'Effect (replacement)';
+    }
+  }
   if (p.Duration && !DURATIONS[p.Duration]) return `Effect (Duration$ ${p.Duration})`;
   for (const v of list(p.RememberObjects, '&')) if (!SUPPORTED_DEFINED.has(v) && v !== 'Self' && !REMEMBER_ALIASES[v] && v !== 'RememberedOwner') return `Effect (RememberObjects$ ${v})`;
   if (p.ForgetOnMoved && !ZONES[p.ForgetOnMoved]) return 'Effect (ForgetOnMoved)';
   if (p.ExileOnMoved && !ZONES[p.ExileOnMoved]) return 'Effect (ExileOnMoved)';
   const statics = list(p.StaticAbilities);
   const triggers = list(p.Triggers);
-  if (!statics.length && !triggers.length) return 'Effect';
+  if (!statics.length && !triggers.length && !p.ReplacementEffects) return 'Effect';
   for (const name of statics) {
     const line = sv[name];
     if (!line) return `Effect (missing SVar ${name})`;
@@ -85,6 +96,7 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
     kind: 'effect', id: randomId(ctx.rng), controller: owner, until, cardId: auto.cardId, face: auto.face, name, text,
     statics: list(p.StaticAbilities), triggers: list(p.Triggers), remembered: [...new Set(remembered)], turn: state.turn,
   };
+  if (p.ReplacementEffects) rec.replacements = list(p.ReplacementEffects);
   if (emblem) rec.emblem = true;
   if (p.Image) rec.image = p.Image;
   if (watch && ZONES[watch]) rec.watchZone = ZONES[watch];
@@ -104,7 +116,9 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
   const mayPlay = rec.statics.some((s) => f?.svars[s] && isPermission(parseStatic(f.svars[s]).params));
   if (mayPlay) {
     const cards = rec.remembered.filter((x) => state.cards[x]);
-    log(state, ctx, owner, `${who} may play ${cards.length ? cards.map((x) => cardName(state.cards[x], ctx.lookup)).join(', ') : 'those cards'} — cast / play ${cards.length === 1 ? 'it' : 'them'} from ${cards[0] ? state.cards[cards[0]].zone : 'exile'} (any special cost terms by hand).`);
+    const zone = cards[0] ? state.cards[cards[0]].zone : 'exile';
+    const shown = cards.filter((x) => !state.cards[x].faceDown);
+    log(state, ctx, owner, `${who} may play ${shown.length ? shown.map((x) => cardName(state.cards[x], ctx.lookup)).join(', ') : cards.length ? `${cards.length} card${cards.length === 1 ? '' : 's'}` : 'those cards'} from ${zone === 'graveyard' ? 'their graveyard' : zone}.`);
   }
 }
 

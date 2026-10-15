@@ -77,6 +77,17 @@ function pname(state: GameState, pid: string): string {
   return state.players.find((p) => p.pid === pid)?.name ?? 'someone';
 }
 
+/** Reveal `owner`'s hand to `viewer`: the cards in it now (not cards drawn later) until they change zones / end of turn. */
+export function revealHandTo(state: GameState, viewer: string, owner: string) {
+  if (viewer === owner) return;
+  const v = state.players.find((p) => p.pid === viewer);
+  if (v) v.viewingHandOf = owner; // the client shows the revealed hand (until end of turn)
+  for (const iid of state.players.find((p) => p.pid === owner)?.zones.hand ?? []) {
+    const c = state.cards[iid];
+    if (c && !c.revealedTo.includes(viewer)) c.revealedTo.push(viewer);
+  }
+}
+
 function manual(state: GameState, ctx: Ctx, r: Run, step: ParsedAbility) {
   const what = step.description === step.api ? `${r.sourceName} (${step.api})` : step.description;
   log(state, ctx, r.controller, `Not automated: ${what} — resolve it by hand.`);
@@ -376,6 +387,8 @@ interface PickData {
   cont?: AutoCont;
   /** Exiled "until <this permanent> leaves the battlefield". */
   untilHost?: string;
+  /** Player whose hand is revealed to the chooser for this pick (Pending.revealed). */
+  reveal?: string;
 }
 
 interface ColorData {
@@ -402,6 +415,11 @@ function pickPending(state: GameState, ctx: Ctx, d: PickData): boolean {
     id: randomId(ctx.rng), pid: d.chooser, prompt: `${d.label}${d.left > 1 ? ` (${d.left} left)` : ''}`, options,
     data: { ...d, candidates: cands } as unknown as Record<string, unknown>,
   };
+  if (d.reveal) {
+    const hand = state.players.find((p) => p.pid === d.reveal)?.zones.hand ?? [];
+    revealHandTo(state, d.chooser, d.reveal);
+    pending.revealed = hand.map((iid) => ({ iid, label: cardName(state.cards[iid], ctx.lookup), legal: cands.includes(iid) }));
+  }
   state.pending.push(pending);
   return true;
 }
@@ -692,11 +710,15 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const host = untilHostLeaves(state, r, p, dest);
         if (host === 'gone') { log(state, ctx, r.controller, `${r.sourceName} already left the battlefield — nothing is exiled.`); return 'ok'; }
         const yours = ownerPid === chooserPid ? 'your' : `${chooser.name}'s`;
-        if (origin === 'hand' && ownerPid !== chooserPid) log(state, ctx, r.controller, `${chooser.name} reveals their hand to ${pname(state, chooserPid)}.`);
+        if (origin === 'hand' && ownerPid !== chooserPid) {
+          revealHandTo(state, chooserPid, ownerPid);
+          log(state, ctx, r.controller, `${chooser.name} reveals their hand to ${pname(state, chooserPid)}${p.Hidden ? '' : `: ${names(state, ctx, chooser.zones.hand)}`}.`);
+        }
         const where = dest === 'library' ? (p.LibraryPosition === '-1' ? `on the bottom of ${yours} library` : `on top of ${yours} library`) : `to ${dest === 'battlefield' ? 'the battlefield' : dest === 'exile' ? 'exile' : `${yours} ${dest}`}`;
         const created = startPicks(state, ctx, [{
           kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional: p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True' || !/^\d+$/.test(p.ChangeNum ?? '1')),
-          dest, params: p, ...(host ? { untilHost: host } : {}), label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
+          dest, params: p, ...(host ? { untilHost: host } : {}), ...(origin === 'hand' && ownerPid !== chooserPid ? { reveal: ownerPid } : {}),
+          label: `${r.sourceName}: choose a card to put ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
         return created ? 'wait' : 'ok';
       }
@@ -865,6 +887,17 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       return 'ok';
     }
     case 'Pump': case 'PumpAll': {
+      if (p.PumpZone) {
+        // "Target card in your graveyard gains flashback until end of turn" (Snapcaster Mage): a cast permission.
+        const o = objects(state, r, i, 'Self');
+        for (const iid of o?.cards ?? []) {
+          const c = state.cards[iid];
+          if (!c || c.zone === 'battlefield') continue;
+          addEffect(state, ctx, { kind: 'grant', controller: r.controller, until: 'eot', iid, zone: c.zone, keyword: p.KW, source: r.sourceName });
+          log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gains ${p.KW.toLowerCase()} until end of turn (${r.sourceName}).`);
+        }
+        return 'ok';
+      }
       const a = amount(state, ctx, r, p.NumAtt, 0);
       const d = amount(state, ctx, r, p.NumDef, 0);
       if (a == null || d == null) return bad();
@@ -936,10 +969,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const valid = p.DiscardValid ?? 'Card';
         const cands = pl.zones.hand.filter((x) => matchCard(state.cards[x], valid, E) !== false);
         if (p.Mode === 'RevealYouChoose') {
-          if (pid !== r.controller) me.viewingHandOf = pid;
-          log(state, ctx, r.controller, `${pl.name} reveals their hand: ${names(state, ctx, pl.zones.hand)}. ${me.name} chooses a card to discard.`);
-          if (!cands.length) { log(state, ctx, r.controller, 'No valid card to choose.'); continue; }
-          picks.push({ kind: 'pick', action: 'discard', chooser: r.controller, candidates: cands, left: Math.min(n, cands.length), optional: false, label: `${r.sourceName}: choose a card for ${pl.name} to discard` });
+          revealHandTo(state, r.controller, pid);
+          log(state, ctx, r.controller, `${pl.name} reveals their hand: ${names(state, ctx, pl.zones.hand)}.${cands.length ? ` ${me.name} chooses a card to discard.` : ''}`);
+          if (!cands.length) { log(state, ctx, r.controller, `${r.sourceName}: no ${p.DiscardValidDesc ?? 'valid card'} to choose.`); continue; }
+          picks.push({ kind: 'pick', action: 'discard', chooser: r.controller, candidates: cands, left: Math.min(n, cands.length), optional: false, reveal: pid, label: `${r.sourceName}: choose ${p.DiscardValidDesc ? `a ${p.DiscardValidDesc.replace(/ from it/, '')}` : 'a card'} for ${pl.name} to discard` });
         } else {
           if (!cands.length) { log(state, ctx, pid, `${pl.name} has nothing to discard.`); continue; }
           log(state, ctx, pid, `${pl.name} chooses ${n} card${n === 1 ? '' : 's'} to discard.`);
@@ -1093,7 +1126,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const o = objects(state, r, i, 'You');
       if (!o) return bad();
       for (const pid of o.players) {
-        if (pid !== r.controller) me.viewingHandOf = pid;
+        revealHandTo(state, r.controller, pid);
         log(state, ctx, r.controller, `${pname(state, pid)} reveals their hand: ${names(state, ctx, player(state, pid).zones.hand)}.`);
       }
       return 'ok';

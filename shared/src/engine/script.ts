@@ -386,7 +386,8 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     case 'ChangeZoneAll': if (!p.Destination || !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination) || !p.Origin || /Stack|Any/.test(p.Origin)) return 'ChangeZoneAll'; break;
     case 'PutCounter': if (!p.CounterType && !p.Adapt) return 'PutCounter'; break;
     case 'Pump': case 'PumpAll':
-      if (p.PumpZone || (p.KW && /HIDDEN|Protection|:/.test(p.KW))) return `${api} (special keyword)`;
+      if (p.PumpZone && !(api === 'Pump' && /^(Flashback|Retrace)$/.test(p.KW ?? ''))) return `${api} (special keyword)`;
+      if (p.KW && /HIDDEN|:/.test(p.KW) && !/^Protection/.test(p.KW)) return `${api} (special keyword)`;
       if (p.Defined && ['You', 'Player', 'Opponent', 'TargetedPlayer'].includes(p.Defined)) return `${api} (player)`;
       break;
   }

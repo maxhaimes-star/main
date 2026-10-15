@@ -73,6 +73,10 @@ export function viewFor(state: GameState, viewer: string | null): GameView {
   });
   const { history, cards: _c, players: _p, pending, events: _e, triggerQueue: _q, delayedTriggers: _d, turnStats: _t, remembered: _r, ...rest } = state;
   // Engine questions: only the answering player sees the options (they may name hidden cards); internal data never leaves the server.
-  const pendingView = (pending ?? []).map((q) => ({ ...q, options: q.pid === viewer || controls(state, viewer, q.pid) ? q.options : [], data: {} }));
+  const pendingView = (pending ?? []).map((q) => {
+    const mine = q.pid === viewer || controls(state, viewer, q.pid);
+    const { revealed, ...rest } = q;
+    return { ...rest, options: mine ? q.options : [], data: {}, ...(mine && revealed ? { revealed } : {}) };
+  });
   return { ...rest, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
 }
