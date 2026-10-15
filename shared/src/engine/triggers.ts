@@ -606,7 +606,6 @@ function miracle(state: GameState, ctx: Ctx, ev: Extract<GameEvent, { t: 'drawn'
   const kw = getScript(c.cardId)?.[0]?.keywords.find((k) => /^Miracle:/.test(k));
   if (!kw) return;
   const cost = kw.split(':')[1].trim();
-  if (/X/.test(cost)) return; // X miracle costs: not offered automatically
   if (state.players.find((p) => p.pid === ev.pid)?.autoTriggers === false) return;
   const { toks, unknown } = parseCostTokens(cost);
   if (unknown.length || !canPayCost(state, ctx, ev.pid, undefined, toks, 0)) return; // can't cast it: no need to reveal

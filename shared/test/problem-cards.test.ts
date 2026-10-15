@@ -149,3 +149,29 @@ describe('Once Upon a Time', () => {
     expect(alt.unavailable).toMatch(/Condition not met/);
   });
 });
+
+describe('Entreat the Angels (miracle with X)', () => {
+  it('drawn as the first card of the turn: cast for {X}{W}{W}, choosing X', () => {
+    const { g, ctx } = setup(['entreat_the_angels', 'opt', 'basic_island'], [], 'basic_plains');
+    lands(g, 'a', 'basic_island', 1);
+    lands(g, 'a', 'basic_plains', 4);
+    const opt = toHand(g, ctx, 'a', 'opt');
+    const ent = find(g, 'a', 'entreat_the_angels');
+    moveCard(g, ctx, ent, 'library', { position: 'top' });
+    act(g, ctx, 'a', { t: 'cast', iid: opt });
+    drain(g, ctx);
+    // Opt: scry 1 (keep it on top), then draw it
+    if (g.players[0].peek) {
+      const pk = g.players[0].peek;
+      act(g, ctx, 'a', { t: 'resolvePeek', top: pk.iids, bottom: [], graveyard: [], hand: [], battlefield: [], exile: [], shuffle: false });
+    }
+    for (let i = 0; i < 5 && g.pending.length && !/X=/.test(g.pending[0].options.map((o) => o.label).join()); i++) answer(g, ctx, /yes|Put|Cast|Miracle|Keep|^Top/i);
+    drain(g, ctx);
+    const q = g.pending[0];
+    expect(q.options.map((o) => o.label)).toContain('Cast Entreat the Angels with X=2');
+    answer(g, ctx, /X=2/);
+    drain(g, ctx);
+    expect(g.battlefield.filter((i) => g.cards[i].token?.name === 'Angel').length).toBe(2);
+    expect(g.cards[ent].zone).toBe('graveyard');
+  });
+});

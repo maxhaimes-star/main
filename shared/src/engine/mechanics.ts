@@ -24,7 +24,6 @@ export const HANDLED_KEYWORDS = new Set([
 /** Why a K: line isn't handled automatically (null = handled). */
 export function keywordGap(k: string): string | null {
   const head = k.split(':')[0].trim();
-  if (head === 'Miracle' && /X/.test(k.split(':')[1] ?? '')) return 'Miracle (X cost)';
   if (HANDLED_KEYWORDS.has(head) || /^Protection from /.test(head)) return null;
   return head;
 }
