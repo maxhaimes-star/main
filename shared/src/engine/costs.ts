@@ -20,6 +20,7 @@ import { isValidTarget, matchCard } from './targets.ts';
 import { adjustCost, castRestriction } from './statics.ts';
 import { castTimingError } from './timing.ts';
 import { applyPermissions } from './permissions.ts';
+import { applyCastKeywords, escalateParts } from './castkw.ts';
 import { autoTapFor } from './strict.ts';
 import type { AutoInfo, CastInfo, CastOption, TargetRef } from './types.ts';
 
@@ -212,6 +213,7 @@ function optionDefs(state: GameState, c: CardInstance, pid: string, face: number
     if (p.CheckSVar) def.parts = [...def.parts, { kind: 'other', n: '0', valid: '', text: 'Check the condition by hand' }];
     defs.push(def);
   }
+  applyCastKeywords(state, c, pid, face, defs, name, parseCost, lookup); // spectacle, multikicker, mayhem ... (engine/castkw.ts)
   applyPermissions(state, c, pid, face, defs, lookup); // casting from exile / graveyard / library (engine/permissions.ts)
   // Can the non-mana parts be paid?
   for (const d of defs) {
@@ -279,6 +281,8 @@ export function planCast(state: GameState, c: CardInstance, pid: string, a: Cast
     mana += k.mana;
     parts = [...parts, ...k.parts];
   }
+  const esc = escalateParts(c, a.modes, name, parseCost); // Escalate (engine/castkw.ts)
+  if (esc) { mana += esc.mana; parts = [...parts, ...esc.parts]; }
   const plan: CastPlan = { def, mana, parts, kicked, x };
 
   // Engine info (targets). Overload: "target" becomes "each" — every legal object is affected.
@@ -432,6 +436,7 @@ export function finishCast(state: GameState, ctx: Ctx, pid: string, c: CardInsta
   const me = player(state, pid);
   const info: CastInfo = { option: plan.def.id, ...plan.def.flags };
   if (plan.kicked) info.kicked = true;
+  if (plan.x) info.x = plan.x;
   if (paid.colors.length) info.colorsSpent = paid.colors;
   if (plan.def.id !== 'faceDown') { c.castInfo = info; item.castInfo = { ...info }; }
   if (item.auto) {

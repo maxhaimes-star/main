@@ -279,7 +279,7 @@ export function bestPermission(st: PermState, pid: string, iid: string, face: nu
 // ------------------------------------------------------------------ cast options (costs.ts)
 
 /** Cast options that carry their own zone requirement (they don't need a permission). */
-const OWN_ZONE_OPTIONS = new Set(['flashback', 'escape', 'madness', 'evoke', 'dash', 'overload', 'spectacle', 'surge', 'miracle', 'faceDown']);
+const OWN_ZONE_OPTIONS = new Set(['flashback', 'escape', 'madness', 'evoke', 'dash', 'overload', 'spectacle', 'surge', 'miracle', 'faceDown', 'foretell', 'mayhem']);
 
 const ZONE_WORD: Record<string, string> = { graveyard: 'your graveyard', exile: 'exile', library: 'your library', command: 'the command zone', sideboard: 'your sideboard' };
 

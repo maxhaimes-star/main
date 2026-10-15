@@ -405,7 +405,12 @@ function priorityAction(G: Game, pid: string) {
     if (g.priority !== pid || g.pending.length) return; // something changed (e.g. a cost question)
   }
   G.context = g.stack.length ? stackCard(G) : G.context;
-  act(G, pid, { t: 'pass' });
+  const err = act(G, pid, { t: 'pass' });
+  // An illegal block (menace, "can't be blocked except by ...") is refused when blocks are confirmed: take the blocks back.
+  if (err && g.step === 'blockers' && !mine) {
+    for (const iid of g.battlefield) if (g.cards[iid].controller === pid && g.cards[iid].blocking) act(G, pid, { t: 'declareBlocker', iid, attacker: null });
+    act(G, pid, { t: 'pass' });
+  }
 }
 
 function stackCard(G: Game): string {

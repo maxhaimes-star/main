@@ -27,6 +27,7 @@ import { turnInfo } from './durations.ts';
 import { conditionTrue, evalCount } from './counts.ts';
 import { canPayCost, parseCostTokens } from './paycost.ts';
 import { keywordTriggers } from './kwtriggers.ts';
+import { emitUnblocked } from './combat-rules.ts';
 import { wardReminders } from './keyword-play.ts';
 import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
 
@@ -39,11 +40,12 @@ export const SUPPORTED_MODES = new Set([
   'ChangesZone', 'ChangesZoneAll', 'Phase', 'Attacks', 'AttackersDeclared', 'Blocks', 'SpellCast', 'Drawn', 'DamageDone',
   'DamageDoneOnce', 'DamageDealtOnce', 'Sacrificed', 'Discarded', 'DiscardedAll', 'LandPlayed', 'Exiled',
   'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch', 'SearchedLibrary', 'DamageAll',
+  'TokenCreated', 'TokenCreatedOnce', 'CounterAdded', 'CounterAddedOnce', 'AttackerUnblocked', 'AttackerUnblockedOnce',
 ]);
 
 /** Trigger parameters the engine understands; a trigger with any other parameter is left to the players. */
 const KNOWN_PARAMS = new Set([
-  'Mode', 'Execute', 'TriggerDescription', 'Alone', 'ValidCard', 'ValidCards', 'Origin', 'Destination', 'TriggerZones', 'ValidPlayer', 'Phase',
+  'Mode', 'Execute', 'TriggerDescription', 'Alone', 'ValidToken', 'CounterType', 'ValidAttackingPlayer', 'ValidDefenders', 'ValidCard', 'ValidCards', 'Origin', 'Destination', 'TriggerZones', 'ValidPlayer', 'Phase',
   'OptionalDecider', 'ValidActivatingPlayer', 'ValidSource', 'ValidTarget', 'Static', 'Secondary', 'CombatDamage', 'IsPresent',
   'PresentCompare', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
   'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA', 'CheckDefinedPlayer', 'FirstAttack', 'Delirium', 'ResolvedLimit',
@@ -72,6 +74,8 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
     const ch = triggerChain(cardId, face, p.Execute);
     if (p.Mode === 'TapsForMana' && (ch?.api === 'Mana' || ch?.api === 'ManaReflected')) return { detect: true, chain: true };
     if (ch?.api === 'Cleanup' && SUPPORTED_MODES.has(p.Mode)) return { detect: true, chain: true };
+    // "Forget it" bookkeeping (Chrome Mox, Spell Queller): what is remembered is looked up live, so nothing to do.
+    if (ch?.api === 'Pump' && !ch.sub && Object.keys(ch.params).every((k) => /^(Forget|Defined$|StackDescription$|SpellDescription$)/.test(k))) return { detect: true, chain: true };
     return { detect: false, chain: false, reason: 'static' };
   }
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
@@ -148,6 +152,7 @@ function trackTurnEvents(state: GameState, ctx: Ctx) {
       if (who) ti.activations[`attacks|${who}`] = (ti.activations[`attacks|${who}`] ?? 0) + 1;
     } else if (ev.t === 'zone' && ev.to === 'battlefield') ti.activations[`entered|${ev.iid}`] = 1;
     if (ev.t === 'zone' && ev.cause === 'sacrifice') (state.remembered ??= {})[`sacrificed|${ev.snap.controller}`] = [ev.iid];
+    if (ev.t === 'zone' && ev.cause === 'discard') ti.activations[`discarded|${ev.iid}`] = 1; // mayhem (engine/castkw.ts)
   }
   // Ascend: ten or more permanents -> the city's blessing (for the rest of the game).
   for (const p of state.players) {
@@ -275,6 +280,28 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, player: ev.active };
     }
+    case 'TokenCreated': case 'TokenCreatedOnce': {
+      if (ev.t !== 'zone' || ev.from !== 'none' || ev.to !== 'battlefield') return null;
+      const c = state.cards[ev.iid] ?? ev.snap;
+      r = and(matchC(c, p.ValidToken ?? 'Card', env), p.ValidPlayer ? matchP(c.controller, p.ValidPlayer, env) : true);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: c.controller };
+    }
+    case 'CounterAdded': case 'CounterAddedOnce': {
+      if (ev.t !== 'counterAdded') return null;
+      if (p.CounterType && counterName(p.CounterType) !== ev.kind) return null;
+      const c = state.cards[ev.iid];
+      r = matchC(c, p.ValidCard ?? 'Card', env);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: c?.controller, amount: ev.n };
+    }
+    case 'AttackerUnblocked': case 'AttackerUnblockedOnce': {
+      if (ev.t !== 'unblocked') return null;
+      r = and(p.ValidAttackingPlayer ? matchP(ev.attackingPlayer, p.ValidAttackingPlayer, env) : true, p.ValidDefenders ? matchP(ev.defender, p.ValidDefenders, env) : true);
+      if (p.ValidAttackers) r = and(r, ev.attackers.some((x) => matchC(state.cards[x], p.ValidAttackers, env) === true));
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.attackers[0], player: ev.attackingPlayer, defender: ev.defender };
+    }
     case 'Attacks': {
       if (ev.t !== 'attacks') return null;
       const c = state.cards[ev.iid];
@@ -392,7 +419,8 @@ function staticCleanup(state: GameState, ctx: Ctx, host: Host, p: Record<string,
 /** "Once"/"All" modes trigger once per batch (per target / per source for the damage ones). */
 function onceKey(mode: string, hit: TriggerContext): string | null {
   switch (mode) {
-    case 'ChangesZoneAll': case 'DiscardedAll': case 'AttackersDeclared': case 'DamageAll': return '';
+    case 'ChangesZoneAll': case 'DiscardedAll': case 'AttackersDeclared': case 'DamageAll': case 'TokenCreatedOnce': case 'AttackerUnblockedOnce': return '';
+    case 'CounterAddedOnce': return `c:${hit.card}`;
     case 'DamageDoneOnce': return `t:${hit.target}`;
     case 'DamageDealtOnce': return `s:${hit.source}`;
   }
@@ -463,8 +491,15 @@ function queueFor(state: GameState, ctx: Ctx, host: Host, index: number, p: Reco
   return q;
 }
 
+function counterName(forge: string): string {
+  const t = forge.trim().toUpperCase();
+  return t === 'P1P1' ? '+1/+1' : t === 'M1M1' ? '-1/-1' : t === 'LOYALTY' ? 'loyalty' : t.toLowerCase();
+}
+
 /** Find the triggered abilities that the events in state.events trigger, and queue them (APNAP). */
 function detect(state: GameState, ctx: Ctx) {
+  // No-blockers shortcut (strict: the defender couldn't block): the attackers are unblocked all the same.
+  if ((state.events ?? []).some((e) => e.t === 'phase' && e.step === 'blockers') && state.combat.blockersDeclared) emitUnblocked(state);
   const events = state.events ?? [];
   state.events = [];
   if (!events.length) return;

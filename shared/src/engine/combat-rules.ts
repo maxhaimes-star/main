@@ -7,7 +7,7 @@
  *  - tokens created "tapped and attacking" join the combat.
  */
 import { cardName, faceOf, hasKeyword, isCreature } from '../game/rules.ts';
-import { type Ctx, log } from '../game/state.ts';
+import { type Ctx, emit, log } from '../game/state.ts';
 import type { CardInstance, GameState } from '../game/types.ts';
 import { evasionRestriction, illegalBlocks } from './protection.ts';
 import { attackRestriction, staticsOfKind } from './statics.ts';
@@ -83,6 +83,26 @@ export function enforceBlockRestrictions(state: GameState, ctx: Ctx, defender: s
     log(state, ctx, defender, `${cardName(b, ctx.lookup)} can't block alone — ${why}.`);
     b.blocking = undefined;
   }
+  emitUnblocked(state);
+}
+
+/** "Whenever one or more creatures attack you and aren't blocked" (Coveted Jewel): emitted once per combat when blocks are final. */
+export function emitUnblocked(state: GameState) {
+  const attackers = state.battlefield.filter((iid) => state.cards[iid].attacking);
+  if (!attackers.length) return;
+  const ti = turnInfo(state);
+  const key = `unblocked|${[...attackers].sort().join(',')}`;
+  if (ti.activations[key]) return;
+  ti.activations[key] = 1;
+  const blocked = new Set(state.battlefield.map((iid) => state.cards[iid].blocking).filter(Boolean));
+  const byDefender = new Map<string, string[]>();
+  for (const iid of attackers) {
+    if (blocked.has(iid)) continue;
+    const target = state.cards[iid].attacking!;
+    const defender = state.cards[target]?.controller ?? target;
+    byDefender.set(defender, [...(byDefender.get(defender) ?? []), iid]);
+  }
+  for (const [defender, list] of byDefender) emit(state, { t: 'unblocked', attackers: list, attackingPlayer: state.activePlayer, defender });
 }
 
 /** A token created "tapped and attacking": it attacks what `attackerOf` (or the source) attacks, else the defending player. */

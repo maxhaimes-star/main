@@ -206,8 +206,8 @@ export function castZoneError(state: AnyState, pid: string, c: CardInstance, cos
   const name = cardName(c, lookup);
   if (c.zone === 'hand') return c.owner === pid ? null : `You can't cast ${name} from another player's hand`;
   const opt = costOption ?? 'normal';
-  if (c.zone === 'graveyard' && ['flashback', 'escape'].includes(opt) && c.owner === pid) return null;
-  if (c.zone === 'exile' && opt === 'madness' && c.owner === pid) return null;
+  if (c.zone === 'graveyard' && ['flashback', 'escape', 'mayhem'].includes(opt) && c.owner === pid) return null;
+  if (c.zone === 'exile' && (opt === 'madness' || opt === 'foretell') && c.owner === pid) return null;
   if (c.zone === 'exile' && c.castAs && c.owner === pid) return null; // on an adventure
   if (mayPlayPermission(state as StaticsState, c.iid, pid, lookup, asGame(state).remembered)) return null;
   return `You can't cast ${name} from ${c.owner === pid ? 'your' : "another player's"} ${c.zone}`;

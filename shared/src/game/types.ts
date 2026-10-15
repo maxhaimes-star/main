@@ -211,7 +211,11 @@ export type GameEvent =
   /** A player became the monarch (Mode$ BecomeMonarch). */
   | { t: 'monarch'; pid: string }
   /** `pid` searched `owner`'s library (Mode$ SearchedLibrary). */
-  | { t: 'searched'; pid: string; owner: string };
+  | { t: 'searched'; pid: string; owner: string }
+  /** Counters were put on a permanent (Mode$ CounterAdded / CounterAddedOnce). */
+  | { t: 'counterAdded'; iid: string; kind: string; n: number }
+  /** Blockers are declared: these attackers of `attackingPlayer` attacking `defender` weren't blocked (Mode$ AttackerUnblocked(Once)). */
+  | { t: 'unblocked'; attackers: string[]; attackingPlayer: string; defender: string };
 
 /**
  * Actions a player can send. All are validated in the reducer.

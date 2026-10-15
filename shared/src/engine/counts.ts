@@ -20,11 +20,13 @@ export interface CountEnv {
   sourceIid?: string;
   x?: number;
   kicked?: boolean;
+  /** Multikicker: times kicked. */
+  timesKicked?: number;
   colorsSpent?: string[];
 }
 
 const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent'];
-export const KNOWN_CONDITIONS = new Set([...FLAGS, 'PlayerTurn', 'NotPlayerTurn']);
+export const KNOWN_CONDITIONS = new Set([...FLAGS, 'PlayerTurn', 'NotPlayerTurn', 'Blessing', 'Monarch']);
 const ZONED = { ValidGraveyard: 'graveyard', ValidHand: 'hand', ValidLibrary: 'library', ValidExile: 'exile' } as const;
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
 const BASIC = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
@@ -70,6 +72,10 @@ export function conditionTrue(name: string, env: CountEnv): boolean | undefined 
     case 'Revolt': return !!s.turnInfo && s.turnInfo.turn === s.turn && s.turnInfo.leftBattlefield.includes(env.controller);
     case 'Threshold': return zoneCards(s, env.controller, 'graveyard').length >= 7;
     case 'Hellbent': return zoneCards(s, env.controller, 'hand').length === 0;
+    case 'Blessing': case 'Monarch': {
+      const p = s.players.find((x) => x.pid === env.controller) as { designations?: string[] } | undefined;
+      return !!p?.designations?.includes(name === 'Blessing' ? "City's Blessing" : 'Monarch');
+    }
     case 'Metalcraft': return mine(s, env.controller).filter((c) => faceOf(c, env.lookup).types.includes('Artifact')).length >= 3;
     case 'Delirium': {
       const types = new Set<string>();
@@ -107,7 +113,7 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     if (t == null) return undefined;
     n = parseInt(t ? m[2] : m[3], 10);
   } else if (body === 'Converge') n = new Set((env.colorsSpent ?? []).filter((c) => 'WUBRG'.includes(c))).size;
-  else if (body === 'TimesKicked') n = env.kicked ? 1 : 0;
+  else if (body === 'TimesKicked') n = env.timesKicked ?? (env.kicked ? 1 : 0);
   else if (body === 'YourStartingLife') n = 20;
   else if (body === 'Domain') {
     const types = new Set<string>();

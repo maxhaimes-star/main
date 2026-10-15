@@ -387,7 +387,8 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   }
   if (ext) return extUnsupported(step);
   switch (api) {
-    case 'Discard': if (p.Mode && !['Random', 'TgtChoose', 'RevealYouChoose', 'Hand'].includes(p.Mode)) return `Discard (Mode$ ${p.Mode})`; break;
+    case 'Discard': if (p.Mode && !['Random', 'TgtChoose', 'RevealYouChoose', 'Hand', 'Defined'].includes(p.Mode)) return `Discard (Mode$ ${p.Mode})`;
+      if (p.Mode === 'Defined' && !(SUPPORTED_DEFINED.has(p.DefinedCards ?? '') || MORE_DEFINED.has(p.DefinedCards ?? ''))) return 'Discard (DefinedCards)'; break;
     case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any' && !/^Combo (Any|[WUBRGC]( [WUBRGC])*)$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
     case 'DelayedTrigger':
       if (!p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';

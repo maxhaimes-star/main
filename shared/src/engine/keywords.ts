@@ -17,7 +17,7 @@
 import { type ForgeFace, SYNTH_BASE } from './types.ts';
 
 /** Effect APIs that only synthesized keyword abilities use (executed by keyword-play.ts). */
-export const KEYWORD_APIS = new Set(['Unattach', 'Crew', 'Ninjutsu']);
+export const KEYWORD_APIS = new Set(['Unattach', 'Crew', 'Ninjutsu', '_Foretell']);
 
 export interface SynthAbility {
   index: number;
@@ -96,6 +96,10 @@ export function synthAbilities(f: ForgeFace): SynthAbility[] {
         });
         break;
       }
+      case 'Foretell':
+        // A special action (keyword-play.ts specialAction): no stack, the card stays hidden.
+        add(0, `AB$ _Foretell | Cost$ 2 | ActivationZone$ Hand | Keyword$ Foretell | SpellDescription$ Foretell {2} (During your turn, exile this card from your hand face down. Cast it on a later turn for its foretell cost.)`);
+        break;
       case 'Ninjutsu': {
         const cost = (parts[1] ?? '0').trim() || '0';
         add(0, `AB$ Ninjutsu | Cost$ ${cost} | ActivationZone$ Hand | ValidTgts$ Creature.attacking+YouCtrl | TgtPrompt$ Select an unblocked attacking creature you control to return to its owner's hand | TargetsAreCost$ True | Keyword$ Ninjutsu | SpellDescription$ Ninjutsu ${costText(cost)} (Return an unblocked attacker you control to hand: put CARDNAME onto the battlefield from your hand tapped and attacking.)`);

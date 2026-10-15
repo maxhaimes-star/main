@@ -134,6 +134,7 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       return 'ok';
     }
     case '_Fading': case '_CumUpkeep': case '_Cascade': case '_Storm': case '_LivingWeapon': case '_Ravenous': case '_Backup': case '_PutBottom':
+    case '_Madness': case '_ToGraveyard': case '_Replicate': case '_FlashSac':
       return keywordStep(state, ctx, r);
     case '_SetChosenType': r.chosen.type = p.Type; return 'ok';
     case '_Throne': {
@@ -600,6 +601,7 @@ function amass(state: GameState, ctx: Ctx, r: MoreRun): Result {
   const put = (iid: string) => {
     const c = state.cards[iid];
     c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + n;
+    emit(state, { t: 'counterAdded', iid, kind: '+1/+1', n });
     log(state, ctx, r.controller, `Amass ${type}s ${n}: ${cardName(c, ctx.lookup)} gets ${n} +1/+1 counter${n === 1 ? '' : 's'} (now ${c.counters['+1/+1']}).`);
     if (p.RememberAmass) r.remember([iid]);
   };
@@ -755,6 +757,7 @@ function keywordStep(state: GameState, ctx: Ctx, r: MoreRun): Result {
       const c = t && t.kind === 'card' ? state.cards[t.iid] : undefined;
       if (!c || c.zone !== 'battlefield') return 'ok';
       c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + n;
+      emit(state, { t: 'counterAdded', iid: c.iid, kind: '+1/+1', n });
       log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gets ${n} +1/+1 counter${n === 1 ? '' : 's'} (backup).`);
       const svar = p.Abilities;
       if (c.iid !== r.sourceIid && svar && r.svars[svar]) r.splice('_kw', { line: `${r.svars[svar]} | Defined$ Targeted` });
@@ -782,6 +785,40 @@ function keywordStep(state: GameState, ctx: Ctx, r: MoreRun): Result {
         r.splice('_kw', { line: 'DB$ Play | Defined$ Remembered | WithoutManaCost$ True | Optional$ True | ValidSA$ Spell | SpellDescription$ You may cast it without paying its mana cost.' });
       }
       if (exiled.length) r.splice('_kw', { line: `DB$ _PutBottom | Cards$ ${exiled.join(',')} | SpellDescription$ Put the exiled cards on the bottom in a random order.` });
+      return 'ok';
+    }
+    case '_Madness': {
+      const iid = r.trig?.card;
+      if (!iid || state.cards[iid]?.zone !== 'exile') return 'ok';
+      const cost = p.Cost ?? '';
+      r.splice('_kw', { line: `DB$ Play | Defined$ TriggeredCard | PlayCost$ ${cost} | Optional$ True | SpellDescription$ Cast it for its madness cost.` });
+      r.splice('_kw', { line: `DB$ _ToGraveyard | Cards$ ${iid} | SpellDescription$ Otherwise it goes to the graveyard.` });
+      return 'ok';
+    }
+    case '_ToGraveyard': {
+      for (const iid of (p.Cards ?? '').split(',')) {
+        const c = state.cards[iid];
+        if (c?.zone !== 'exile') continue;
+        moveCard(state, ctx, iid, 'graveyard');
+        log(state, ctx, c.owner, `${cardName(c, ctx.lookup)} is put into its owner's graveyard.`);
+      }
+      return 'ok';
+    }
+    case '_Replicate': {
+      const iid = r.trig?.card;
+      const item = iid ? state.stack.find((s) => s.iid === iid) : undefined;
+      const n = item?.castInfo?.replicated ?? 0;
+      if (n > 0) r.splice('_kw', { line: `DB$ CopySpellAbility | Defined$ TriggeredSpellAbility | Amount$ ${n} | MayChooseTarget$ True | SpellDescription$ Replicate: copy it.` });
+      return 'ok';
+    }
+    case '_FlashSac': {
+      if (!onBf?.castInfo?.flashSac || !onBf.cardId) return 'ok';
+      (state.delayedTriggers ??= []).push({
+        id: randomId(ctx.rng), controller: r.controller, sourceIid: onBf.iid, sourceName: r.sourceName, text: `${r.sourceName}: sacrifice it (cast with flash)`,
+        step: 'cleanup', turn: state.turn, createdStep: state.step,
+        auto: { cardId: onBf.cardId, face: 0, source: 'trigger', index: -1, targets: [], line: 'DB$ Sacrifice | Defined$ Self | SpellDescription$ Sacrifice it.', trigger: { mode: 'Delayed', remembered: [onBf.iid], lki: {} } },
+      });
+      log(state, ctx, r.controller, `${r.sourceName} will be sacrificed at the beginning of the next cleanup step.`);
       return 'ok';
     }
     case '_PutBottom': {

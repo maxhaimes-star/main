@@ -69,6 +69,12 @@ export function keywordTriggers(keywords: readonly string[]): KeywordTrigger[] {
       case 'Ravenous':
         out.push({ kw: head, params: { ...etb, TriggerDescription: 'Ravenous — if X is 5 or more, draw a card.' }, line: 'DB$ _Ravenous | SpellDescription$ Ravenous.' });
         break;
+      case 'Replicate':
+        out.push({ kw: head, params: { ...castSelf, TriggerDescription: 'Replicate — copy this spell for each time its replicate cost was paid.' }, line: 'DB$ _Replicate | SpellDescription$ Replicate.' });
+        break;
+      case 'MayFlashSac':
+        out.push({ kw: head, params: { ...etb, TriggerDescription: 'If it was cast with flash, sacrifice it at the beginning of the next cleanup step.' }, line: 'DB$ _FlashSac | SpellDescription$ Flash sacrifice.' });
+        break;
       case 'Backup': {
         const n = parseInt(arg, 10) || 1;
         out.push({ kw: head, params: { ...etb, TriggerDescription: `Backup ${n} — put ${n} +1/+1 counter${n === 1 ? '' : 's'} on target creature. If that's another creature, it gains this creature's abilities until end of turn.` },
@@ -81,4 +87,4 @@ export function keywordTriggers(keywords: readonly string[]): KeywordTrigger[] {
 }
 
 /** K: keywords keywordTriggers synthesizes. */
-export const TRIGGER_KEYWORDS = ['Annihilator', 'Exalted', 'Persist', 'Undying', 'Living Weapon', 'Fading', 'Vanishing', 'Cumulative upkeep', 'Cascade', 'Storm', 'Ravenous', 'Backup', 'Miracle', 'Rebound'];
+export const TRIGGER_KEYWORDS = ['Foretell', 'Replicate', 'MayFlashSac', 'Madness', 'Spectacle', 'Surge', 'AlternateAdditionalCost', 'Multikicker', 'Mayhem', 'Escalate', 'Annihilator', 'Exalted', 'Persist', 'Undying', 'Living Weapon', 'Fading', 'Vanishing', 'Cumulative upkeep', 'Cascade', 'Storm', 'Ravenous', 'Backup', 'Miracle', 'Rebound'];

@@ -6,7 +6,7 @@ import { abilityAt, abilityLine, getScript, GRANT_BASE, scriptRef, spellAbility,
 import { FOREIGN_BASE, foreignAbility } from './grants.ts';
 import { hasGrantedAbility } from './animate.ts';
 import { divisionError } from './divide.ts';
-import { afterActivation, checkActivation } from './keyword-play.ts';
+import { afterActivation, checkActivation, specialAction } from './keyword-play.ts';
 import { isValidTarget } from './targets.ts';
 import { activateRestriction, adjustCost } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
@@ -124,6 +124,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (divErr) return `${src}: ${divErr}`;
   const kwErr = checkActivation(state, ctx, pid, c, ab, a.ability!, res.targets);
   if (kwErr) return kwErr;
+  const special = specialAction(state, ctx, pid, c, ab); // foretell (keyword-play.ts)
+  if (special !== undefined) return special;
   const x = a.x ?? 0;
   const num = (v: string) => (v === 'X' ? x : parseInt(v, 10) || 0);
 

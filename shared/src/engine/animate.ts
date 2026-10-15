@@ -44,7 +44,7 @@ export function animateUnsupported(step: ParsedAbility): string | null {
   if (p.AtEOT && !['Sacrifice', 'Exile', 'Hand'].includes(p.AtEOT)) return `${step.api} (AtEOT$ ${p.AtEOT})`;
   if (list(p.Colors).some((c) => !COLOR_LETTER[c] && c !== 'Colorless')) return `${step.api} (Colors$ ${p.Colors})`;
   if (list(p.Types).some((t) => /Chosen|Remembered/.test(t))) return `${step.api} (Types$ ${p.Types})`;
-  if (list(p.Keywords, '&').some((k) => k.includes(':') && !/^Protection:/.test(k))) return `${step.api} (Keywords$ ${p.Keywords})`;
+  if (list(p.Keywords, '&').some((k) => k.includes(':') && !/^(Protection|Enchant):/.test(k))) return `${step.api} (Keywords$ ${p.Keywords})`;
   for (const k of ['Power', 'Toughness']) if (p[k] != null && !/^-?\d+$/.test(p[k]) && !step.svars?.[p[k]]) return `${step.api} (${k}$ ${p[k]})`;
   if (step.api === 'AnimateAll' && !p.ValidCards) return 'AnimateAll (ValidCards)';
   if (p.Defined && /\./.test(p.Defined) && !/^Targeted\.[!A-Za-z+]+$/.test(p.Defined)) return `Animate (Defined$ ${p.Defined})`;

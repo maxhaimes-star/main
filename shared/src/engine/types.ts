@@ -212,6 +212,11 @@ export interface CastInfo {
   colorsSpent?: string[];
   /** X paid (permanents keep it: ravenous). */
   x?: number;
+  /** Multikicker: times kicked; Replicate: times replicated (engine/castkw.ts). */
+  timesKicked?: number;
+  replicated?: number;
+  /** MayFlashSac: cast when a sorcery couldn't have been — sacrificed at the next cleanup. */
+  flashSac?: boolean;
 }
 
 /** One way to cast a card (normal cost, alternative cost, kicker ...). */

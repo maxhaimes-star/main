@@ -270,6 +270,7 @@ function countEnv(state: GameState, ctx: Ctx, r: Run): CountEnv {
   return {
     state, lookup: ctx.lookup, controller: r.controller, sourceIid: r.sourceIid, x: auto?.x ?? r.item.x,
     kicked: auto?.kicked ?? r.item.castInfo?.kicked ?? src?.castInfo?.kicked,
+    timesKicked: r.item.castInfo?.timesKicked ?? src?.castInfo?.timesKicked,
     colorsSpent: auto?.colorsSpent ?? r.item.castInfo?.colorsSpent ?? src?.castInfo?.colorsSpent,
   };
 }
@@ -1026,22 +1027,32 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       }
       let o: Objs | undefined;
       if (step.api === 'PutCounterAll') {
-        const ms = state.battlefield.map((x) => [x, matchCard(state.cards[x], p.ValidCards ?? 'Card', E)] as const);
+        // "Creature.targetedBy": the chain's targets (Guide of Souls).
+        const targetedBy = /\+?targetedBy\b/.test(p.ValidCards ?? '');
+        const valid = (p.ValidCards ?? 'Card').replace(/\+?targetedBy\b/, '').replace(/\.$/, '') || 'Card';
+        const pool = targetedBy ? r.targets.flat().filter((t) => t.kind === 'card').map((t) => (t as { iid: string }).iid).filter((x) => state.battlefield.includes(x)) : state.battlefield;
+        const ms = pool.map((x) => [x, matchCard(state.cards[x], valid, E)] as const);
         if (ms.some(([, m]) => m === 'unknown')) return bad();
         o = { cards: ms.filter(([, m]) => m).map(([x]) => x), players: [] };
       } else o = objects(state, r, i, 'Self');
       if (!o) return bad();
-      for (const iid of o.cards) {
-        const c = state.cards[iid];
-        if (!c) continue;
-        const m = counterAmount(state, ctx, c, kind, n);
-        c.counters[kind] = (c.counters[kind] ?? 0) + m;
-        log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gets ${m} ${kind} counter${m === 1 ? '' : 's'} (now ${c.counters[kind]}).`);
-      }
-      for (const pid of o.players) {
-        const pl = player(state, pid);
-        pl.counters[kind] = (pl.counters[kind] ?? 0) + n;
-        log(state, ctx, pid, `${pl.name} gets ${n} ${kind} counter${n === 1 ? '' : 's'} (now ${pl.counters[kind]}).`);
+      // CounterType2$ / CounterNum2$: a second kind of counter (Guide of Souls' flying counter).
+      const kinds: [string, number][] = [[kind, n]];
+      if (p.CounterType2) kinds.push([counterKind(p.CounterType2), amount(state, ctx, r, p.CounterNum2, 1) ?? 1]);
+      for (const [k, num] of kinds) {
+        for (const iid of o.cards) {
+          const c = state.cards[iid];
+          if (!c) continue;
+          const m = counterAmount(state, ctx, c, k, num);
+          c.counters[k] = (c.counters[k] ?? 0) + m;
+          if (m > 0) emit(state, { t: 'counterAdded', iid, kind: k, n: m });
+          log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gets ${m} ${k} counter${m === 1 ? '' : 's'} (now ${c.counters[k]}).`);
+        }
+        for (const pid of o.players) {
+          const pl = player(state, pid);
+          pl.counters[k] = (pl.counters[k] ?? 0) + num;
+          log(state, ctx, pid, `${pl.name} gets ${num} ${k} counter${num === 1 ? '' : 's'} (now ${pl.counters[k]}).`);
+        }
       }
       return 'ok';
     }
@@ -1165,6 +1176,14 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const picks: Omit<PickData, 'queue' | 'cont'>[] = [];
       for (const pid of o.players) {
         const pl = player(state, pid);
+        if (p.Mode === 'Defined') { // DefinedCards$ (Concealing Curtains: the chosen card)
+          const ids = (defined(state, r, i, p.DefinedCards)?.cards ?? []).filter((x) => pl.zones.hand.includes(x));
+          const nm = names(state, ctx, ids);
+          for (const iid of ids) moveCard(state, ctx, iid, 'graveyard', { cause: 'discard' });
+          remember(ids);
+          if (ids.length) log(state, ctx, pid, `${pl.name} discards ${nm}.`);
+          continue;
+        }
         if (p.Mode === 'Hand' || p.Mode === 'Random') {
           let ids = [...pl.zones.hand];
           if (p.Mode === 'Random') {

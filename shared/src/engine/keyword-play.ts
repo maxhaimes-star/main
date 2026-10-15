@@ -8,6 +8,7 @@ import { type Ctx, emit, log, moveCard, player, randomId } from '../game/state.t
 import type { CardInstance, GameState, StackItem } from '../game/types.ts';
 import { levelStats, type LevelStats } from './keywords.ts';
 import { scriptFaceOf } from './script.ts';
+import { canPayMana, payMana } from './paycost.ts';
 import { type AutoInfo, type ParsedAbility, type Pending, SYNTH_BASE, type TargetRef } from './types.ts';
 
 const ZONE_WORD: Record<string, string> = { hand: 'hand', graveyard: 'graveyard', exile: 'exile', battlefield: 'the battlefield' };
@@ -63,6 +64,22 @@ export function checkActivation(state: GameState, ctx: Ctx, pid: string, c: Card
 }
 
 /** After the ability is on the stack: costs that need choices (Crew), Ninjutsu's return cost, Ward reminders. */
+/**
+ * Special actions activated like abilities but not using the stack (foretell). undefined = not one; else an error or null.
+ * The card's name isn't logged (a foretold card stays hidden from the opponent).
+ */
+export function specialAction(state: GameState, ctx: Ctx, pid: string, c: CardInstance, ab: ParsedAbility): string | null | undefined {
+  if (ab.api !== '_Foretell') return undefined;
+  if (state.activePlayer !== pid) return 'You can foretell only during your turn';
+  if (c.zone !== 'hand' || c.owner !== pid) return 'Foretell: the card must be in your hand';
+  if (!canPayMana(state, pid, '{2}', 0, ctx.lookup)) return 'Foretell: you need {2}';
+  payMana(state, ctx, pid, '{2}');
+  moveCard(state, ctx, c.iid, 'exile', { faceDown: true });
+  (state.remembered ??= {})[`foretold|${c.iid}`] = [String(state.turn)];
+  log(state, ctx, pid, `${pname(state, pid)} pays {2} and foretells a card (exiled face down).`);
+  return null;
+}
+
 export function afterActivation(state: GameState, ctx: Ctx, pid: string, c: CardInstance, ab: ParsedAbility, item: StackItem) {
   const auto = item.auto;
   if (ab.api === 'Ninjutsu' && auto) {

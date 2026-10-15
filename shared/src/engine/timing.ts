@@ -67,7 +67,7 @@ export function castTimingError(state: GameState, c: CardInstance, pid: string, 
       if (p.Caster === 'Opponent' && src.controller === pid) continue;
       if (matchCard(c, p.ValidCard,{ controller: pid, sourceIid: src.iid, lookup }) === true) return null;
     }
-    if (grantsFlash(state, c, pid, lookup)) return null; // also from effects (Teferi, Time Raveler +1), engine/statics.ts
+    if (grantsFlash(state, c, pid, lookup) || script?.keywords.includes('MayFlashSac')) return null; // also from effects (Teferi, Time Raveler +1), engine/statics.ts
     // The card's own "as though it had flash" static (e.g. conditional flash) — trust the player.
     if (script?.statics.some((l) => /Mode\$ CastWithFlash/.test(l) && /ValidCard\$ Card\.Self/.test(l))) return null;
   }

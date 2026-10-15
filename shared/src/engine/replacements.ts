@@ -144,9 +144,30 @@ type MoveResult = { to: Zone; opts: MoveOpts; after?: () => void };
 function beforeMove(state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts): MoveResult | undefined {
   const c = state.cards[iid];
   if (!c || c.zone === to) return undefined;
+  if (to === 'graveyard' && opts.cause === 'discard' && c.zone === 'hand') { const m = madness(state, ctx, c); if (m) return m; }
   if (to === 'graveyard') return toGraveyard(state, ctx, c);
   if (to === 'battlefield') return toBattlefield(state, ctx, c, opts);
   return undefined;
+}
+
+/** Madness: a discarded card with madness is exiled instead, and its owner may cast it for its madness cost (a trigger). */
+function madness(state: GameState, ctx: Ctx, c: CardInstance): MoveResult | undefined {
+  const kw = c.cardId ? getScript(c.cardId)?.[0]?.keywords.find((k) => /^Madness:/.test(k)) : undefined;
+  if (!kw || !c.cardId) return undefined;
+  const cost = kw.split(':')[1].trim();
+  const nm = cardName(c, ctx.lookup);
+  const owner = c.owner;
+  const cardId = c.cardId;
+  return {
+    to: 'exile', opts: { cause: 'discard' },
+    after: () => {
+      log(state, ctx, owner, `${nm} is exiled instead (madness).`);
+      (state.triggerQueue ??= []).push({
+        id: randomId(ctx.rng), controller: owner, sourceIid: c.iid, sourceName: nm, text: `${nm}: Madness — you may cast it by paying ${cost}; otherwise it goes to your graveyard`,
+        auto: { cardId, face: 0, source: 'trigger', index: -1, line: `DB$ _Madness | Cost$ ${cost} | SpellDescription$ Madness.`, targets: [], trigger: { mode: 'Discarded', card: c.iid, player: owner } },
+      });
+    },
+  };
 }
 
 /** A "put it into <zone> instead" redirect from a ReplaceWith$ ChangeZone SVar. */
@@ -261,8 +282,15 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
   // K:etbCounter:<type>:<number>
   const f = c.cardId && !c.faceDown ? getScript(c.cardId)?.[faceIndex(c)] : undefined;
   for (const k of f?.keywords ?? []) {
-    const m = /^etbCounter:([A-Za-z0-9]+):(\d+)(:|$)/.exec(k);
-    if (m) counters.push([counterKind(m[1]), parseInt(m[2], 10)]);
+    const m = /^etbCounter:([A-Za-z0-9]+):(\w+)(:|$)/.exec(k);
+    if (m) {
+      // A number, or an SVar: times kicked (multikicker) / X paid.
+      let n: number | undefined = /^\d+$/.test(m[2]) ? parseInt(m[2], 10) : undefined;
+      const sv = n == null ? f?.svars[m[2]] : undefined;
+      if (sv === 'Count$TimesKicked') n = c.castInfo?.timesKicked ?? (c.castInfo?.kicked ? 1 : 0);
+      else if (sv === 'Count$xPaid') n = c.castInfo?.x ?? 0;
+      if (n) counters.push([counterKind(m[1]), n]);
+    }
     // Fading N / Vanishing N: it enters with N fade / time counters (the upkeep part is engine/kwtriggers.ts).
     const fv = /^(Fading|Vanishing):(\d+)/.exec(k);
     if (fv) counters.push([fv[1] === 'Fading' ? 'fade' : 'time', parseInt(fv[2], 10)]);

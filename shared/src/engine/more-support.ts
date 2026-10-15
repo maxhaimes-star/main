@@ -8,7 +8,7 @@ export const MORE_APIS = new Set([
   'Branch', 'RepeatEach', 'Repeat', 'GenericChoice', 'ChooseCard', 'ChooseNumber', 'TapOrUntap', 'Amass', 'Proliferate', 'Connive',
   'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'DamageResolve',
   'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType', '_Throne',
-  'AddPhase', '_Fading', '_CumUpkeep', '_Cascade', '_Storm', '_LivingWeapon', '_Ravenous', '_Backup', '_PutBottom',
+  'AddPhase', '_Madness', '_ToGraveyard', '_Replicate', '_FlashSac', '_Fading', '_CumUpkeep', '_Cascade', '_Storm', '_LivingWeapon', '_Ravenous', '_Backup', '_PutBottom',
 ]);
 
 /** Defined$ values more.ts resolves (beyond script.ts SUPPORTED_DEFINED). */
