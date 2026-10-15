@@ -11,6 +11,7 @@ import { activateRestriction, adjustCost } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
 import { isUniqueCost, payUniqueCosts, uniqueActivationError, uniqueCostError } from './turns.ts';
+import { abilityPayment, executeAutoPay } from './strict.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
 type ActivateAction = Extract<GameAction, { t: 'activate' }>;
@@ -150,6 +151,13 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   for (const [k, d] of Object.entries(counterDelta)) if (d < 0 && (c.counters[k] ?? 0) < -d) return `${src} doesn't have enough ${k} counters`;
   const extraErr = extraCosts.length ? uniqueCostError(state, ctx, pid, c, extraCosts, x) : null;
   if (extraErr) return extraErr;
+  // Strict mode (engine/strict.ts): {T} needs no summoning sickness; mana is auto-paid (pool, then untapped sources).
+  let strictPlan: import('../game/manapay.ts').PayResult | null = null;
+  if (state.strict) {
+    const pay = abilityPayment(state, pid, c, cost, x, ctx.lookup);
+    if ('error' in pay) { if (!(state.fixMode?.on && a.force)) return pay.error; }
+    else strictPlan = pay.plan;
+  }
 
   // ---- pay
   const me = player(state, pid);
@@ -157,6 +165,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (tap) c.tapped = true;
   if (untap) c.tapped = false;
   if (mana) {
+    if (strictPlan) executeAutoPay(state, ctx, pid, strictPlan);
     const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
     if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
     const paid = payFromPool(mana, me.manaPool, x);

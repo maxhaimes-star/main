@@ -14,7 +14,7 @@ function setup(aCards: string[], bCards: string[] = [], filler = 'basic_mountain
   const g = createGame('g', [
     { pid: 'a', name: 'Alice', deck: filler === 'basic_mountain' ? deck(aCards) : d(aCards), side: [] },
     { pid: 'b', name: 'Bob', deck: deck(bCards), side: [] },
-  ], 'a', ctx);
+  ], 'a', ctx, { strict: false });
   act(g, ctx, 'a', { t: 'keep' });
   act(g, ctx, 'b', { t: 'keep' });
   return { g, ctx };

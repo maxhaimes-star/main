@@ -10,7 +10,7 @@ function setup(seed = 1) {
   const g = createGame('g', [
     { pid: 'a', name: 'Alice', deck: deck(['lightning_bolt', 'goblin_guide', 'thalia_guardian_of_thraben']), side: ['opt'] },
     { pid: 'b', name: 'Bob', deck: deck(['questing_beast', 'glorybringer']), side: [] },
-  ], 'a', ctx);
+  ], 'a', ctx, { strict: false });
   return { g, ctx };
 }
 

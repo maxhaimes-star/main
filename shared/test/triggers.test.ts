@@ -10,7 +10,7 @@ function setup(aCards: string[], bCards: string[] = []) {
   const g = createGame('g', [
     { pid: 'a', name: 'Alice', deck: deck(aCards), side: [] },
     { pid: 'b', name: 'Bob', deck: deck(bCards), side: [] },
-  ], 'a', ctx);
+  ], 'a', ctx, { strict: false });
   act(g, ctx, 'a', { t: 'keep' });
   act(g, ctx, 'b', { t: 'keep' });
   return { g, ctx };

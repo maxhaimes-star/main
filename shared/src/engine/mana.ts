@@ -9,7 +9,7 @@
  * mana, City of Traitors' "sacrifice when you play another land" (a trigger).
  */
 import { getCard } from '../cube.ts';
-import { cardName, faceOf, type Lookup, payFromPool } from '../game/rules.ts';
+import { cardName, faceOf, hasKeyword, isCreature, type Lookup, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, ViewCard } from '../game/types.ts';
 import { isHidden } from '../game/types.ts';
@@ -24,7 +24,7 @@ const BASIC: Record<string, string> = { Plains: 'W', Island: 'U', Swamp: 'B', Mo
 const ANY = ['W', 'U', 'B', 'R', 'G'];
 const NAMES: Record<string, string> = { W: 'white', U: 'blue', B: 'black', R: 'red', G: 'green', C: 'colorless' };
 
-interface Planned extends ManaOption {
+export interface Planned extends ManaOption {
   /** Effects to apply. */
   tap: boolean;
   mana: string;
@@ -110,6 +110,12 @@ export function manaOptionsFor(state: CountState, iid: string, lookup: Lookup = 
   return plan(state, c, lookup).map(({ id, label, produces, sideEffects }) => ({ id, label, produces, sideEffects }));
 }
 
+/** Full mana plans of a permanent (costs and side effects), for auto-pay (engine/strict.ts). */
+export function manaPlansFor(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
+  if (c.zone !== 'battlefield' || !(c.cardId || c.copyOf) || c.faceDown) return [];
+  return plan(state, c, lookup);
+}
+
 /** The activateMana action. Returns an error or null. */
 export function activateMana(state: GameState, ctx: Ctx, pid: string, a: Extract<GameAction, { t: 'activateMana' }>): string | null {
   const c = state.cards[a.iid];
@@ -121,6 +127,9 @@ export function activateMana(state: GameState, ctx: Ctx, pid: string, a: Extract
   if (banned) return banned;
   const name = cardName(c, ctx.lookup);
   if (opt.tap && c.tapped) return `${name} is already tapped`;
+  const sickNow = opt.tap && c.summoningSick && isCreature(c, ctx.lookup, state) && !hasKeyword(c, ctx.lookup, 'Haste', state);
+  if (state.strict && sickNow) return `${name} has summoning sickness`;
+  if (state.strict && !state.fixMode?.on && opt.byHand.length) return `${name}: this mana ability can't be activated automatically (${opt.byHand.join('; ')})`;
   const me = player(state, pid);
   if (opt.mana) {
     const paid = payFromPool(opt.mana, me.manaPool);
