@@ -316,7 +316,12 @@ function amount(state: GameState, ctx: Ctx, r: Run, raw: string | undefined, dfl
 }
 
 function env(state: GameState, ctx: Ctx, r: Run): MatchEnv {
-  return { controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup, num: (name) => amount(state, ctx, r, name, 0) };
+  const src = r.sourceIid ? state.cards[r.sourceIid] : undefined;
+  return {
+    controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup, num: (name) => amount(state, ctx, r, name, 0),
+    turnInfo: turnInfo(state), remembered: r.remembered, defender: r.trig?.defender, attachedTo: src?.attachedTo ?? '',
+    ...(src?.chosen ? { chosen: src.chosen } : {}),
+  };
 }
 
 function compare(state: GameState, ctx: Ctx, r: Run, left: number, expr: string): Tri {

@@ -28,7 +28,15 @@ export function moreVarSupported(v: string | undefined): boolean {
     || /^Count\$YourCountersEnergy\/.+$/.test(v)
     || /^Count\$Valid .+\/(HalfDown|HalfUp|Twice)$/.test(v)
     || /^PlayerCountRegisteredOpponents\$HasPropertyLostLifeThisTurn$/.test(v)
-    || /^Count\$(Compare|IfCastInOwnMainPhase).*$/.test(v);
+    || /^Count\$(Compare|IfCastInOwnMainPhase).*$/.test(v)
+    || /^Count\$(Monarch|Initiative|Blessing|AltCost|Surged|Kicked|AttackedThisTurn|YouAttacked)\.-?\d+\.-?\d+$/.test(v)
+    || /^Count\$(AttackersDeclared|YouAttackedThisTurn)$/.test(v)
+    || /^DungeonsCompleted\$Amount$/.test(v)
+    || /^PlayerCountOpponents\$HighestValid .+$/.test(v)
+    || /^PlayerCountOpponents\$(HighestCardsInHand|LowestLifeTotal|HighestLifeTotal)$/.test(v)
+    || /^Count\$CardsInYourHand\/.+$/.test(v)
+    || /^Count\$xPaid\/(HalfDown|HalfUp|Twice)$/.test(v)
+    || /^Count\$ValidExile .+$/.test(v);
 }
 
 /** Reason the step can't be automated: undefined = not a more.ts API, null = supported. */

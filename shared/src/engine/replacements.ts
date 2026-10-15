@@ -23,6 +23,8 @@ import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/typ
 import { getScript, parseParams, SCRIPTS, scriptRef } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';
 import { playerProtectedFrom, protectedFrom } from './protection.ts';
+import { untapLimits } from './statics.ts';
+import { turnInfo } from './durations.ts';
 import type { EffectRecord, Pending } from './types.ts';
 
 interface RLine { params: Record<string, string>; svars: Record<string, string>; name: string }
@@ -367,6 +369,14 @@ export function untapPrevented(state: GameState, ctx: Ctx, c: CardInstance): boo
     return true;
   }
   if (own(c, 'Untap').some((r) => r.params.Layer === 'CantHappen' && /Self/.test(r.params.ValidCard ?? ''))) return true;
+  // Winter Orb / Static Orb: "players can't untap more than N <type> during their untap steps" (the first N untap).
+  for (const lim of untapLimits(state, c.controller, ctx.lookup)) {
+    if (matchCard(c, lim.valid, { controller: c.controller, lookup: ctx.lookup }) !== true) continue;
+    const ti = turnInfo(state);
+    const key = `untapped|${lim.valid}`;
+    if ((ti.activations[key] ?? 0) >= lim.max) return true;
+    ti.activations[key] = (ti.activations[key] ?? 0) + 1;
+  }
   for (const { host, r } of hosted(state, 'Untap')) {
     if (r.params.Layer !== 'CantHappen' || !r.params.ValidCard) continue;
     if (matchCard(c, r.params.ValidCard, { controller: host.controller, sourceIid: host.iid, lookup: ctx.lookup }) === true) {

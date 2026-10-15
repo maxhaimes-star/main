@@ -26,6 +26,10 @@ export interface MatchEnv {
   chosen?: import('./types.ts').Chosen;
   /** Objects the source / effect remembered (IsRemembered); absent = unknown. */
   remembered?: string[];
+  /** This turn's bookkeeping (attackedThisCombat / attackedThisTurn / ThisTurnEntered); absent = unknown. */
+  turnInfo?: { turn: number; activations: Record<string, number> };
+  /** The trigger's defending player (DefenderCtrl). */
+  defender?: string;
 }
 
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -124,6 +128,21 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'NamedCard': return env.chosen === undefined ? 'unknown' : !!env.chosen.name && fx.name === env.chosen.name;
     case 'ChosenColor': return env.chosen === undefined ? 'unknown' : !!env.chosen.color && fx.colors.includes(COLOR_WORDS[env.chosen.color] ?? env.chosen.color);
     case 'IsRemembered': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.iid);
+    // How / where it was cast (CastInfo.from is set when not cast from the hand).
+    case 'wasCast': return !!c.castInfo;
+    case 'wasCastByYou': return !!c.castInfo && c.controller === env.controller;
+    case 'wasCastFromExile': return c.castInfo?.from === 'exile';
+    case 'wasCastFromGraveyard': return c.castInfo?.from === 'graveyard';
+    case 'wasCastFromHand': return !!c.castInfo && !c.castInfo.from;
+    case 'wasCastFromYourHandByYou': return !!c.castInfo && !c.castInfo.from && c.controller === env.controller;
+    case 'surged': return c.castInfo?.option === 'surge';
+    case 'dashed': return !!c.castInfo?.dashed;
+    case 'DefenderCtrl': return env.defender === undefined ? 'unknown' : c.controller === env.defender;
+    case 'attackedThisCombat': case 'attackedThisTurn': case 'ThisTurnEntered': case 'enteredThisTurn': {
+      if (!env.turnInfo) return 'unknown';
+      const key = prop === 'ThisTurnEntered' || prop === 'enteredThisTurn' ? `entered|${c.iid}` : `attacked|${c.iid}`;
+      return (env.turnInfo.activations[key] ?? 0) > 0 || (prop.startsWith('attacked') && !!c.attacking);
+    }
     case 'IsNotRemembered': return env.remembered === undefined ? 'unknown' : !env.remembered.includes(c.iid);
   }
   if (COLOR_WORDS[prop]) return fx.colors.includes(COLOR_WORDS[prop]);

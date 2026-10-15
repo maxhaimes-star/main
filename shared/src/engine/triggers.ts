@@ -21,6 +21,9 @@ import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from '
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { uniqueVar } from './unique.ts';
 import { notePermissionUse } from './permissions.ts';
+import { moreVar } from './more.ts';
+import { turnInfo } from './durations.ts';
+import { conditionTrue, evalCount } from './counts.ts';
 import { parseCostTokens } from './paycost.ts';
 import { wardReminders } from './keyword-play.ts';
 import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
@@ -41,7 +44,8 @@ const KNOWN_PARAMS = new Set([
   'Mode', 'Execute', 'TriggerDescription', 'ValidCard', 'ValidCards', 'Origin', 'Destination', 'TriggerZones', 'ValidPlayer', 'Phase',
   'OptionalDecider', 'ValidActivatingPlayer', 'ValidSource', 'ValidTarget', 'Static', 'Secondary', 'CombatDamage', 'IsPresent',
   'PresentCompare', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
-  'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA',
+  'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA', 'CheckDefinedPlayer', 'FirstAttack', 'Delirium', 'ResolvedLimit',
+  'ValidDefenders', 'ValidAttackingPlayer', 'ValidToken', 'CounterType', 'SearchOwnLibrary', 'ThisDoor', 'ValidAttacker', 'ValidBlocker',
 ]);
 
 const PROWESS_LINE = 'DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Prowess: +1/+1 until end of turn.';
@@ -129,12 +133,44 @@ function cmp(left: number, expr: string, right: (s: string) => number | undefine
   }
 }
 
+/** This turn's history from the action's events: attackers, permanents that entered, permissions used, the city's blessing. */
+function trackTurnEvents(state: GameState, ctx: Ctx) {
+  const evs = state.events ?? [];
+  if (!evs.length) return;
+  const ti = turnInfo(state);
+  for (const ev of evs) {
+    if (ev.t === 'cast') notePermissionUse(state, state.cards[ev.iid]?.castInfo?.permission); // once-per-turn permissions (Lurrus)
+    else if (ev.t === 'attacks') {
+      ti.activations[`attacked|${ev.iid}`] = (ti.activations[`attacked|${ev.iid}`] ?? 0) + 1;
+      const who = state.cards[ev.iid]?.controller;
+      if (who) ti.activations[`attacks|${who}`] = (ti.activations[`attacks|${who}`] ?? 0) + 1;
+    } else if (ev.t === 'zone' && ev.to === 'battlefield') ti.activations[`entered|${ev.iid}`] = 1;
+  }
+  // Ascend: ten or more permanents -> the city's blessing (for the rest of the game).
+  for (const p of state.players) {
+    if (p.designations.includes("City's Blessing")) continue;
+    const mine = state.battlefield.filter((iid) => state.cards[iid].controller === p.pid);
+    if (mine.length < 10) continue;
+    const ascend = mine.some((iid) => scriptRef(state.cards[iid]) && (getScript(scriptRef(state.cards[iid])!.cardId)?.[scriptRef(state.cards[iid])!.face]?.keywords ?? []).includes('Ascend'));
+    if (ascend) { p.designations.push("City's Blessing"); log(state, ctx, p.pid, `${p.name} gets the city's blessing (ascend).`); }
+  }
+}
+
 /** Evaluate a host SVar (the subset triggers use in CheckSVar$). */
-function svarValue(state: GameState, ctx: Ctx, env: MatchEnv, svars: Record<string, string>, name: string): number | undefined {
+function svarValue(state: GameState, ctx: Ctx, env: MatchEnv, svars: Record<string, string>, name: string, trig?: TriggerContext): number | undefined {
   const v = svars[name];
   if (!v) return /^-?\d+$/.test(name) ? parseInt(name, 10) : undefined;
   let m = /^Number\$(-?\d+)$/.exec(v);
   if (m) return parseInt(m[1], 10);
+  const mv = moreVar(state, { controller: env.controller, sourceIid: env.sourceIid, remembered: [], trig, item: { id: '', kind: 'trigger', controller: env.controller, text: '' } }, ctx, v);
+  if (mv !== undefined) return mv;
+  if ((m = /^Count\$ValidHand (.+)$/.exec(v))) {
+    let n = 0;
+    for (const p of state.players) for (const iid of p.zones.hand) { const r = matchCard(state.cards[iid], m[1], { ...env, defender: trig?.defender }); if (r === 'unknown') return undefined; if (r) n++; }
+    return n;
+  }
+  const counted = evalCount(v, { state, lookup: ctx.lookup, controller: env.controller, sourceIid: env.sourceIid });
+  if (counted !== undefined) return counted;
   const u = uniqueVar(state, ctx, env.controller, [], v); // Field of the Dead's different names (unique.ts)
   if (u !== undefined) return u;
   if ((m = /^Count\$Valid (.+)$/.exec(v))) {
@@ -153,12 +189,15 @@ function svarValue(state: GameState, ctx: Ctx, env: MatchEnv, svars: Record<stri
 }
 
 /** Intervening "if": IsPresent$ / CheckSVar$. */
-export function conditionHolds(state: GameState, ctx: Ctx, cond: Record<string, string>, controller: string, sourceIid: string | undefined, cardId: string | undefined, face: number): Tri {
+export function conditionHolds(state: GameState, ctx: Ctx, cond: Record<string, string>, controller: string, sourceIid: string | undefined, cardId: string | undefined, face: number, trig?: TriggerContext): Tri {
   const host = sourceIid ? state.cards[sourceIid] : undefined;
-  const env: MatchEnv = { controller, sourceIid, lookup: ctx.lookup, attachedTo: host?.attachedTo ?? '' };
+  const env: MatchEnv = { controller, sourceIid, lookup: ctx.lookup, attachedTo: host?.attachedTo ?? '', turnInfo: turnInfo(state), defender: trig?.defender };
   let res: Tri = true;
   if (cond.IsPresent) {
-    const [valid, inlineCmp] = cond.IsPresent.trim().split(/\s+/);
+    let [valid, inlineCmp] = cond.IsPresent.trim().split(/\s+/);
+    // Kytheon: "if CARDNAME and at least two other creatures attacked this combat" (Card.Self+attackedThisCombat GE3).
+    let selfAttacked: boolean | undefined;
+    if (/Self\+attackedThisCombat/.test(valid)) { selfAttacked = (env.turnInfo!.activations[`attacked|${sourceIid}`] ?? 0) > 0; valid = 'Creature.attackedThisCombat'; }
     let n = 0;
     let unknown = false;
     for (const iid of state.battlefield) {
@@ -166,14 +205,25 @@ export function conditionHolds(state: GameState, ctx: Ctx, cond: Record<string, 
       if (r === 'unknown') unknown = true;
       else if (r) n++;
     }
+    if (selfAttacked === false) n = 0;
     const c = cmp(n, cond.PresentCompare ?? inlineCmp ?? 'GE1', () => undefined);
     res = and(res, unknown ? 'unknown' : c);
   }
   if (cond.CheckSVar) {
     const svars = (cardId ? getScript(cardId)?.[face]?.svars : undefined) ?? {};
-    const left = svarValue(state, ctx, env, svars, cond.CheckSVar);
-    res = and(res, left == null ? 'unknown' : cmp(left, cond.SVarCompare ?? 'GE1', (s) => svarValue(state, ctx, env, svars, s)));
+    const left = svarValue(state, ctx, env, svars, cond.CheckSVar, trig);
+    res = and(res, left == null ? 'unknown' : cmp(left, cond.SVarCompare ?? 'GE1', (s) => svarValue(state, ctx, env, svars, s, trig)));
   }
+  // CheckDefinedPlayer$ You.hasInitiative / You.isMonarch / You.hasBlessing
+  if (cond.CheckDefinedPlayer) {
+    const [who, prop] = cond.CheckDefinedPlayer.split('.');
+    const pid = who === 'You' ? controller : who === 'TriggeredPlayer' ? trig?.player : undefined;
+    const pl = state.players.find((p) => p.pid === pid);
+    const d = pl?.designations ?? [];
+    const v: Tri = prop === 'hasInitiative' ? d.includes('Initiative') : prop === 'isMonarch' ? d.includes('Monarch') : prop === 'hasBlessing' ? d.includes("City's Blessing") : 'unknown';
+    res = and(res, pl ? v : 'unknown');
+  }
+  if (cond.Delirium === 'True') res = and(res, conditionTrue('Delirium', { state, lookup: ctx.lookup, controller, sourceIid }) ?? 'unknown');
   return res;
 }
 
@@ -226,6 +276,8 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (ev.t !== 'attacks') return null;
       const c = state.cards[ev.iid];
       r = matchC(c, p.ValidCard, env);
+      // FirstAttack$ True: "attacks for the first time each turn" (the attack being processed is counted already).
+      if (p.FirstAttack === 'True' && (turnInfo(state).activations[`attacked|${ev.iid}`] ?? 0) > 1) r = false;
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: c?.controller, defender: ev.defender };
     }
@@ -376,7 +428,7 @@ function queueFor(state: GameState, ctx: Ctx, host: Host, index: number, p: Reco
   const auto: AutoInfo = { cardId, face, source: 'trigger', index, targets: [], trigger: hit };
   if (line) auto.line = line; else if (p.Execute) auto.svar = p.Execute;
   const cond: Record<string, string> = {};
-  for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare']) if (p[k]) cond[k] = p[k];
+  for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare', 'CheckDefinedPlayer', 'Delirium']) if (p[k]) cond[k] = p[k];
   if (Object.keys(cond).length && p.NoResolvingCheck !== 'True') hit.condition = cond;
   const name = hostLabel(host, ctx);
   const chain = chainOf(auto);
@@ -439,10 +491,10 @@ function detect(state: GameState, ctx: Ctx) {
             if (once.has(key)) continue;
             once.add(key);
           }
-          if (p.IsPresent || p.CheckSVar) {
+          if (p.IsPresent || p.CheckSVar || p.CheckDefinedPlayer || p.Delirium) {
             const cond: Record<string, string> = {};
-            for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare']) if (p[k]) cond[k] = p[k];
-            const holds = conditionHolds(state, ctx, cond, c.controller, c.iid, t.ref?.cardId ?? host.id, t.ref?.face ?? host.face);
+            for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare', 'CheckDefinedPlayer', 'Delirium']) if (p[k]) cond[k] = p[k];
+            const holds = conditionHolds(state, ctx, cond, c.controller, c.iid, t.ref?.cardId ?? host.id, t.ref?.face ?? host.face, hit);
             if (holds === false) continue;
             if (holds === 'unknown') { log(state, ctx, c.controller, `Check by hand: ${hostLabel(host, ctx)} may trigger (condition not verified) — ${desc}`); continue; }
           }
@@ -571,7 +623,7 @@ function flush(state: GameState, ctx: Ctx): string[] {
  */
 export function processTriggers(state: GameState, ctx: Ctx): boolean {
   if (state.phase !== 'playing') { state.events = []; return false; }
-  for (const ev of state.events ?? []) if (ev.t === 'cast') notePermissionUse(state, state.cards[ev.iid]?.castInfo?.permission); // once-per-turn permissions (Lurrus)
+  trackTurnEvents(state, ctx);
   uniqueTriggers(state, ctx); // Sagas, Hideaway, Mode$ Always, Saga sacrifice (turns.ts)
   try { detect(state, ctx); } catch (e) { log(state, ctx, null, `Trigger detection error: ${(e as Error).message}`); }
   const pushed = flush(state, ctx);
@@ -642,7 +694,7 @@ export function answerTriggerTargets(state: GameState, ctx: Ctx, pid: string, id
 export function triggerStillApplies(state: GameState, ctx: Ctx, item: StackItem): boolean {
   const cond = item.auto?.trigger?.condition;
   if (item.kind !== 'trigger' || !item.auto || !cond) return true;
-  const holds = conditionHolds(state, ctx, cond, item.controller, item.sourceIid, item.auto.cardId, item.auto.face);
+  const holds = conditionHolds(state, ctx, cond, item.controller, item.sourceIid, item.auto.cardId, item.auto.face, item.auto.trigger);
   if (holds !== false) return true;
   state.stack = state.stack.filter((s) => s !== item);
   log(state, ctx, item.controller, `${item.text} — its condition is no longer true; it does nothing.`);

@@ -488,15 +488,20 @@ export function staticGaps(s: Pick<StaticAbility, 'params' | 'svars' | 'modes'> 
   if (p.CheckSVar && !exprSupported(full, p.CheckSVar)) gaps.push(`CheckSVar$ ${p.CheckSVar}`);
   for (const mode of s.modes) {
     if (mode === 'Continuous') {
-      for (const k of Object.keys(p)) if (!CONT_HANDLED_KEYS.has(k)) gaps.push(k);
-      if (p.AffectedZone && p.AffectedZone !== 'Battlefield') gaps.push(`AffectedZone$ ${p.AffectedZone}`);
-      if (p.Affected && PLAYER_AFFECTED.test(p.Affected)) gaps.push('player effect');
-      if (p.Affected && /ChosenPlayer|ChosenCard|Remembered|ExiledWith|TopLibrary/.test(p.Affected)) gaps.push(`Affected$ ${p.Affected}`);
+      // Handled elsewhere: "you may play / look at" (permissions.ts), player rules (protection.ts, landPlaysAllowed, maxHandSize),
+      // untap limits (replacements.ts UntapAdjust), keyword grants to graveyard cards (retrace / escape).
+      const outside = !!p.AffectedZone && p.AffectedZone !== 'Battlefield';
+      const permission = p.MayPlay === 'True' || !!p.MayLookAt || (outside && /^(Retrace|Escape:|Flashback)/.test(p.AddKeyword ?? ''));
+      const playerRule = !!p.Affected && PLAYER_AFFECTED.test(p.Affected) && (!!p.AdjustLandPlays || !!p.SetMaxHandSize || /^(Shroud|Hexproof|Protection|UntapAdjust)/.test(p.AddKeyword ?? ''));
+      const PERM_KEYS = new Set(['MayPlay', 'MayPlayLimit', 'MayPlayWithoutManaCost', 'MayPlayIgnoreColor', 'MayPlayIgnoreType', 'MayPlayAltManaCost', 'MayPlayPlayer', 'ValidAfterStack', 'MayLookAt', 'AdjustLandPlays', 'SetMaxHandSize', 'Duration']);
+      for (const k of Object.keys(p)) if (!CONT_HANDLED_KEYS.has(k) && !((permission || playerRule) && PERM_KEYS.has(k))) gaps.push(k);
+      if (outside && !permission) gaps.push(`AffectedZone$ ${p.AffectedZone}`);
+      if (p.Affected && PLAYER_AFFECTED.test(p.Affected) && !playerRule) gaps.push('player effect');
+      if (p.Affected && /ChosenPlayer|ChosenCard|Remembered|ExiledWith|TopLibrary/.test(p.Affected) && !permission) gaps.push(`Affected$ ${p.Affected}`);
       if (p.AffectedDefined && !['Self', 'Equipped', 'Enchanted'].includes(p.AffectedDefined)) gaps.push(`AffectedDefined$ ${p.AffectedDefined}`);
-      if (p.AddKeyword?.split('&').some((k) => !keywordSupported(k))) gaps.push('AddKeyword (special)');
-      else if (p.AddKeyword && /Protection|Ward/.test(p.AddKeyword)) gaps.push('Protection/Ward (shown, not enforced)');
-      if (p.AddType && p.AddType.split('&').some((t) => t.trim() !== 'Creature' && !/^[A-Z][a-z]+$/.test(t.trim()))) gaps.push(`AddType$ ${p.AddType}`);
-      if (p.AddType && /AllBasicLandType/.test(p.AddType)) gaps.push('AddType$ AllBasicLandType');
+      if (p.AddKeyword?.split('&').some((k) => !keywordSupported(k) && !/^(UntapAdjust|Escape:|Retrace)/.test(k.trim()) && !/^Protection:Player\.PlayerUID_ChosenPlayerUID/.test(k.trim()))) gaps.push('AddKeyword (special)');
+      if (p.AddType && p.AddType.split('&').some((t) => t.trim() !== 'Creature' && t.trim() !== 'AllBasicLandType' && !/^[A-Z][a-z]+$/.test(t.trim()))) gaps.push(`AddType$ ${p.AddType}`);
+
       for (const k of ['AddPower', 'AddToughness', 'SetPower', 'SetToughness']) if (!exprSupported(full, p[k])) gaps.push(`${k}$ ${p[k]}`);
     } else if (mode === 'RaiseCost' || mode === 'ReduceCost') {
       if (!['Spell', 'Ability'].includes(costKind(p))) gaps.push(`Type$ ${p.Type}`);
@@ -524,6 +529,48 @@ export function parseStatic(line: string, svars: Record<string, string> = {}): P
 }
 
 // ------------------------------------------------------------------ public queries
+
+/** Land plays `pid` gets each turn: 1 + "you may play an additional land" statics (Exploration, Dryad, Oracle, Fastbond: unlimited). */
+export function landPlaysAllowed(st: StaticsState, pid: string, lookup: Lookup): number {
+  let n = 1;
+  for (const { s } of active(st, lookup, 'Continuous')) {
+    const p = s.params;
+    if (!p.AdjustLandPlays || !p.Affected) continue;
+    const mine = s.controller === pid;
+    if ((/^You\b/.test(p.Affected) && !mine) || (/^Opponent\b/.test(p.Affected) && mine)) continue;
+    if (p.AdjustLandPlays === 'Unlimited') return Infinity;
+    n += parseInt(p.AdjustLandPlays, 10) || 0;
+  }
+  return n;
+}
+
+/** Maximum hand size of `pid` (7; "no maximum hand size" statics: Infinity). */
+export function maxHandSize(st: StaticsState, pid: string, lookup: Lookup): number {
+  for (const { s } of active(st, lookup, 'Continuous')) {
+    const p = s.params;
+    if (!p.SetMaxHandSize || !p.Affected) continue;
+    const mine = s.controller === pid;
+    if ((/^You\b/.test(p.Affected) && !mine) || (/^Opponent\b/.test(p.Affected) && mine)) continue;
+    return p.SetMaxHandSize === 'Unlimited' ? Infinity : parseInt(p.SetMaxHandSize, 10) || 7;
+  }
+  return 7;
+}
+
+/** Untap-step limits on a player ("players can't untap more than one land", Winter Orb / Static Orb): type -> max. */
+export function untapLimits(st: StaticsState, pid: string, lookup: Lookup): { valid: string; max: number }[] {
+  const out: { valid: string; max: number }[] = [];
+  for (const { s } of active(st, lookup, 'Continuous')) {
+    const p = s.params;
+    if (!p.Affected || !/^(Player|You|Opponent)\b/.test(p.Affected)) continue;
+    const mine = s.controller === pid;
+    if ((/^You\b/.test(p.Affected) && !mine) || (/^Opponent\b/.test(p.Affected) && mine)) continue;
+    for (const k of (p.AddKeyword ?? '').split('&')) {
+      const m = /^UntapAdjust:([^:]+):(\d+)$/.exec(k.trim());
+      if (m) out.push({ valid: m[1], max: parseInt(m[2], 10) });
+    }
+  }
+  return out;
+}
 
 /** Static abilities currently in effect (conditions met), for an "Active effects" panel. */
 export function activeStatics(st: StaticsState, lookup: Lookup): ActiveStatic[] {

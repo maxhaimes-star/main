@@ -16,7 +16,7 @@ import { isHidden } from '../game/types.ts';
 import { parseCost } from './costs.ts';
 import { type CountState, evalCount } from './counts.ts';
 import { parseAbility, scriptFaceOf } from './script.ts';
-import { activateRestriction } from './statics.ts';
+import { activateRestriction, staticMods } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 import { chapterManaLines } from './turns.ts';
 import { manaTapped } from './manatriggers.ts';
@@ -95,8 +95,9 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
   if (!scripted) {
     const f = faceOf(c, lookup);
     if (f.types.includes('Land')) {
+      const added = 'battlefield' in state ? staticMods(state as never, c.iid, lookup)?.addTypes ?? [] : [];
       for (const [type, color] of Object.entries(BASIC)) {
-        if (!new RegExp(`\\b${type}\\b`).test(f.typeLine)) continue;
+        if (!new RegExp(`\\b${type}\\b`).test(f.typeLine) && !added.includes(type) && !added.includes('AllBasicLandType')) continue;
         out.push({ id: `type:${color}`, label: `Add {${color}}`, produces: color, sideEffects: [], tap: true, mana: '', life: 0, sacSelf: false, discardHand: false, selfDamage: 0, byHand: [] });
       }
     }

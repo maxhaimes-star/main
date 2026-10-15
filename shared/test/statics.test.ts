@@ -228,6 +228,8 @@ describe('statics: parsing / support', () => {
   it('classifies supported statics', () => {
     expect(staticGaps(parseStatic('Mode$ Continuous | Affected$ Creature.YouCtrl+Other | AddPower$ 1 | AddToughness$ 1 | AddKeyword$ Flying'))).toEqual([]);
     expect(staticGaps(parseStatic('Mode$ RaiseCost | ValidCard$ Card.nonCreature | Type$ Spell | Amount$ 1'))).toEqual([]);
-    expect(staticGaps(parseStatic('Mode$ Continuous | Affected$ Land.YouOwn | MayPlay$ True | AffectedZone$ Graveyard')).length).toBeGreaterThan(0);
+    // "You may play lands from your graveyard" is a play permission (engine/permissions.ts): handled.
+    expect(staticGaps(parseStatic('Mode$ Continuous | Affected$ Land.YouOwn | MayPlay$ True | AffectedZone$ Graveyard'))).toEqual([]);
+    expect(staticGaps(parseStatic('Mode$ Continuous | Affected$ Creature | AddPower$ 1 | SomethingNew$ True')).length).toBeGreaterThan(0);
   });
 });

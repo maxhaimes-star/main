@@ -1044,6 +1044,36 @@ export function moreVar(state: GameState, r: { controller: string; sourceIid?: s
     case 'Remembered$Amount': return r.remembered.length;
     case 'PlayerCountRegisteredOpponents$HasPropertyLostLifeThisTurn': return state.players.filter((p) => p.pid !== r.controller && (state.turnInfo?.turn === state.turn ? state.turnInfo.activations[`life-|${p.pid}`] ?? 0 : 0) > 0).length;
   }
+  if ((m = /^Count\$(Monarch|Initiative|Blessing|AltCost|Surged|Kicked|AttackedThisTurn|YouAttacked)\.(-?\d+)\.(-?\d+)$/.exec(v))) {
+    const d = me?.designations ?? [];
+    const ci = r.item.castInfo ?? (r.sourceIid ? state.cards[r.sourceIid]?.castInfo : undefined);
+    const attacked = (state.turnInfo?.turn === state.turn ? state.turnInfo.activations[`attacks|${r.controller}`] ?? 0 : 0) > 0;
+    const on = m[1] === 'Monarch' ? d.includes('Monarch') : m[1] === 'Initiative' ? d.includes('Initiative') : m[1] === 'Blessing' ? d.includes("City's Blessing")
+      : m[1] === 'AltCost' ? /^alt/.test(ci?.option ?? '') : m[1] === 'Surged' ? ci?.option === 'surge' : m[1] === 'Kicked' ? !!ci?.kicked : attacked;
+    return parseInt(on ? m[2] : m[3], 10);
+  }
+  if (v === 'Count$AttackersDeclared' || v === 'Count$YouAttackedThisTurn') return state.turnInfo?.turn === state.turn ? state.turnInfo.activations[`attacks|${r.controller}`] ?? 0 : 0;
+  if (v === 'DungeonsCompleted$Amount') return me?.counters.dungeons ?? 0;
+  if ((m = /^PlayerCountOpponents\$HighestValid (.+)$/.exec(v))) {
+    let best = 0;
+    for (const p of state.players) {
+      if (p.pid === r.controller || p.conceded) continue;
+      const n = state.battlefield.filter((x) => matchCard(state.cards[x], m![1], { controller: p.pid, lookup: ctx.lookup }) === true).length;
+      best = Math.max(best, n);
+    }
+    return best;
+  }
+  if ((m = /^PlayerCountOpponents\$(HighestCardsInHand|LowestLifeTotal|HighestLifeTotal)$/.exec(v))) {
+    const opps = state.players.filter((p) => p.pid !== r.controller && !p.conceded);
+    if (!opps.length) return 0;
+    if (m[1] === 'HighestCardsInHand') return Math.max(...opps.map((p) => p.zones.hand.length));
+    return m[1] === 'LowestLifeTotal' ? Math.min(...opps.map((p) => p.life)) : Math.max(...opps.map((p) => p.life));
+  }
+  if ((m = /^Count\$(CardsInYourHand|xPaid)\/(HalfDown|HalfUp|Twice)$/.exec(v))) {
+    const base = m[1] === 'xPaid' ? r.item.auto?.x ?? r.item.x ?? 0 : me?.zones.hand.length ?? 0;
+    return m[2] === 'HalfDown' ? Math.floor(base / 2) : m[2] === 'HalfUp' ? Math.ceil(base / 2) : base * 2;
+  }
+  if ((m = /^Count\$ValidExile (.+)$/.exec(v))) return state.players.flatMap((p) => p.zones.exile).filter((x) => matchCard(state.cards[x], m![1], { controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup }) === true).length;
   if ((m = /^Remembered\$Valid (.+)$/.exec(v))) return r.remembered.filter((x) => state.cards[x] && matchCard(state.cards[x], m![1], { controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup }) === true).length;
   if ((m = /^TriggeredCard\$Card(Power|Toughness|ManaCost)$/.exec(v))) {
     const iid = r.trig?.card;
