@@ -8,7 +8,7 @@ import type { CardInstance, GamePlayer, GameState, StackItem, Step, Zone } from 
 import type { TokenData } from '../cards.ts';
 import { chainOf, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
-import { staticsDefineToughness } from './statics.ts';
+import { lifeGainPrevented, staticsDefineToughness } from './statics.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { KEYWORD_APIS } from './keywords.ts';
 import { answerKeywordPending, execKeywordStep } from './keyword-play.ts';
@@ -24,6 +24,7 @@ import { canPayCost, costText, parseCostTokens, payCostNow, timesPayable } from 
 import { answerMorePending, answerMoreTargets, execMoreStep, MORE_APIS, moreDefinedValue, moreVar, type MoreRun } from './more.ts';
 import { checkTargets } from './play.ts';
 import { enterAttacking } from './combat-rules.ts';
+import { answerVenture, becomeMonarch, takeInitiative } from './designations.ts';
 import { getCard } from '../cube.ts';
 
 // ------------------------------------------------------------------ run context
@@ -57,7 +58,9 @@ function makeRun(state: GameState, ctx: Ctx, cont: AutoCont): Run | undefined {
   const lki = trig?.lki ? { ...trig.lki, ...cont.lki } : cont.lki;
   const r: Run = {
     ...cont, lki, steps, specOf: specIndexByStep(steps), svars: face?.svars ?? {}, controller: cont.item.controller, sourceIid,
-    sourceName: src ? cardName(src, ctx.lookup) : face?.name ?? 'It', deathtouched: [], trig, splices: [], chosen: { ...(cont.chosen ?? {}) },
+    sourceName: src ? cardName(src, ctx.lookup) : face?.name ?? cont.item.text.split(':')[0] ?? 'It', deathtouched: [], trig, splices: [], chosen: { ...(cont.chosen ?? {}) },
+    // An effect's triggered ability starts with the effect's remembered objects (Palace Jailer's exiled creature).
+    remembered: cont.remembered.length || cont.next > 0 ? cont.remembered : [...(trig?.effectRemembered ?? [])],
   };
   for (const sp of cont.splices ?? []) spliceSteps(r, sp, true);
   return r;
@@ -106,7 +109,7 @@ function contAt(r: Run, next: number): AutoCont {
 export function lkiOf(c: CardInstance, ctx: Ctx, state?: GameState): Lki {
   const [power, toughness] = effectivePT(c, ctx.lookup, state);
   const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
-  return { power, toughness, mv: c.token && !c.cardId ? 0 : data?.cmc ?? 0, controller: c.controller, owner: c.owner, name: cardName(c, ctx.lookup) };
+  return { power, toughness, mv: c.token && !c.cardId ? 0 : data?.cmc ?? 0, controller: c.controller, owner: c.owner, name: cardName(c, ctx.lookup), ...(Object.keys(c.counters).length ? { counters: { ...c.counters } } : {}) };
 }
 
 const ZONE: Record<string, Zone> = { battlefield: 'battlefield', hand: 'hand', graveyard: 'graveyard', exile: 'exile', library: 'library', stack: 'stack', command: 'command' };
@@ -224,6 +227,7 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     const ps = t.map((ref) => (ref.kind === 'player' ? ref.pid : ref.kind === 'card' ? state.cards[ref.iid]?.controller : undefined)).filter((x): x is string => !!x);
     return { cards: [], players: ps.length ? [...new Set(ps)] : [r.controller] };
   }
+  if (value === 'TopOfLibrary') { const top = player(state, r.controller).zones.library[0]; return { cards: top ? [top] : [], players: [] }; }
   if (value === 'ThisTargetedCard' || value === 'ThisTargetedPlayer') { const t = split(state, ownTargets(r, i) ?? []); return value === 'ThisTargetedCard' ? { cards: t.cards, players: [] } : { cards: [], players: t.players }; }
   if (value?.startsWith('Valid ')) {
     const E: MatchEnv = { controller: r.controller, sourceIid: r.sourceIid, lookup: getCard, remembered: r.remembered };
@@ -263,6 +267,27 @@ function countEnv(state: GameState, ctx: Ctx, r: Run): CountEnv {
 function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefined {
   if (!supportedVar(v)) return undefined;
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
+  // SVar$X/HalfDown, SVar$X/Minus.1 ... : math on another SVar.
+  let sm = /^SVar\$(\w+)\/(Plus|Minus|Times)\.(-?\d+)$/.exec(v);
+  if (sm) { const b = amount(state, ctx, r, sm[1], 0); if (b == null) return undefined; const k = parseInt(sm[3], 10); return sm[2] === 'Plus' ? b + k : sm[2] === 'Minus' ? b - k : b * k; }
+  sm = /^SVar\$(\w+)\/(HalfDown|HalfUp|Twice|Negative)$/.exec(v);
+  if (sm) { const b = amount(state, ctx, r, sm[1], 0); if (b == null) return undefined; return sm[2] === 'HalfDown' ? Math.floor(b / 2) : sm[2] === 'HalfUp' ? Math.ceil(b / 2) : sm[2] === 'Twice' ? b * 2 : -b; }
+  // TriggeredCard$CardCounters.P1P1 (last known), Sacrificed$CardManaCost(/Plus.N)
+  sm = /^TriggeredCard\$CardCounters\.(\w+)$/.exec(v);
+  if (sm) { const iid = r.trig?.card; const k = sm[1].toUpperCase() === 'P1P1' ? '+1/+1' : sm[1].toLowerCase(); return (iid ? r.lki[iid]?.counters?.[k] ?? state.cards[iid]?.counters[k] : 0) ?? 0; }
+  sm = /^Sacrificed\$Card(ManaCost|Power)(?:\/Plus\.(\d+))?$/.exec(v);
+  if (sm) {
+    const iid = state.remembered?.[`sacrificed|${r.controller}`]?.[0];
+    const c = iid ? state.cards[iid] : undefined;
+    const base = !c ? 0 : sm[1] === 'ManaCost' ? (c.cardId ? ctx.lookup(c.cardId)?.cmc ?? 0 : 0) : parseInt(faceOf(c, ctx.lookup).power ?? '0', 10) || 0;
+    return base + (parseInt(sm[2] ?? '0', 10) || 0);
+  }
+  // Count$Valid <type>.ControlledBy <Defined> (Generous Plunderer: artifacts the defending player controls)
+  sm = /^Count\$Valid (.+?)\.?\+?ControlledBy (\w+)$/.exec(v);
+  if (sm) {
+    const ps = defined(state, r, 0, sm[2])?.players ?? [];
+    return state.battlefield.filter((x) => ps.includes(state.cards[x].controller) && matchCard(state.cards[x], sm![1], env(state, ctx, r)) === true).length;
+  }
   const mv = moreVar(state, r, ctx, v); // engine/more.ts
   if (mv !== undefined) return mv;
   if (v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount') return r.trig?.amount ?? 0;
@@ -692,8 +717,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       log(state, ctx, r.controller, `${srcName} deals ${division && many ? '' : `${n} `}damage to ${hit.join(', ') || 'nothing'}.`);
       if (src && hasKeyword(src, ctx.lookup, 'Lifelink', state) && hit.length) {
         const gain = dealt;
-        player(state, src.controller).life += gain;
-        noteLife(state, src.controller, gain);
+        if (!lifeGainPrevented(state, src.controller, ctx.lookup)) { player(state, src.controller).life += gain; noteLife(state, src.controller, gain); }
         log(state, ctx, src.controller, `${pname(state, src.controller)} gains ${gain} life (lifelink).`);
       }
       return 'ok';
@@ -764,6 +788,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
     case 'ChangeZone': {
       const dest = zoneOf(p.Destination);
       if (!dest) return bad();
+      if (p.Origin === 'Command' && p.Defined === 'Self' && r.sourceIid?.startsWith('effect:')) {
+        const id = r.sourceIid.slice(7);
+        state.effects = (state.effects ?? []).filter((e) => e.id !== id);
+        return 'ok';
+      }
       const origins = (p.Origin ?? '').split(',').map((z) => zoneOf(z)).filter((z): z is Zone => !!z);
       let cards: string[] | undefined;
       const own = ownTargets(r, i);
@@ -840,6 +869,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       }
       if (untilHost && exiled.length) addEffect(state, ctx, { kind: 'exiled', controller: r.controller, until: 'hostLeaves', hostIid: untilHost, cards: exiled });
       remember(cards.filter((x) => state.cards[x]));
+      if (p.Imprint === 'True') r.chosen = { ...(r.chosen ?? {}), imprinted: cards.filter((x) => state.cards[x]) };
       if (p.Shuffle === 'True') for (const pid of new Set(cards.map((x) => state.cards[x]?.owner).filter(Boolean) as string[])) shuffleLibrary(state, player(state, pid), ctx.rng);
       const destLabel = dest === 'library' ? 'its owner\'s library' : dest === 'battlefield' ? 'the battlefield' : `${dest}`;
       log(state, ctx, r.controller, moved.length ? `${r.sourceName}: ${moved.join(', ')} → ${destLabel}.` : `${r.sourceName}: nothing to move.`);
@@ -954,7 +984,11 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       if (n == null || !o) return bad();
       for (const pid of o.players) {
         const pl = player(state, pid);
-        if (step.api === 'GainLife') { pl.life += n; noteLife(state, pid, n); }
+        if (step.api === 'GainLife') {
+          const no = lifeGainPrevented(state, pid, ctx.lookup);
+          if (no) { log(state, ctx, pid, `${pl.name} can't gain life (${no}).`); continue; }
+          pl.life += n; noteLife(state, pid, n);
+        }
         else if (step.api === 'LoseLife') { pl.life -= n; noteLife(state, pid, -n); }
         else { noteLife(state, pid, n - pl.life); pl.life = n; }
         const verb = step.api === 'GainLife' ? `gains ${n} life` : step.api === 'LoseLife' ? `loses ${n} life` : `has their life total set to ${n}`;
@@ -985,6 +1019,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
           return 'wait';
         }
         counterItem(state, ctx, item, p, r.sourceName, r);
+        if (p.RememberCountered) remember([item.sourceIid ?? item.iid ?? ''].filter((x) => state.cards[x]));
       }
       return 'ok';
     }
@@ -1219,10 +1254,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       return 'ok';
     }
     case 'BecomeMonarch': case 'TakeInitiative': {
-      const name = step.api === 'BecomeMonarch' ? 'Monarch' : 'Initiative';
-      for (const pl of state.players) pl.designations = pl.designations.filter((d) => d !== name);
-      me.designations.push(name);
-      log(state, ctx, r.controller, `${me.name} ${step.api === 'BecomeMonarch' ? 'becomes the monarch' : 'takes the initiative'}.`);
+      const o = p.Defined ? defined(state, r, i, p.Defined) : undefined;
+      const who = o?.players[0] ?? r.controller;
+      if (step.api === 'BecomeMonarch') becomeMonarch(state, ctx, who); else takeInitiative(state, ctx, who); // engine/designations.ts
       return 'ok';
     }
     case 'RevealHand': {
@@ -1600,6 +1634,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (ext === undefined) ext = answerUniquePending(state, ctx, pend, value);
   if (ext === undefined) ext = answerTapCost(state, ctx, pend, value);
   if (ext === undefined) ext = answerExtPending(state, ctx, pend, value);
+  if (ext === undefined) ext = answerVenture(state, ctx, pend, value);
   if (ext !== undefined) return ext;
   const more = answerMorePending(state, ctx, pend, value); // engine/more.ts
   if (more !== undefined) return more;

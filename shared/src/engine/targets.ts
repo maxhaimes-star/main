@@ -138,6 +138,10 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'surged': return c.castInfo?.option === 'surge';
     case 'dashed': return !!c.castInfo?.dashed;
     case 'DefenderCtrl': return env.defender === undefined ? 'unknown' : c.controller === env.defender;
+    case 'RememberedPlayerCtrl': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.controller);
+    case 'inRealZoneGraveyard': return c.zone === 'graveyard';
+    case 'inRealZoneBattlefield': return c.zone === 'battlefield';
+    case 'inRealZoneExile': return c.zone === 'exile';
     case 'attackedThisCombat': case 'attackedThisTurn': case 'ThisTurnEntered': case 'enteredThisTurn': {
       if (!env.turnInfo) return 'unknown';
       const key = prop === 'ThisTurnEntered' || prop === 'enteredThisTurn' ? `entered|${c.iid}` : `attacked|${c.iid}`;

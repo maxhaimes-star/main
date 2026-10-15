@@ -1,6 +1,7 @@
 import type { CombatProposal, GameState } from './types.ts';
 import { cardName, effectivePT, faceOf, hasKeyword, type Lookup } from './rules.ts';
 import { damagePrevented } from '../engine/replacements.ts';
+import { lifeGainPrevented } from '../engine/statics.ts';
 
 /**
  * Computes combat damage for the current attackers/blockers, including first strike,
@@ -56,7 +57,7 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
         lines.push(`${name} deals ${amount} to ${pl?.name ?? 'player'}`);
       }
     }
-    if (hasKeyword(s, lookup, 'Lifelink', state)) addLife(s.controller, amount);
+    if (hasKeyword(s, lookup, 'Lifelink', state) && !lifeGainPrevented(state, s.controller, lookup)) addLife(s.controller, amount);
   };
 
   const blockersOf = (a: string) => state.battlefield.filter((id) => cards[id].blocking === a);

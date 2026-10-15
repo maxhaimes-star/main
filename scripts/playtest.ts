@@ -21,7 +21,7 @@ import { writeFileSync } from 'node:fs';
 import { CUBE, getCard } from '../shared/src/cube.ts';
 import {
   abilitiesOfInstance, activatedAbilitiesOf, adjustCost, applyAction, castOptions, type CardData, type Color, createGame, type Ctx,
-  effectivePT, faceOf, mayPlayFrom, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
+  effectivePT, faceOf, landPlaysAllowed, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
   parseManaSymbols, type Pending, spellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
 } from '../shared/src/index.ts';
 
@@ -344,9 +344,7 @@ function abilityPlays(G: Game, pid: string): Play[] {
 function landPlays(G: Game, pid: string): Play[] {
   const { g } = G;
   const me = g.players.find((p) => p.pid === pid)!;
-  const lp = (g as { landPlaysLeft?: unknown }).landPlaysLeft;
-  void lp;
-  if (me.landsPlayed >= 1) return [];
+  if (me.landsPlayed >= landPlaysAllowed(g, pid, getCard)) return [];
   const fromElsewhere = [...me.zones.graveyard, ...me.zones.exile, ...me.zones.library.slice(0, 1)].filter((iid) => mayPlayFrom(g, pid, iid, getCard));
   return [...me.zones.hand, ...fromElsewhere].filter((iid) => {
     const d = g.cards[iid]?.cardId ? getCard(g.cards[iid].cardId!) : undefined;
@@ -464,7 +462,7 @@ function checkLeaks(G: Game) {
       if (!c || c.owner === viewer.pid || c.revealedTo.includes(viewer.pid) || controlsOther(c.owner)) continue;
       const nm = nameOf(G, iid);
       if (c.zone === 'hand' && viewer.viewingHandOf !== c.owner) G.issues.push({ kind: 'leak', card: nm, text: `${viewer.name} sees ${nm} in an opponent's hand`, seed: G.seed, turn: g.turn });
-      if (c.zone === 'library') G.issues.push({ kind: 'leak', card: nm, text: `${viewer.name} sees ${nm} in an opponent's library`, seed: G.seed, turn: g.turn });
+      if (c.zone === 'library' && !topCardVisible(g, viewer.pid, iid, getCard)) G.issues.push({ kind: 'leak', card: nm, text: `${viewer.name} sees ${nm} in an opponent's library`, seed: G.seed, turn: g.turn });
       if (c.faceDown && c.controller !== viewer.pid) G.issues.push({ kind: 'leak', card: nm, text: `${viewer.name} sees face-down ${nm}`, seed: G.seed, turn: g.turn });
     }
     for (const q of v.pending) {

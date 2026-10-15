@@ -19,14 +19,18 @@ import type { EffectDuration, EffectRecord, ParsedAbility } from './types.ts';
 
 const DURATIONS: Record<string, EffectDuration> = {
   UntilEndOfTurn: 'eot', Permanent: 'permanent', UntilHostLeavesPlay: 'hostLeaves', UntilYourNextTurn: 'yourNextTurn', UntilEndOfCombat: 'endOfCombat',
-  UntilYourNextEndStep: 'yourNextEndStep', UntilTheEndOfYourNextTurn: 'endOfYourNextTurn', AsLongAsInPlay: 'permanent',
+  UntilYourNextEndStep: 'yourNextEndStep', UntilTheEndOfYourNextTurn: 'endOfYourNextTurn', AsLongAsInPlay: 'hostLeaves',
+  UntilHostLeavesPlayOrEOT: 'eot',
 };
 const ZONES: Record<string, Zone> = { Battlefield: 'battlefield', Exile: 'exile', Graveyard: 'graveyard', Hand: 'hand', Library: 'library' };
 
 /** "You may play / cast that card" statics (MayPlay$ True): a permission (engine/permissions.ts). */
 const isPermission = (params: Record<string, string>) => params.MayPlay === 'True';
 /** RememberObjects$ values beyond SUPPORTED_DEFINED. */
-const REMEMBER_ALIASES: Record<string, string> = { RememberedCard: 'Remembered', RememberedLKI: 'Remembered' };
+const REMEMBER_ALIASES: Record<string, string> = { RememberedCard: 'Remembered', RememberedLKI: 'Remembered', ChosenCard: 'ChosenCard', Imprinted: 'Imprinted', 'Player.IsRemembered': 'Remembered' };
+
+/** "Loses all abilities" statics on remembered cards: applied as an animation (removeAllAbilities) on the cards. */
+const isLoseAbilities = (params: Record<string, string>) => params.Mode === 'Continuous' && params.RemoveAllAbilities === 'True' && /IsRemembered/.test(params.Affected ?? '');
 
 const list = (v: string | undefined, sep: string | RegExp = ',') => (v ? v.split(sep).map((x) => x.trim()).filter(Boolean) : []);
 
@@ -57,9 +61,9 @@ export function effectUnsupported(step: ParsedAbility): string | null {
     const line = sv[name];
     if (!line) return `Effect (missing SVar ${name})`;
     const st = parseStatic(line, sv);
-    if (isPermission(st.params)) continue;
+    if (isPermission(st.params) || isLoseAbilities(st.params)) continue;
     // Remembered objects are known for effects; everything else must be fully handled by statics.ts.
-    const gaps = staticGaps(st).filter((g) => !(/^Affected\$/.test(g) && /Remembered/.test(g)) && !/^Protection\/Ward/.test(g));
+    const gaps = staticGaps(st).filter((g) => !(/^Affected\$/.test(g) && /Remembered/.test(g)) && !/^Protection\/Ward/.test(g) && !/^Caster\$ Player\.IsRemembered/.test(g));
     if (gaps.length) return `Effect (static ${st.modes.join(',') || '?'}: ${gaps[0]})`;
   }
   for (const name of triggers) {
@@ -108,6 +112,18 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
     const cards = rec.remembered.filter((x) => !state.players.some((pl) => pl.pid === x));
     if (cards.length && !cards.some((x) => state.cards[x]?.zone === rec.watchZone)) { log(state, ctx, owner, `${name}: the card is gone — no effect.`); return; }
   }
+  // "It loses all abilities for as long as <source> remains on the battlefield" (The Wondrous Wasp, Tishana's Tidebinder).
+  const lose = rec.statics.filter((s) => f?.svars[s] && isLoseAbilities(parseParams(f.svars[s]).params));
+  if (lose.length) {
+    rec.statics = rec.statics.filter((s) => !lose.includes(s));
+    for (const iid of rec.remembered) {
+      const c = state.cards[iid];
+      if (!c || c.zone !== 'battlefield') continue;
+      (c.animations ??= []).push({ id: randomId(ctx.rng), controller: owner, until: until === 'hostLeaves' ? 'hostLeaves' : until, hostIid: rec.hostIid ?? api.sourceIid, turn: state.turn, removeAllAbilities: true });
+      log(state, ctx, owner, `${cardName(c, ctx.lookup)} loses all abilities${until === 'hostLeaves' ? ` for as long as ${api.sourceName} remains on the battlefield` : ''}.`);
+    }
+    if (!rec.statics.length && !rec.triggers.length && !rec.replacements?.length) return;
+  }
   (state.effects ??= []).push(rec);
   const who = state.players.find((x) => x.pid === owner)?.name ?? 'Someone';
   const span = until === 'eot' ? ' (this turn)' : until === 'yourNextTurn' ? ' (until your next turn)' : until === 'hostLeaves' ? ` (while ${api.sourceName} remains)` : '';
@@ -131,7 +147,7 @@ export function activeEffects(state: { effects?: import('./types.ts').TimedEffec
 // ------------------------------------------------------------------ triggers (triggers.ts)
 
 /** Effect objects with triggered abilities, as trigger hosts. */
-export function extraTriggerHosts(state: GameState): { c: CardInstance; face: number; id: string; lki: false; effect: { name: string; triggers: { index: number; params: Record<string, string> }[] } }[] {
+export function extraTriggerHosts(state: GameState): { c: CardInstance; face: number; id: string; lki: false; effect: { name: string; remembered: string[]; triggers: { index: number; params: Record<string, string> }[] } }[] {
   const out = [];
   for (const e of state.effects ?? []) {
     if (e.kind !== 'effect' || !e.triggers.length) continue;
@@ -142,7 +158,7 @@ export function extraTriggerHosts(state: GameState): { c: CardInstance; face: nu
       iid: `effect:${e.id}`, cardId: e.cardId, owner: e.controller, controller: e.controller, zone: 'command', tapped: false, faceDown: false,
       transformed: e.face === 1, counters: {}, damage: 0, tempPT: [0, 0], permPT: [0, 0], summoningSick: false, noUntap: false, revealedTo: [],
     };
-    out.push({ c, face: e.face, id: e.cardId, lki: false as const, effect: { name: e.name, triggers } });
+    out.push({ c, face: e.face, id: e.cardId, lki: false as const, effect: { name: e.name, remembered: e.remembered, triggers } });
   }
   return out;
 }

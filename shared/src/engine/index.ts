@@ -51,7 +51,10 @@ export { synthAbilities, levelStats, wardCost, KEYWORD_APIS, type LevelStats, ty
 export { levelOf, levelStatsOf } from './keyword-play.ts';
 export { cantBeCountered, damagePrevented, replacementGap, replacementsOf } from './replacements.ts';
 export { HANDLED_KEYWORDS, keywordGap } from './mechanics.ts';
-export { anyColorCost, bestPermission, mayPlayFrom, playPermissions, type PlayPermission } from './permissions.ts';
+export { anyColorCost, bestPermission, mayPlayFrom, playPermissions, topCardVisible, type PlayPermission } from './permissions.ts';
+export { landPlaysAllowed, maxHandSize, untapLimits } from './statics.ts';
+export { playerKeywords, protectionsOf } from './protection.ts';
+export { canPayMana, manaSources, payMana, planManaPayment } from './paycost.ts';
 export { processTriggers, queuedTriggers, triggerSupport, SUPPORTED_MODES, MAX_TRIGGERS_PER_ACTION } from './triggers.ts';
 export {
   activateRestriction, activeStatics, adjustCost, attackRestriction, blockRestriction, castRestriction, combatReminders, effectiveCost, faceManaCost,

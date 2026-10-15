@@ -1,5 +1,6 @@
 import type { CardInstance, GameState, GameView, HiddenCard, ViewCard, ViewPlayer } from './types.ts';
 import { controls } from '../engine/turns.ts';
+import { topCardVisible } from '../engine/permissions.ts';
 
 /** Can `viewer` see the face of this card? (viewer null = spectator) */
 export function canSee(state: GameState, viewer: string | null, c: CardInstance): boolean {
@@ -19,6 +20,7 @@ export function canSee(state: GameState, viewer: string | null, c: CardInstance)
       return !!v && v.viewingHandOf === c.owner;
     }
     case 'library': {
+      if (topCardVisible(state, viewer, c.iid)) return true; // Courser of Kruphix, Bolas's Citadel (engine/permissions.ts)
       if (viewer !== c.owner && !controls(state, viewer, c.owner)) return false;
       const p = state.players.find((x) => x.pid === c.owner);
       return !!p?.peek?.iids.includes(c.iid);

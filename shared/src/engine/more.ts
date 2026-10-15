@@ -130,6 +130,17 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
     }
     case 'Charm': return askModes(state, ctx, r);
     case '_SetChosenType': r.chosen.type = p.Type; return 'ok';
+    case '_Throne': {
+      // Undercity's Throne of the Dead Three: reveal the top ten, a creature card among them enters with three +1/+1 counters.
+      const me = player(state, r.controller);
+      const top = me.zones.library.slice(0, 10);
+      log(state, ctx, r.controller, `${me.name} reveals ${names(state, ctx, top)} (Throne of the Dead Three).`);
+      const creatures = top.filter((x) => faceOf(state.cards[x], ctx.lookup).types.includes('Creature'));
+      if (!creatures.length) { shuffleLibrary(state, me, ctx.rng); return 'ok'; }
+      ask(state, ctx, r.controller, 'Throne of the Dead Three: put a creature card onto the battlefield with three +1/+1 counters', creatures.map((x) => ({ value: x, label: nm(state, ctx, x) })),
+        { kind: 'more', m: 'throne', cont: r.contAt(r.index + 1), pid: r.controller });
+      return 'wait';
+    }
     case 'Branch': {
       const raw = p.BranchConditionSVar ?? p.BranchCondition;
       const v = r.amount(raw, 0);
@@ -828,6 +839,22 @@ export function answerMorePending(state: GameState, ctx: Ctx, pend: Pending, val
   const who = pname(state, pend.pid);
   switch (d.m) {
     case 'info': resumeAuto(state, ctx, d.cont); return null;
+    case 'throne': {
+      const c = state.cards[value];
+      const me = player(state, pend.pid);
+      if (c?.zone === 'library') {
+        moveCard(state, ctx, value, 'battlefield', { controller: pend.pid });
+        if (state.cards[value]?.zone === 'battlefield') {
+          c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + 3;
+          addEffect(state, ctx, { kind: 'pump', controller: pend.pid, until: 'yourNextTurn', cards: [value], pt: [0, 0], keywords: ['Hexproof'] });
+          c.tempKeywords = [...new Set([...(c.tempKeywords ?? []), 'Hexproof'])];
+        }
+        log(state, ctx, pend.pid, `${cardName(c, ctx.lookup)} enters the battlefield with three +1/+1 counters and gains hexproof until ${me.name}'s next turn.`);
+      }
+      shuffleLibrary(state, me, ctx.rng);
+      resumeAuto(state, ctx, d.cont);
+      return null;
+    }
     case 'modes': {
       const picked = d.picked as string[];
       if (value !== 'done') picked.push(value);

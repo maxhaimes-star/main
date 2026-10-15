@@ -12,6 +12,7 @@ import type { CardInstance, GameState } from '../game/types.ts';
 import { turnInfo } from './durations.ts';
 import { getScript, loyaltyOf, parseParams, scriptFaceOf } from './script.ts';
 import { matchCard } from './targets.ts';
+import { grantsFlash } from './statics.ts';
 import type { ParsedAbility } from './types.ts';
 
 export const SORCERY_SPEED = 'your main phase, while the stack is empty';
@@ -66,6 +67,7 @@ export function castTimingError(state: GameState, c: CardInstance, pid: string, 
       if (p.Caster === 'Opponent' && src.controller === pid) continue;
       if (matchCard(c, p.ValidCard,{ controller: pid, sourceIid: src.iid, lookup }) === true) return null;
     }
+    if (grantsFlash(state, c, pid, lookup)) return null; // also from effects (Teferi, Time Raveler +1), engine/statics.ts
     // The card's own "as though it had flash" static (e.g. conditional flash) — trust the player.
     if (script?.statics.some((l) => /Mode\$ CastWithFlash/.test(l) && /ValidCard\$ Card\.Self/.test(l))) return null;
   }

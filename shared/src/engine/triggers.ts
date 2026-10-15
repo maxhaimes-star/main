@@ -22,6 +22,7 @@ import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec
 import { uniqueVar } from './unique.ts';
 import { notePermissionUse } from './permissions.ts';
 import { moreVar } from './more.ts';
+import { designationTriggers } from './designations.ts';
 import { turnInfo } from './durations.ts';
 import { conditionTrue, evalCount } from './counts.ts';
 import { parseCostTokens } from './paycost.ts';
@@ -36,7 +37,7 @@ let budget = MAX_TRIGGERS_PER_ACTION;
 export const SUPPORTED_MODES = new Set([
   'ChangesZone', 'ChangesZoneAll', 'Phase', 'Attacks', 'AttackersDeclared', 'Blocks', 'SpellCast', 'Drawn', 'DamageDone',
   'DamageDoneOnce', 'DamageDealtOnce', 'Sacrificed', 'Discarded', 'DiscardedAll', 'LandPlayed', 'Exiled',
-  'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana',
+  'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch',
 ]);
 
 /** Trigger parameters the engine understands; a trigger with any other parameter is left to the players. */
@@ -106,7 +107,7 @@ interface Host {
   /** Last-known version (left the battlefield in this batch). */
   lki: boolean;
   /** Effect / emblem (engine/effects.ts): its triggers replace the card's T: lines. */
-  effect?: { name: string; triggers: { index: number; params: Record<string, string> }[] };
+  effect?: { name: string; remembered: string[]; triggers: { index: number; params: Record<string, string> }[] };
 }
 
 /** What a trigger matched: the trigger context, or 'unknown' (couldn't evaluate a condition). */
@@ -145,6 +146,7 @@ function trackTurnEvents(state: GameState, ctx: Ctx) {
       const who = state.cards[ev.iid]?.controller;
       if (who) ti.activations[`attacks|${who}`] = (ti.activations[`attacks|${who}`] ?? 0) + 1;
     } else if (ev.t === 'zone' && ev.to === 'battlefield') ti.activations[`entered|${ev.iid}`] = 1;
+    if (ev.t === 'zone' && ev.cause === 'sacrifice') (state.remembered ??= {})[`sacrificed|${ev.snap.controller}`] = [ev.iid];
   }
   // Ascend: ten or more permanents -> the city's blessing (for the rest of the game).
   for (const p of state.players) {
@@ -335,6 +337,15 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: isP ? undefined : ev.target, target: ev.target, source: ev.sourceIid, player: ev.pid };
     }
+    case 'BecomeMonarch': {
+      if (ev.t !== 'monarch') return null;
+      const v = p.ValidPlayer ?? 'Player';
+      // "Player.OpponentOf Remembered" (Palace Jailer): an opponent of the remembered player.
+      if (/OpponentOf Remembered/.test(v)) r = !!env.remembered && env.remembered.some((x) => isPlayerId(state, x) && x !== ev.pid);
+      else r = matchP(ev.pid, v, env);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, player: ev.pid };
+    }
     case 'Transformed': {
       if (ev.t !== 'transformed') return null;
       r = matchC(state.cards[ev.iid], p.ValidCard, env);
@@ -459,7 +470,7 @@ function detect(state: GameState, ctx: Ctx) {
       const c = host.c;
       if (!auto(c.controller)) continue;
       try {
-        const env: MatchEnv = { controller: c.controller, sourceIid: c.iid, lookup: ctx.lookup, attachedTo: c.attachedTo ?? '' };
+        const env: MatchEnv = { controller: c.controller, sourceIid: c.iid, lookup: ctx.lookup, attachedTo: c.attachedTo ?? '', turnInfo: turnInfo(state), ...(host.effect ? { remembered: host.effect.remembered } : {}) };
         // Prowess (keyword) as a synthesized trigger.
         if (ev.t === 'cast' && !host.lki && c.zone === 'battlefield' && hasKeyword(c, ctx.lookup, 'Prowess')) {
           const p = { Mode: 'SpellCast', ValidCard: 'Card.nonCreature', ValidActivatingPlayer: 'You', TriggerZones: 'Battlefield', TriggerDescription: 'Prowess (+1/+1 until end of turn)' };
@@ -471,7 +482,11 @@ function detect(state: GameState, ctx: Ctx) {
         const own = host.effect ? host.effect.triggers : host.id ? triggersOf(host.id, host.face) : [];
         for (const t of [...own, ...(host.effect ? [] : grantedTriggers(c))] as { index: number; params: Record<string, string>; ref?: { cardId: string; face: number } }[]) {
           const p = t.params;
-          if (p.Static === 'True') { staticCleanup(state, ctx, host, p, ev, env); continue; }
+          if (p.Static === 'True') {
+            const ch = host.id ? triggerChain(host.id, host.face, p.Execute) : undefined;
+            if (ch?.api === 'Cleanup' || p.Mode === 'TapsForMana' || p.Mode === 'ChangesZone' && /^(Cleanup|Forget)/.test(ch?.api ?? '')) { staticCleanup(state, ctx, host, p, ev, env); continue; }
+            // Other "static" triggers (an effect's "exiled until an opponent becomes the monarch") use the stack like any trigger.
+          }
           if (!SUPPORTED_MODES.has(p.Mode)) continue;
           if (!hostZoneOk(host, p, ev)) continue;
           const hit = matchEvent(state, ctx, host, p, ev, env);
@@ -508,6 +523,7 @@ function detect(state: GameState, ctx: Ctx) {
           if (budget <= 0) { if (budget === 0) log(state, ctx, null, 'Too many triggers in one action — stopping automatic triggers (put the rest on the stack by hand).'); budget--; continue; }
           budget--;
           if (uniqueTriggerSkip(state, ctx, t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p, hit.player)) continue;
+          if (host.effect) hit.effectRemembered = [...host.effect.remembered];
           found.push({ controller: c.controller, q: queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p), t.ref) });
         }
       } catch (e) {
@@ -624,6 +640,7 @@ function flush(state: GameState, ctx: Ctx): string[] {
 export function processTriggers(state: GameState, ctx: Ctx): boolean {
   if (state.phase !== 'playing') { state.events = []; return false; }
   trackTurnEvents(state, ctx);
+  designationTriggers(state, ctx, state.events ?? []); // monarch draw / steal, initiative (engine/designations.ts)
   uniqueTriggers(state, ctx); // Sagas, Hideaway, Mode$ Always, Saga sacrifice (turns.ts)
   try { detect(state, ctx); } catch (e) { log(state, ctx, null, `Trigger detection error: ${(e as Error).message}`); }
   const pushed = flush(state, ctx);

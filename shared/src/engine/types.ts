@@ -143,6 +143,8 @@ export interface TriggerContext {
   amount?: number;
   /** TapsForMana: the mana the permanent produced ("G", "UU"). */
   produced?: string;
+  /** Triggers of effects (engine/effects.ts): the effect's remembered objects. */
+  effectRemembered?: string[];
   /** Delayed / reflexive triggers: the objects the creating effect remembered. */
   remembered?: string[];
   /** Last-known information (e.g. the creature that died). */
@@ -362,7 +364,7 @@ export interface Pending {
 }
 
 /** Last-known information about a targeted / remembered card (taken before it moves). */
-export interface Lki { power: number; toughness: number; mv: number; controller: string; owner: string; name: string }
+export interface Lki { power: number; toughness: number; mv: number; controller: string; owner: string; name: string; counters?: Record<string, number> }
 
 /**
  * Engine-internal continuation: an automated resolution paused for a player decision

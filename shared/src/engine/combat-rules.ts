@@ -31,6 +31,13 @@ export function mustAttackers(state: GameState, ctx: Ctx): { iid: string; target
       out.push({ iid, target });
     }
   }
+  // Goaded creatures (Undercity's Arena) attack each combat if able.
+  for (const iid of state.battlefield) {
+    const c = state.cards[iid];
+    if (c.controller !== state.activePlayer || c.tapped || c.attacking || !c.tempKeywords?.includes('Goaded') || out.some((o) => o.iid === iid)) continue;
+    if (!isCreature(c, ctx.lookup, state) || (c.summoningSick && !hasKeyword(c, ctx.lookup, 'Haste', state)) || attackRestriction(state, iid, ctx.lookup)) continue;
+    out.push({ iid, target: opp });
+  }
   return out;
 }
 

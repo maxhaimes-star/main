@@ -195,7 +195,9 @@ export type GameEvent =
   /** A permanent transformed (Mode$ Transformed triggers). */
   | { t: 'transformed'; iid: string }
   /** A permanent became tapped (Mode$ Taps), or was tapped for mana (Mode$ TapsForMana, with what it produced). */
-  | { t: 'tapped'; iid: string; forMana?: string; pid: string };
+  | { t: 'tapped'; iid: string; forMana?: string; pid: string }
+  /** A player became the monarch (Mode$ BecomeMonarch). */
+  | { t: 'monarch'; pid: string };
 
 /**
  * Actions a player can send. All are validated in the reducer.

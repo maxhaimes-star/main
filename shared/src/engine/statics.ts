@@ -467,7 +467,7 @@ const CONT_HANDLED_KEYS = new Set([
   'AddKeyword', 'RemoveKeyword', 'AddType', 'RemoveType', 'RemoveCardTypes', 'Condition', 'IsPresent', 'PresentCompare', 'PresentZone',
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone',
 ]);
-const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated',
+const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated', 'CantGainLife', 'CastWithFlash',
   // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)
   'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost']);
 /** Modes that are listed and logged as reminders. */
@@ -508,7 +508,7 @@ export function staticGaps(s: Pick<StaticAbility, 'params' | 'svars' | 'modes'> 
       if (p.Cost || p.Color) gaps.push('colored cost change');
       if (!exprSupported(full, p.Amount ?? '1')) gaps.push(`Amount$ ${p.Amount}`);
     } else if (mode === 'CantBeCast') {
-      if (p.Caster && !['You', 'Opponent'].includes(p.Caster)) gaps.push(`Caster$ ${p.Caster}`);
+      if (p.Caster && !['You', 'Opponent', 'Player.IsRemembered'].includes(p.Caster)) gaps.push(`Caster$ ${p.Caster}`);
     } else if (!ENFORCED_MODES.has(mode)) gaps.push(REMINDER_MODES.has(mode) ? `${mode} (reminder)` : mode);
   }
   return gaps;
@@ -529,6 +529,27 @@ export function parseStatic(line: string, svars: Record<string, string> = {}): P
 }
 
 // ------------------------------------------------------------------ public queries
+
+/** Can `pid` gain life (CantGainLife statics: Screaming Nemesis' "can't gain life for the rest of the game")? Reason or null. */
+export function lifeGainPrevented(st: StaticsState, pid: string, lookup: Lookup): string | null {
+  for (const { s } of active(st, lookup, 'CantGainLife')) {
+    const v = s.params.ValidPlayer ?? 'You';
+    const hit = v === 'Player.IsRemembered' ? (s.remembered ?? []).includes(pid) : /^You/.test(v) ? s.controller === pid : /^Opponent/.test(v) ? s.controller !== pid : true;
+    if (hit) return `${srcName(st, s, lookup)}: ${s.description}`;
+  }
+  return null;
+}
+
+/** "You may cast <spells> as though they had flash" from effects (Teferi, Time Raveler's +1) and permanents. */
+export function grantsFlash(st: StaticsState, c: CardInstance, pid: string, lookup: Lookup): boolean {
+  for (const { s, ev } of active(st, lookup, 'CastWithFlash')) {
+    const p = s.params;
+    if (p.Caster === 'You' && pid !== s.controller) continue;
+    if (p.Caster === 'Opponent' && pid === s.controller) continue;
+    if (p.ValidCard && matchCard(c, p.ValidCard, ev.env(s)) === true) return true;
+  }
+  return false;
+}
 
 /** Land plays `pid` gets each turn: 1 + "you may play an additional land" statics (Exploration, Dryad, Oracle, Fastbond: unlimited). */
 export function landPlaysAllowed(st: StaticsState, pid: string, lookup: Lookup): number {
@@ -659,7 +680,15 @@ export function castRestriction(st: StaticsState, iid: string, pid: string, look
     const p = s.params;
     if (p.Caster === 'Opponent' && pid === s.controller) continue;
     if (p.Caster === 'You' && pid !== s.controller) continue;
-    if (p.ValidCard && matchCard(c, p.ValidCard, ev.env(s)) !== true) continue;
+    if (p.Caster === 'Player.IsRemembered' && !(s.remembered ?? []).includes(pid)) continue;
+    let valid = p.ValidCard;
+    // "spells with the same name as that creature" (Reflector Mage): compare with the remembered cards' names.
+    if (valid && /sharesNameWith Remembered(LKI)?/.test(valid)) {
+      const names = (s.remembered ?? []).map((x) => visible(st, x)).filter((x): x is CardInstance => !!x).map((x) => faceOf(x, lookup).name);
+      if (!names.includes(faceOf(c, lookup).name)) continue;
+      valid = valid.replace(/\+?sharesNameWith Remembered(LKI)?/, '').replace(/\.$/, '');
+    }
+    if (valid && matchCard(c, valid, ev.env(s)) !== true) continue;
     if (p.OnlySorcerySpeed === 'True') {
       const sorcery = st.activePlayer === pid && (st.step === 'main1' || st.step === 'main2') && !(st.stack?.length);
       if (sorcery) continue;

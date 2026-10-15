@@ -206,6 +206,28 @@ export function playPermissions(st: PermState, pid: string, iid: string, lookup:
   return out.filter((perm) => !(perm.lands === 'only' && !isLand) && !(perm.lands === 'never' && isLand));
 }
 
+/**
+ * "You may look at the top card of your library any time" (Bolas's Citadel, MayLookAt$ You) / "Play with the top card of your
+ * library revealed" (Courser of Kruphix, Oracle of Mul Daya, MayLookAt$ Player): can `viewer` see library card `iid`?
+ */
+export function topCardVisible(st: PermState, viewer: string | null, iid: string, lookup: Lookup = getCard): boolean {
+  const c = st.cards[iid];
+  if (!c || isHidden(c) || c.zone !== 'library') return false;
+  const owner = st.players.find((p) => p.pid === c.owner);
+  if (owner?.zones.library[0] !== iid) return false;
+  for (const hid of st.battlefield) {
+    const host = visible(st, hid);
+    if (!host || host.faceDown || host.controller !== c.owner) continue;
+    for (const line of scriptFaceOf(host)?.statics ?? []) {
+      const p = parseParams(line).params;
+      if (!p.MayLookAt || !zonesOf(p.AffectedZone).includes('library')) continue;
+      if (p.MayLookAt === 'Player' || viewer === c.owner) return true;
+    }
+  }
+  void lookup;
+  return false;
+}
+
 /** Can `pid` play / cast this card from where it is (hand: always)? For the strict-mode castability check and land plays. */
 export function mayPlayFrom(st: PermState, pid: string, iid: string, lookup: Lookup = getCard): boolean {
   const c = visible(st, iid);

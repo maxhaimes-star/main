@@ -7,7 +7,7 @@ import type { ParsedAbility } from './types.ts';
 export const MORE_APIS = new Set([
   'Branch', 'RepeatEach', 'Repeat', 'GenericChoice', 'ChooseCard', 'ChooseNumber', 'TapOrUntap', 'Amass', 'Proliferate', 'Connive',
   'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'DamageResolve',
-  'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType',
+  'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType', '_Throne',
 ]);
 
 /** Defined$ values more.ts resolves (beyond script.ts SUPPORTED_DEFINED). */
@@ -15,7 +15,7 @@ export const MORE_DEFINED = new Set([
   'ChosenCard', 'ChosenCardLKI', 'ChosenCardController', 'ChosenCardOwner', 'Imprinted', 'ReplacedCard', 'TriggeredSpellAbility', 'TriggeredCardOpponent',
   'TriggeredDefender', 'TargetedOrController', 'ExiledWith', 'Remembered', 'RememberedController', 'RememberedOwner', 'ThisTargetedCard', 'ThisTargetedPlayer',
   'TriggeredDefender.Opponent & Valid Planeswalker.TriggeredDefender', 'Enchanted', 'TriggeredAttackingPlayer', 'TriggeredActivator', 'Player.Opponent',
-  'TriggeredStackItem',
+  'TriggeredStackItem', 'TopOfLibrary',
 ]);
 
 /** Counting variables more.ts evaluates. */
@@ -36,7 +36,10 @@ export function moreVarSupported(v: string | undefined): boolean {
     || /^PlayerCountOpponents\$(HighestCardsInHand|LowestLifeTotal|HighestLifeTotal)$/.test(v)
     || /^Count\$CardsInYourHand\/.+$/.test(v)
     || /^Count\$xPaid\/(HalfDown|HalfUp|Twice)$/.test(v)
-    || /^Count\$ValidExile .+$/.test(v);
+    || /^Count\$ValidExile .+$/.test(v)
+    || /^SVar\$\w+\/(Plus|Minus|Times)\.-?\d+$/.test(v) || /^SVar\$\w+\/(HalfDown|HalfUp|Twice|Negative)$/.test(v)
+    || /^TriggeredCard\$CardCounters\.\w+$/.test(v) || /^Sacrificed\$Card(ManaCost|Power)(\/Plus\.\d+)?$/.test(v)
+    || /^Count\$Valid .+ControlledBy \w+$/.test(v);
 }
 
 /** Reason the step can't be automated: undefined = not a more.ts API, null = supported. */
