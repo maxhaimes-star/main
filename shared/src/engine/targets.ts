@@ -21,11 +21,17 @@ export interface MatchEnv {
   pt?: (c: CardInstance) => [number, number];
   /** Keyword check (e.g. including static effects); default: hasKeyword without statics. */
   kw?: (c: CardInstance, kw: string) => boolean;
+  /** Choices of the source (ChosenType / ChosenColor / NamedCard); absent = unknown. */
+  chosen?: import('./types.ts').Chosen;
+  /** Objects the source / effect remembered (IsRemembered); absent = unknown. */
+  remembered?: string[];
 }
 
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
 const PERMANENT_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Land', 'Planeswalker'];
 const COLOR_WORDS: Record<string, string> = { White: 'W', Blue: 'U', Black: 'B', Red: 'R', Green: 'G' };
+/** Words a "has all creature types" permanent doesn't match. */
+const NOT_CREATURE_TYPES = new Set(['Legendary', 'Basic', 'Snow', 'World', 'Token', 'Aura', 'Equipment', 'Vehicle', 'Saga', 'Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Desert', 'Gate', 'Treasure', 'Clue', 'Food']);
 
 function and(a: Tri, b: Tri): Tri {
   if (a === false || b === false) return false;
@@ -34,22 +40,24 @@ function and(a: Tri, b: Tri): Tri {
 }
 function not(a: Tri): Tri { return a === 'unknown' ? 'unknown' : !a; }
 
-interface CardFacts { types: string[]; typeLine: string; name: string; colors: string[]; cmc: number; power: number; toughness: number }
+interface CardFacts { types: string[]; typeLine: string; name: string; colors: string[]; cmc: number; power: number; toughness: number; allTypes?: boolean }
 
 function facts(c: CardInstance, lookup: Lookup, pt?: MatchEnv['pt']): CardFacts {
   if (c.faceDown) return { types: ['Creature'], typeLine: 'Creature', name: '', colors: [], cmc: 0, power: 2, toughness: 2 };
   const f = faceOf(c, lookup);
-  const data = c.cardId ? lookup(c.cardId) : undefined;
-  const colors = c.token && !c.cardId ? c.token.colors : data?.colors ?? [];
+  const id = (c.zone === 'battlefield' ? c.copyOf : undefined) ?? c.cardId;
+  const data = id ? lookup(id) : undefined;
+  const colors = f.colors ?? (c.token && !c.cardId ? c.token.colors : data?.colors ?? []);
+  const allTypes = f.allCreatureTypes && f.types.includes('Creature');
   const plus = (c.counters['+1/+1'] ?? 0) - (c.counters['-1/-1'] ?? 0);
   const n = (v?: string) => { const x = parseInt(v ?? '', 10); return Number.isNaN(x) ? 0 : x; };
   const onBf = c.zone === 'battlefield';
   if (onBf && pt) {
     const [power, toughness] = pt(c);
-    return { types: f.types, typeLine: f.typeLine, name: f.name, colors, cmc: c.token && !c.cardId ? 0 : data?.cmc ?? 0, power, toughness };
+    return { types: f.types, typeLine: f.typeLine, name: f.name, colors, cmc: !data ? 0 : data.cmc ?? 0, power, toughness, allTypes };
   }
   return {
-    types: f.types, typeLine: f.typeLine, name: f.name, colors, cmc: c.token && !c.cardId ? 0 : data?.cmc ?? 0,
+    types: f.types, typeLine: f.typeLine, name: f.name, colors, cmc: !data ? 0 : data.cmc ?? 0, allTypes,
     power: n(f.power) + (onBf ? plus + c.tempPT[0] + c.permPT[0] : 0),
     toughness: n(f.toughness) + (onBf ? plus + c.tempPT[1] + c.permPT[1] : 0),
   };
@@ -68,7 +76,7 @@ function typeCheck(fx: CardFacts, c: CardInstance, t: string): Tri {
     case 'Historic': return hasWord(fx.typeLine, 'Legendary') || fx.types.includes('Artifact') || hasWord(fx.typeLine, 'Saga');
   }
   if (CARD_TYPES.includes(t)) return fx.types.includes(t);
-  if (/^[A-Z][a-z]+$/.test(t)) return hasWord(fx.typeLine, t); // subtype / supertype (Goblin, Aura, Legendary, Snow ...)
+  if (/^[A-Z][a-z]+$/.test(t)) return hasWord(fx.typeLine, t) || (!!fx.allTypes && !NOT_CREATURE_TYPES.has(t)); // subtype / supertype (Goblin, Aura, Legendary, Snow ...)
   return 'unknown';
 }
 
@@ -110,6 +118,12 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'Colorless': return fx.colors.length === 0;
     case 'MultiColor': return fx.colors.length >= 2;
     case 'MonoColor': return fx.colors.length === 1;
+    // Choices of the source (engine/copy.ts) and remembered objects (engine/effects.ts).
+    case 'ChosenType': return env.chosen === undefined ? 'unknown' : !!env.chosen.type && (hasWord(fx.typeLine, env.chosen.type) || !!fx.allTypes);
+    case 'NamedCard': return env.chosen === undefined ? 'unknown' : !!env.chosen.name && fx.name === env.chosen.name;
+    case 'ChosenColor': return env.chosen === undefined ? 'unknown' : !!env.chosen.color && fx.colors.includes(COLOR_WORDS[env.chosen.color] ?? env.chosen.color);
+    case 'IsRemembered': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.iid);
+    case 'IsNotRemembered': return env.remembered === undefined ? 'unknown' : !env.remembered.includes(c.iid);
   }
   if (COLOR_WORDS[prop]) return fx.colors.includes(COLOR_WORDS[prop]);
   let m = /^(cmc|power|toughness)(LT|LE|EQ|NE|GE|GT)(.+)$/.exec(prop);

@@ -20,7 +20,7 @@
 import { cardName, type Lookup } from '../game/rules.ts';
 import { type Ctx, emit, log, moveCard, moveHooks, type MoveOpts, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
-import { getScript, parseParams, SCRIPTS } from './script.ts';
+import { getScript, parseParams, SCRIPTS, scriptRef } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';
 import type { Pending } from './types.ts';
 
@@ -34,11 +34,12 @@ function faceIndex(c: CardInstance): number {
 
 /** Parsed R: lines of a card's current face. */
 export function replacementsOf(c: CardInstance): RLine[] {
-  if (!c.cardId || c.faceDown) return [];
-  const key = `${c.cardId}|${faceIndex(c)}`;
+  const ref = c.faceDown ? undefined : scriptRef(c); // a copy: the copied card's R: lines
+  if (!ref) return [];
+  const key = `${ref.cardId}|${ref.face}`;
   let v = rcache.get(key);
   if (!v) {
-    const f = getScript(c.cardId)?.[faceIndex(c)];
+    const f = getScript(ref.cardId)?.[ref.face];
     v = f ? f.replacements.map((line) => ({ params: parseParams(line).params, svars: f.svars, name: f.name })) : [];
     rcache.set(key, v);
   }

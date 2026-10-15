@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
-import {
+import { hasKeyword,
   activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard, viewFor, isHidden,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
@@ -458,7 +458,7 @@ describe('enchantments and engines', () => {
     expect(g.pending[0].prompt).toMatch(/battlefield/);
     answer(g, ctx, gb);
     expect(g.cards[gb]).toMatchObject({ zone: 'battlefield', controller: 'a' });
-    expect(g.cards[gb].tempKeywords).toContain('Haste');
+    expect(hasKeyword(g.cards[gb], getCard, 'Haste', g)).toBe(true);
     expect(g.delayedTriggers?.length).toBe(1);
     act(g, ctx, 'a', { t: 'gotoStep', step: 'end' });
     resolveAll(g, ctx);
@@ -629,7 +629,7 @@ describe('cube staples work end to end', () => {
     act(g, ctx, 'a', { t: 'cast', iid: tb, force: true });
     act(g, ctx, 'b', { t: 'pass' });
     answer(g, ctx, gb);
-    expect(g.cards[gb].tempKeywords).toContain('Haste');
+    expect(hasKeyword(g.cards[gb], getCard, 'Haste', g)).toBe(true);
     act(g, ctx, 'a', { t: 'gotoStep', step: 'end' });
     resolveAll(g, ctx);
     expect(g.cards[gb].zone).toBe('graveyard');

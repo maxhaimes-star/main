@@ -10,7 +10,7 @@
 import { faceOf, type Lookup } from '../game/rules.ts';
 import type { CardInstance, GameState } from '../game/types.ts';
 import { turnInfo } from './durations.ts';
-import { getScript, loyaltyOf, parseParams } from './script.ts';
+import { getScript, loyaltyOf, parseParams, scriptFaceOf } from './script.ts';
 import { matchCard } from './targets.ts';
 import type { ParsedAbility } from './types.ts';
 
@@ -25,8 +25,8 @@ function staticsOn(state: GameState): { c: CardInstance; params: Record<string, 
   const out: { c: CardInstance; params: Record<string, string> }[] = [];
   for (const iid of state.battlefield) {
     const c = state.cards[iid];
-    if (!c?.cardId || c.faceDown) continue;
-    const f = getScript(c.cardId)?.[c.transformed ? 1 : 0];
+    if (!c || c.faceDown) continue;
+    const f = scriptFaceOf(c);
     for (const line of f?.statics ?? []) out.push({ c, params: parseParams(line).params });
   }
   return out;

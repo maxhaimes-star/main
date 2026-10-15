@@ -4,14 +4,56 @@
  */
 import data from '../../data/scripts.json' with { type: 'json' };
 import { KNOWN_CONDITIONS, supportedCount } from './counts.ts';
-import { type AutoInfo, type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
+import { type Animation, type AutoInfo, type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
 import { KEYWORD_APIS, synthAbilities, synthLine } from './keywords.ts';
 import { uniqueReason, uniqueVarSupported } from './unique-support.ts';
+import { EXT_APIS, extDefinedOk, extUnsupported } from './ext.ts';
 
 export const SCRIPTS = data as unknown as ScriptData;
 
 export function getScript(cardId: string): ForgeFace[] | undefined {
   return SCRIPTS.cards[cardId];
+}
+
+/** The parts of a CardInstance that decide which script it uses. */
+type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[] };
+
+/**
+ * The script (card id + face) an instance uses: a copy (copyOf, on the battlefield) uses the copied card's script, a
+ * transformed card its back face. undefined = no card script, or it lost all its abilities (Oko's Elk).
+ */
+export function scriptRef(c: ScriptHolder): { cardId: string; face: number } | undefined {
+  if (c.animations?.some((a) => a.removeAllAbilities)) return undefined;
+  if (c.copyOf && (c.zone === undefined || c.zone === 'battlefield')) return { cardId: c.copyOf, face: c.copyFace ?? 0 };
+  return c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
+}
+
+/** The script face an instance uses (see scriptRef). */
+export function scriptFaceOf(c: ScriptHolder): ForgeFace | undefined {
+  const r = scriptRef(c);
+  return r ? getScript(r.cardId)?.[r.face] : undefined;
+}
+
+/**
+ * Activated abilities granted by animate effects from a card's own SVars (Lavaclaw Reaches' "{X}: +X/+0") get
+ * ability indexes GRANT_BASE + (index of the SVar in the face's svars).
+ */
+export const GRANT_BASE = 2000;
+
+/** Granted lines of one kind (abilities / triggers / statics) from the instance's animations, with the SVars they use. */
+export function grantedLines(c: ScriptHolder, kind: 'abilities' | 'triggers' | 'statics'): { line: string; name: string; cardId: string; face: number; svars: Record<string, string>; faceName: string }[] {
+  const out: { line: string; name: string; cardId: string; face: number; svars: Record<string, string>; faceName: string }[] = [];
+  if (c.zone !== undefined && c.zone !== 'battlefield') return out;
+  for (const a of c.animations ?? []) {
+    const g = a.grant;
+    const f = g ? getScript(g.cardId)?.[g.face] : undefined;
+    if (!g || !f) continue;
+    for (const name of g[kind] ?? []) {
+      const line = f.svars[name];
+      if (line) out.push({ line, name, cardId: g.cardId, face: g.face, svars: f.svars, faceName: f.name });
+    }
+  }
+  return out;
 }
 
 /** Split "SP$ Api | Key$ value | ..." into kind / api / params. */
@@ -73,6 +115,7 @@ export function abilityLine(cardId: string, face: number, index: number): string
   const f = getScript(cardId)?.[face];
   if (!f) return undefined;
   if (index === -1) return auraLine(f);
+  if (index >= GRANT_BASE) { const sv = f.svars[Object.keys(f.svars)[index - GRANT_BASE] ?? '']; return sv && /^\s*AB\$/.test(sv) ? sv : undefined; }
   if (index >= SYNTH_BASE) return synthLine(f, index);
   return f.abilities[index];
 }
@@ -281,6 +324,8 @@ export const SUPPORTED_DEFINED = new Set([
   'TriggeredCard', 'TriggeredCardLKICopy', 'TriggeredNewCardLKICopy', 'TriggeredCardController', 'TriggeredCardOwner',
   'TriggeredPlayer', 'TriggeredActivator', 'TriggeredTarget', 'TriggeredDefendingPlayer', 'TriggeredSourceController',
   'TriggeredAttackingPlayer', 'TriggeredSource', 'DelayTriggerRemembered', 'DelayTriggerRememberedLKI',
+  // engine/copy.ts
+  'ChosenPlayer',
 ]);
 
 const AMOUNT_PARAMS = ['NumDmg', 'NumCards', 'LifeAmount', 'TokenAmount', 'CounterNum', 'NumAtt', 'NumDef', 'ScryNum', 'DigNum', 'Amount'];
@@ -310,15 +355,17 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   const unique = uniqueReason(step); // unique / hard cards (unique-support.ts)
   if (unique !== undefined) return unique === null && p.Condition && !KNOWN_CONDITIONS.has(p.Condition) ? `${api} (Condition$ ${p.Condition})` : unique;
   if (api === 'Effect' && p.AILogic === 'CantRegenerate') return null; // regeneration isn't modelled: no-op
-  if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api)) return api;
+  const ext = EXT_APIS.has(api); // Animate, Effect, Clone ... (engine/ext.ts)
+  if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api) && !ext) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;
-  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined)) return `${api} (Defined$ ${p.Defined})`;
+  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined) && !(ext && extDefinedOk(p.Defined))) return `${api} (Defined$ ${p.Defined})`;
   if (p.UnlessCost && api !== 'Counter') return `${api} (UnlessCost)`;
   if (p.Condition && !KNOWN_CONDITIONS.has(p.Condition)) return `${api} (Condition$ ${p.Condition})`;
   for (const k of AMOUNT_PARAMS) {
     if (k === 'Amount' && !['Surveil', 'Mana', 'Sacrifice'].includes(api)) continue;
     if (!amountSupported(p[k], step.svars)) return `${api} (${k}$ ${p[k]})`;
   }
+  if (ext) return extUnsupported(step);
   switch (api) {
     case 'Discard': if (p.Mode && !['Random', 'TgtChoose', 'RevealYouChoose', 'Hand'].includes(p.Mode)) return `Discard (Mode$ ${p.Mode})`; break;
     case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any') return 'Mana (choice)'; break;
@@ -326,13 +373,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
       if (step.kind !== 'DB' || p.Mode !== 'Phase' || !PHASES[p.Phase ?? ''] || !p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
       if (p.RememberObjects && !SUPPORTED_DEFINED.has(p.RememberObjects)) return 'DelayedTrigger (remembered objects)';
       break;
-    case 'ImmediateTrigger': if (step.kind !== 'DB' || !p.Execute || !step.svars?.[p.Execute] || p.TriggerAmount) return 'ImmediateTrigger'; break;
-    case 'CopyPermanent': {
-      const extra = Object.keys(p).filter((k) => !['Defined', 'ValidTgts', 'TgtPrompt', 'AddKeywords', 'AtEOT', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'TargetMin', 'TargetMax', 'AILogic'].includes(k));
-      if (extra.length) return `CopyPermanent (${extra[0]})`;
-      if (p.AtEOT && !['Sacrifice', 'Exile'].includes(p.AtEOT)) return 'CopyPermanent (AtEOT)';
-      break;
-    }
+    case 'ImmediateTrigger': if (step.kind !== 'DB' || !p.Execute || !step.svars?.[p.Execute] || (p.TriggerAmount && p.TriggerAmount !== 'Remembered$Amount')) return 'ImmediateTrigger'; break;
     case 'Investigate': if (p.Num && !amountSupported(p.Num, step.svars)) return 'Investigate'; break;
     case 'Tap': case 'Untap': if (p.UntapType || p.TapType) return `${api} (choice)`; break;
     case 'Counter': if (p.UnlessCost && !/^[\dWUBRGCX ]+$/.test(p.UnlessCost)) return 'Counter (UnlessCost)'; break;

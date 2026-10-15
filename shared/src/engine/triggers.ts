@@ -15,7 +15,8 @@ import { type Ctx, log, player, randomId } from '../game/state.ts';
 import { type CardInstance, type GameEvent, type GameState, type StackItem, STEPS, type Zone } from '../game/types.ts';
 import { checkTargets } from './play.ts';
 import { lkiOf } from './resolve.ts';
-import { chainOf, describe, getScript, isAutomatable, PHASES, targetSpecs, triggersOf } from './script.ts';
+import { chainOf, describe, getScript, isAutomatable, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
+import { extraTriggerHosts, grantedTriggers } from './effects.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec, TriggerContext } from './types.ts';
 import { uniqueVar } from './unique.ts';
@@ -86,8 +87,12 @@ interface Host {
   c: CardInstance;
   /** Card face whose script applies. */
   face: number;
+  /** Card id whose script applies (a copy uses the copied card's, engine/copy.ts). */
+  id?: string;
   /** Last-known version (left the battlefield in this batch). */
   lki: boolean;
+  /** Effect / emblem (engine/effects.ts): its triggers replace the card's T: lines. */
+  effect?: { name: string; triggers: { index: number; params: Record<string, string> }[] };
 }
 
 /** What a trigger matched: the trigger context, or 'unknown' (couldn't evaluate a condition). */
@@ -270,8 +275,8 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
 
 /** Static$ True state-maintenance triggers: only "forget what this card remembered" is applied (immediately). */
 function staticCleanup(state: GameState, ctx: Ctx, host: Host, p: Record<string, string>, ev: GameEvent, env: MatchEnv) {
-  if (!SUPPORTED_MODES.has(p.Mode) || !host.c.cardId || !hostZoneOk(host, p, ev)) return;
-  const chain = triggerChain(host.c.cardId, host.face, p.Execute);
+  if (!SUPPORTED_MODES.has(p.Mode) || !host.id || host.effect || !hostZoneOk(host, p, ev)) return;
+  const chain = triggerChain(host.id, host.face, p.Execute);
   if (chain?.api !== 'Cleanup' || !chain.params.ClearRemembered) return;
   const hit = matchEvent(state, ctx, host, p, ev, env);
   if (hit && hit !== 'unknown' && state.remembered) delete state.remembered[host.c.iid];
@@ -293,7 +298,8 @@ function hostsFor(state: GameState, ev: GameEvent, leftSnaps: Map<string, CardIn
   const out = new Map<string, Host>();
   const add = (c: CardInstance | undefined, lki: boolean) => {
     if (!c || c.faceDown || out.has(c.iid)) return;
-    out.set(c.iid, { c, face: c.transformed ? 1 : 0, lki });
+    const ref = scriptRef(c);
+    out.set(c.iid, { c, face: ref?.face ?? 0, id: ref?.cardId, lki });
   };
   const leaveEvent = ev.t === 'zone' && ev.from === 'battlefield';
   if (leaveEvent) for (const snap of leftSnaps.values()) add(snap, true);
@@ -304,11 +310,12 @@ function hostsFor(state: GameState, ev: GameEvent, leftSnaps: Map<string, CardIn
     const c = state.cards[iid];
     if (c?.cardId && triggersOf(c.cardId, 0).some((t) => /Graveyard/.test(t.params.TriggerZones ?? ''))) add(c, false);
   }
-  return [...out.values()];
+  return [...out.values(), ...extraTriggerHosts(state)];
 }
 
 /** Zone the host must be in for this trigger to work. */
 function hostZoneOk(host: Host, p: Record<string, string>, ev: GameEvent): boolean {
+  if (host.effect) return true;
   const zone: Zone = host.lki ? 'battlefield' : host.c.zone;
   if (zone === 'hand' || zone === 'library' || zone === 'sideboard') return false; // hidden zones: never (logs are public)
   const isEventCard = (ev.t === 'zone' || ev.t === 'cast') && ev.iid === host.c.iid;
@@ -324,20 +331,22 @@ function hostZoneOk(host: Host, p: Record<string, string>, ev: GameEvent): boole
 interface Detected { controller: string; q: QueuedTrigger }
 
 function hostLabel(host: Host, ctx: Ctx): string {
+  if (host.effect) return host.effect.name;
   return cardName(host.c, ctx.lookup);
 }
 
-function queueFor(state: GameState, ctx: Ctx, host: Host, index: number, p: Record<string, string>, hit: TriggerContext, line?: string): QueuedTrigger {
+function queueFor(state: GameState, ctx: Ctx, host: Host, index: number, p: Record<string, string>, hit: TriggerContext, line?: string, ref?: { cardId: string; face: number }): QueuedTrigger {
   const c = host.c;
-  const cardId = c.cardId ?? '';
-  const auto: AutoInfo = { cardId, face: host.face, source: 'trigger', index, targets: [], trigger: hit };
+  const cardId = ref?.cardId ?? host.id ?? '';
+  const face = ref?.face ?? host.face;
+  const auto: AutoInfo = { cardId, face, source: 'trigger', index, targets: [], trigger: hit };
   if (line) auto.line = line; else if (p.Execute) auto.svar = p.Execute;
   const cond: Record<string, string> = {};
   for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare']) if (p[k]) cond[k] = p[k];
   if (Object.keys(cond).length && p.NoResolvingCheck !== 'True') hit.condition = cond;
   const name = hostLabel(host, ctx);
   const chain = chainOf(auto);
-  const faceName = (cardId && getScript(cardId)?.[host.face]?.name) || name;
+  const faceName = (cardId && getScript(cardId)?.[face]?.name) || name;
   const desc = describe(p.TriggerDescription ?? chain?.description ?? 'Triggered ability', faceName);
   const manual = !chain || (chain.kind === 'AB' && !!chain.params.Cost);
   const q: QueuedTrigger = { id: randomId(ctx.rng), controller: c.controller, sourceIid: state.cards[c.iid] ? c.iid : undefined, sourceName: name, text: `${name}: ${desc}`, auto };
@@ -370,8 +379,10 @@ function detect(state: GameState, ctx: Ctx) {
           const hit = matchEvent(state, ctx, host, p, ev, env);
           if (hit && hit !== 'unknown') found.push({ controller: c.controller, q: queueFor(state, ctx, host, -1, p, hit, PROWESS_LINE) });
         }
-        if (!c.cardId) continue;
-        for (const t of triggersOf(c.cardId, host.face)) {
+        if (!host.id && !host.effect && !c.animations) continue;
+        // The card's T: lines (a copy: the copied card's), triggers granted by animate effects, or an effect's triggers.
+        const own = host.effect ? host.effect.triggers : host.id ? triggersOf(host.id, host.face) : [];
+        for (const t of [...own, ...(host.effect ? [] : grantedTriggers(c))] as { index: number; params: Record<string, string>; ref?: { cardId: string; face: number } }[]) {
           const p = t.params;
           if (p.Static === 'True') { staticCleanup(state, ctx, host, p, ev, env); continue; }
           if (!SUPPORTED_MODES.has(p.Mode)) continue;
@@ -379,7 +390,7 @@ function detect(state: GameState, ctx: Ctx) {
           const hit = matchEvent(state, ctx, host, p, ev, env);
           if (!hit) continue;
           const unknownParam = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
-          const faceName = getScript(c.cardId)?.[host.face]?.name ?? hostLabel(host, ctx);
+          const faceName = getScript(t.ref?.cardId ?? host.id ?? '')?.[t.ref?.face ?? host.face]?.name ?? hostLabel(host, ctx);
           const desc = describe(p.TriggerDescription ?? 'a triggered ability', faceName);
           if (hit === 'unknown' || unknownParam) {
             if (once.has(`hint|${c.iid}|${t.index}`)) continue;
@@ -396,7 +407,7 @@ function detect(state: GameState, ctx: Ctx) {
           if (p.IsPresent || p.CheckSVar) {
             const cond: Record<string, string> = {};
             for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare']) if (p[k]) cond[k] = p[k];
-            const holds = conditionHolds(state, ctx, cond, c.controller, c.iid, c.cardId, host.face);
+            const holds = conditionHolds(state, ctx, cond, c.controller, c.iid, t.ref?.cardId ?? host.id, t.ref?.face ?? host.face);
             if (holds === false) continue;
             if (holds === 'unknown') { log(state, ctx, c.controller, `Check by hand: ${hostLabel(host, ctx)} may trigger (condition not verified) — ${desc}`); continue; }
           }
@@ -409,8 +420,8 @@ function detect(state: GameState, ctx: Ctx) {
           }
           if (budget <= 0) { if (budget === 0) log(state, ctx, null, 'Too many triggers in one action — stopping automatic triggers (put the rest on the stack by hand).'); budget--; continue; }
           budget--;
-          if (uniqueTriggerSkip(state, ctx, c.cardId, host.face, p, hit.player)) continue;
-          found.push({ controller: c.controller, q: queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(c.cardId, host.face, p)) });
+          if (uniqueTriggerSkip(state, ctx, t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p, hit.player)) continue;
+          found.push({ controller: c.controller, q: queueFor(state, ctx, host, t.index, p, hit, uniqueTriggerLine(t.ref?.cardId ?? c.cardId ?? "", t.ref?.face ?? host.face, p), t.ref) });
         }
       } catch (e) {
         log(state, ctx, null, `Trigger detection error (${hostLabel(host, ctx)}): ${(e as Error).message} — handle it by hand.`);

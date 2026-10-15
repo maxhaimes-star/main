@@ -10,6 +10,7 @@ import { cardName } from '../game/rules.ts';
 import { type Ctx, log, moveCard, randomId } from '../game/state.ts';
 import type { CardInstance, GameState, Zone } from '../game/types.ts';
 import type { TimedEffect, TurnInfo } from './types.ts';
+import { extAfterMove, extAtCleanup, extAtTurnStart } from './ext.ts';
 
 export function turnInfo(state: GameState): TurnInfo {
   if (!state.turnInfo || state.turnInfo.turn !== state.turn) {
@@ -50,6 +51,7 @@ let reverting = 0;
 /** Called by moveCard after the card moved. */
 export function afterMove(state: GameState, ctx: Ctx, inst: CardInstance, from: Zone, to: Zone) {
   if (inst.castInfo && to !== 'stack' && !(from === 'stack' && to === 'battlefield') && from !== to) inst.castInfo = undefined;
+  extAfterMove(state, ctx, inst, from, to); // animations / copies / effects (engine/ext.ts)
   if (from === 'battlefield' && to !== 'battlefield' && state.effects?.length && reverting < 10) {
     reverting++;
     try { leftBattlefield(state, ctx, inst.iid); } finally { reverting--; }
@@ -94,6 +96,7 @@ function revertControl(state: GameState, ctx: Ctx, iid: string, previous: string
 
 /** Cleanup step, after "until end of turn" effects were cleared. */
 export function durationsAtCleanup(state: GameState, ctx: Ctx) {
+  extAtCleanup(state, ctx);
   if (!state.effects?.length) return;
   const keep: TimedEffect[] = [];
   for (const e of state.effects) {
@@ -119,6 +122,7 @@ export function durationsAtCleanup(state: GameState, ctx: Ctx) {
 
 /** Start of `pid`'s turn: "until your next turn" effects of `pid` end. */
 export function durationsAtTurnStart(state: GameState, ctx: Ctx, pid: string) {
+  extAtTurnStart(state, ctx, pid);
   if (!state.effects?.length) return;
   const keep: TimedEffect[] = [];
   for (const e of state.effects) {

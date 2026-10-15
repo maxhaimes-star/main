@@ -19,6 +19,7 @@ import { addEffect } from './durations.ts';
 import { execUniqueStep, type UniqueRun, uniqueVar, answerUniquePending, type PickSpec } from './unique.ts';
 import { isSimpleAnimate, uniqueReason } from './unique-support.ts';
 import { answerTapCost } from './turns.ts';
+import { answerExtPending, execExtStep, EXT_APIS, type StepApi } from './ext.ts';
 
 // ------------------------------------------------------------------ run context
 
@@ -156,6 +157,7 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     }
   }
   if (value === 'DelayTriggerRemembered' || value === 'DelayTriggerRememberedLKI') return { cards: [...(t?.remembered ?? [])], players: [] };
+  if (value === 'ChosenPlayer') { const pc = src?.chosen?.player; return { cards: [], players: pc ? [pc] : [] }; }
   return undefined;
 }
 
@@ -473,6 +475,26 @@ function atEndOf(state: GameState, ctx: Ctx, r: Run, iids: string[], what: strin
 
 // ------------------------------------------------------------------ steps
 
+/** The resolution's helpers for extension steps (engine/ext.ts: Animate, Effect, Clone ...). */
+function extApi(state: GameState, ctx: Ctx, r: Run, i: number, remember: (iids: string[]) => void, E: MatchEnv): StepApi {
+  // "Defined$ Valid Card.token+YouCtrl": the battlefield permanents that match.
+  const def = (v: string | undefined) => {
+    if (!v?.startsWith('Valid ')) return defined(state, r, i, v);
+    const ms = state.battlefield.map((x) => [x, matchCard(state.cards[x], v.slice(6), E)] as const);
+    return ms.some(([, m]) => m === 'unknown') ? undefined : { cards: ms.filter(([, m]) => m).map(([x]) => x), players: [] };
+  };
+  return {
+    controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, item: r.item, auto: r.item.auto!, env: E,
+    objects: (dflt) => (ownTargets(r, i) ? objects(state, r, i, dflt) : def(r.steps[i].params.Defined ?? dflt)),
+    defined: def,
+    amount: (raw, dflt) => amount(state, ctx, r, raw, dflt),
+    remember, remembered: () => r.remembered,
+    cont: () => contAt(r, i + 1),
+    delayed: (at, line, iids, text) => addDelayed(state, ctx, r, at, { line }, iids, text),
+    manual: () => manual(state, ctx, r, r.steps[i]),
+  };
+}
+
 type StepResult = 'ok' | 'wait';
 
 function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
@@ -480,7 +502,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const p = step.params;
   const me = player(state, r.controller);
   const reason = unsupportedReason(step);
-  if (step.api === 'Effect' && !reason) return 'ok'; // e.g. "can't be regenerated": nothing to do
+  if (step.api === 'Effect' && p.AILogic === 'CantRegenerate') return 'ok'; // "can't be regenerated": nothing to do
   if (reason) {
     if (step.api !== 'Cleanup') manual(state, ctx, r, step);
     return 'ok';
@@ -505,6 +527,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   };
   const bad = () => { manual(state, ctx, r, step); return 'ok' as const; };
   const E = env(state, ctx, r);
+  if (EXT_APIS.has(step.api)) return execExtStep(state, ctx, step, extApi(state, ctx, r, i, remember, E)); // engine/ext.ts
 
   switch (step.api) {
     case 'Cleanup': {
@@ -754,27 +777,6 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       log(state, ctx, r.controller, `${me.name} investigates (creates ${n} Clue token${n === 1 ? '' : 's'}).`);
       return 'ok';
     }
-    case 'CopyPermanent': {
-      const o = objects(state, r, i, 'Self');
-      if (!o) return bad();
-      const made: string[] = [];
-      for (const iid of o.cards) {
-        const src = state.cards[iid];
-        if (!src?.cardId || src.zone !== 'battlefield') continue;
-        const f = faceOf(src, ctx.lookup);
-        const inst = createTokenInstance(state, ctx, r.controller, {
-          name: f.name, typeLine: f.typeLine, colors: ctx.lookup(src.cardId)?.colors ?? [], oracle: f.oracle, keywords: f.keywords, power: f.power, toughness: f.toughness,
-        }, false, src.cardId);
-        inst.transformed = src.transformed;
-        if (f.loyalty) inst.counters.loyalty = parseInt(f.loyalty, 10) || 0;
-        if (p.AddKeywords) inst.tempKeywords = p.AddKeywords.split('&').map((k) => k.trim());
-        made.push(inst.iid);
-        log(state, ctx, r.controller, `${me.name} creates a token copy of ${f.name}${p.AddKeywords ? ` with ${p.AddKeywords.replace(/&/g, ', ').toLowerCase()}` : ''}.`);
-      }
-      remember(made);
-      if (p.AtEOT && made.length) atEndOf(state, ctx, r, made, p.AtEOT);
-      return 'ok';
-    }
     case 'DelayedTrigger': {
       const at = PHASES[p.Phase ?? ''];
       if (!at || !p.Execute) return bad();
@@ -787,7 +789,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       if (!p.Execute) return bad();
       const auto = r.item.auto!;
       const text = describe(p.TriggerDescription ?? p.SpellDescription ?? 'Reflexive trigger', r.sourceName);
-      (state.triggerQueue ??= []).push({
+      const times = p.TriggerAmount === 'Remembered$Amount' ? r.remembered.length : 1;
+      for (let k = 0; k < times; k++) (state.triggerQueue ??= []).push({
         id: randomId(ctx.rng), controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, text: `${r.sourceName}: ${text}`,
         auto: { cardId: auto.cardId, face: auto.face, source: 'trigger', index: -1, svar: p.Execute, targets: [], trigger: { ...(r.trig ?? {}), mode: 'Immediate', remembered: [...r.remembered], lki: { ...r.lki } } },
       });
@@ -1223,6 +1226,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (ext === undefined) ext = answerKeywordPending(state, ctx, pend, value);
   if (ext === undefined) ext = answerUniquePending(state, ctx, pend, value);
   if (ext === undefined) ext = answerTapCost(state, ctx, pend, value);
+  if (ext === undefined) ext = answerExtPending(state, ctx, pend, value);
   if (ext !== undefined) return ext;
   const data = pend.data as unknown as PickData | UnlessData | ColorData;
   const who = player(state, pid);
