@@ -39,7 +39,7 @@ for (const card of CUBE.cards) {
       if (!/^\s*AB\$\s*Mana\b/.test(line)) continue;
       const ab = parseAbility(line, f.svars, f.name);
       if (!ab || ab.params.Planeswalker === 'True') continue; // loyalty abilities use the stack (play.ts)
-      for (const p of parseCost(ab.params.Cost ?? '').parts) if (p.kind === 'other' || p.kind === 'discard' || p.kind === 'sac' || p.kind === 'exileHand' || p.kind === 'exileGrave' || p.kind === 'return') gaps.push(`mana cost: ${p.text}`);
+      for (const p of parseCost(ab.params.Cost ?? '').parts) if (/^tapXType<1\//.test(p.text)) continue; else if (p.kind === 'other' || p.kind === 'discard' || p.kind === 'sac' || p.kind === 'exileHand' || p.kind === 'exileGrave' || p.kind === 'return') gaps.push(`mana cost: ${p.text}`);
       for (let s = ab.sub; s; s = s.sub) if (!(s.api === 'DealDamage' && s.params.Defined === 'You')) gaps.push(`mana sub: ${s.api}`);
       if (ab.params.Produced && !/^(Any|Combo [WUBRGC ]+|[WUBRGC]( [WUBRGC])*)$/.test(ab.params.Produced)) gaps.push(`mana: Produced$ ${ab.params.Produced}`);
     }

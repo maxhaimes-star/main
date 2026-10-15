@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilityUsability, activatedAbilitiesOf, applyAction, castability, createGame, type Ctx, type GameAction, type GameState, moveCard,
+  abilityUsability, activatedAbilitiesOf, applyAction, castability, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -91,5 +91,36 @@ describe('Improvise and Waterbend (auto-pay taps artifacts / creatures for gener
     expect(g.cards[isl].tapped).toBe(true);
     expect(logText(g)).toMatch(/waterbend: pays \{2\}/);
     expect(g.cards[priest].tapped).toBe(false);
+  });
+});
+
+describe('Urza, Lord High Artificer', () => {
+  it('ETB Construct; artifacts tap for {U} (by hand and auto-pay); {5}: exile the top card, play it free', () => {
+    const { g, ctx } = setup(['urza_lord_high_artificer', 'meekstone', 'skullclamp']);
+    const urza = toHand(g, ctx, 'a', 'urza_lord_high_artificer');
+    lands(g, 'a', 'basic_island', 5);
+    act(g, ctx, 'a', { t: 'cast', iid: urza });
+    drain(g, ctx);
+    expect(g.cards[urza].zone).toBe('battlefield');
+    const construct = g.battlefield.find((i) => g.cards[i].token?.name === 'Construct')!;
+    expect(construct).toBeTruthy();
+    const arts = ['meekstone', 'skullclamp'].map((id) => put(g, ctx, 'a', id));
+    // one mana option per untapped artifact (the Construct token too)
+    const opts = manaOptionsFor(g, urza, getCard);
+    expect(opts.length).toBe(3);
+    act(g, ctx, 'a', { t: 'activateMana', iid: urza, option: opts.find((o) => o.id.endsWith(`@${arts[0]}`))!.id });
+    expect(g.cards[arts[0]].tapped).toBe(true);
+    expect(g.players[0].manaPool.U).toBe(1);
+    // {5}: floating {U} + two artifacts via Urza is not enough; two more lands are
+    const ab5 = activatedAbilitiesOf('urza_lord_high_artificer', 0).find((a) => a.ability.api === 'Shuffle')!.index;
+    expect(abilityUsability(g, 'a', urza, ab5, getCard).ok).toBe(false);
+    lands(g, 'a', 'basic_island', 2);
+    expect(abilityUsability(g, 'a', urza, ab5, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'activate', iid: urza, ability: ab5, text: '' });
+    expect(g.players[0].manaPool.U ?? 0).toBe(0);
+    expect(logText(g)).toMatch(/Urza, Lord High Artificer for \{U\} \(Tap Construct\)/);
+    drain(g, ctx);
+    const exiled = g.players[0].zones.exile.at(-1)!;
+    expect(castability(g, 'a', exiled, getCard).ok).toBe(true);
   });
 });

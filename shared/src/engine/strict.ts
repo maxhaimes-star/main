@@ -95,12 +95,20 @@ export function manaSources(state: AnyState, pid: string, lookup: Lookup = getCa
     const f = faceOf(c, lookup);
     const base = f.types.includes('Land') ? 0 : isCreature(c, lookup, state as StaticsState) ? 3 : 1;
     const options = plans.filter((o) => {
-      if (!o.produces || o.byHand.length || o.discardHand || o.mana) return false;
+      if (!o.produces || o.byHand.length || o.discardHand || o.mana || o.tapOther) return false;
       if (o.sideEffects.some((s) => /^Spend only/.test(s))) return false;
       if (o.tap) return !c.tapped && !sick;
       return o.sacSelf; // untapped-free abilities must at least use the source up
     }).map((o) => ({ id: o.id, produces: o.produces, penalty: base + (o.life + o.selfDamage) * 5 + (o.sacSelf ? 40 : 0) }));
-    if (options.length) out.push({ key: iid, options });
+    const mine = out.find((s) => s.key === iid);
+    if (mine) mine.options.unshift(...options); else if (options.length) out.push({ key: iid, options });
+    // "Tap an untapped artifact you control: add {U}" (Urza): each such permanent is a source of its own.
+    for (const o of plans) {
+      if (!o.tapOther || !o.produces || o.byHand.length || o.mana || o.life || (o.tap && (c.tapped || sick)) || exclude.has(o.tapOther)) continue;
+      const opt = { id: `via:${iid}:${o.id}`, produces: o.produces, penalty: 2 };
+      const have = out.find((s) => s.key === o.tapOther);
+      if (have) have.options.push(opt); else out.push({ key: o.tapOther, options: [opt] });
+    }
   }
   return out;
 }
@@ -176,7 +184,8 @@ export function executeAutoPay(state: GameState, ctx: Ctx, pid: string, plan: Pa
       helped++;
       continue;
     }
-    const err = activateMana(state, ctx, pid, { t: 'activateMana', iid: pk.key, option: pk.option });
+    const via = /^via:([^:]+):(.+)$/.exec(pk.option); // a mana ability of another permanent that taps this one (Urza)
+    const err = via ? activateMana(state, ctx, pid, { t: 'activateMana', iid: via[1], option: via[2] }) : activateMana(state, ctx, pid, { t: 'activateMana', iid: pk.key, option: pk.option });
     if (err) log(state, ctx, pid, `Auto-pay: ${err}`);
   }
   if (helped) log(state, ctx, pid, `${player(state, pid).name} taps ${names.join(', ')} (${help?.label ?? 'help'}: pays {${helped}}).`);
