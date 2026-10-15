@@ -22,6 +22,7 @@ import type { AutoInfo, Lki, ParsedAbility, QueuedTrigger, TargetRef, TargetSpec
 import { uniqueVar } from './unique.ts';
 import { notePermissionUse } from './permissions.ts';
 import { parseCostTokens } from './paycost.ts';
+import { wardReminders } from './keyword-play.ts';
 import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
 
 /** Max triggered abilities detected per player action (loop guard). */
@@ -32,6 +33,7 @@ let budget = MAX_TRIGGERS_PER_ACTION;
 export const SUPPORTED_MODES = new Set([
   'ChangesZone', 'ChangesZoneAll', 'Phase', 'Attacks', 'AttackersDeclared', 'Blocks', 'SpellCast', 'Drawn', 'DamageDone',
   'DamageDoneOnce', 'DamageDealtOnce', 'Sacrificed', 'Discarded', 'DiscardedAll', 'LandPlayed', 'Exiled',
+  'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana',
 ]);
 
 /** Trigger parameters the engine understands; a trigger with any other parameter is left to the players. */
@@ -39,7 +41,7 @@ const KNOWN_PARAMS = new Set([
   'Mode', 'Execute', 'TriggerDescription', 'ValidCard', 'ValidCards', 'Origin', 'Destination', 'TriggerZones', 'ValidPlayer', 'Phase',
   'OptionalDecider', 'ValidActivatingPlayer', 'ValidSource', 'ValidTarget', 'Static', 'Secondary', 'CombatDamage', 'IsPresent',
   'PresentCompare', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
-  'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit',
+  'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA',
 ]);
 
 const PROWESS_LINE = 'DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Prowess: +1/+1 until end of turn.';
@@ -59,7 +61,13 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
   const p = t.params;
   const unique = uniqueTriggerSupport(cardId, face, index); // rewritten chains / Mode$ Always (turns.ts)
   if (unique && (SUPPORTED_MODES.has(p.Mode) || p.Mode === 'Always')) return unique;
-  if (p.Static === 'True') return { detect: false, chain: false, reason: 'static' };
+  if (p.Static === 'True') {
+    // Mana-ability triggers resolve at once (manatriggers.ts); "forget what it remembered" cleanups are applied (staticCleanup).
+    const ch = triggerChain(cardId, face, p.Execute);
+    if (p.Mode === 'TapsForMana' && (ch?.api === 'Mana' || ch?.api === 'ManaReflected')) return { detect: true, chain: true };
+    if (ch?.api === 'Cleanup' && SUPPORTED_MODES.has(p.Mode)) return { detect: true, chain: true };
+    return { detect: false, chain: false, reason: 'static' };
+  }
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
   const unknown = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
   const chain = triggerChain(cardId, face, p.Execute);
@@ -263,6 +271,30 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       const lki: Record<string, Lki> = {};
       if (src) lki[ev.source] = lkiOf(src, ctx);
       return { mode, source: ev.source, card: ev.source, player: src?.controller, target: ev.target, amount: ev.amount, lki };
+    }
+    case 'BecomesTarget': {
+      if (ev.t !== 'targeted') return null;
+      const isP = isPlayerId(state, ev.target);
+      r = p.ValidTarget ? (isP ? matchPlayer(ev.target, p.ValidTarget.replace(/,?Permanent[^,]*|,?Card[^,]*|,?Creature[^,]*/g, '').replace(/^,/, '') || 'none', env) : matchC(state.cards[ev.target], p.ValidTarget.replace(/(^|,)(You|Player|Opponent)(\.[^,]*)?/g, '').replace(/^,/, '') || 'none', env)) : true;
+      const vs = p.ValidSource ?? '';
+      if (/^Spell\b/.test(vs) && !ev.spell) r = false;
+      if (/OppCtrl/.test(vs)) r = and(r, ev.pid !== env.controller);
+      if (/YouCtrl/.test(vs)) r = and(r, ev.pid === env.controller);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: isP ? undefined : ev.target, target: ev.target, source: ev.sourceIid, player: ev.pid };
+    }
+    case 'Transformed': {
+      if (ev.t !== 'transformed') return null;
+      r = matchC(state.cards[ev.iid], p.ValidCard, env);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: state.cards[ev.iid]?.controller };
+    }
+    case 'Taps': case 'TapsForMana': {
+      if (ev.t !== 'tapped' || (mode === 'TapsForMana' && !ev.forMana)) return null;
+      r = matchC(state.cards[ev.iid], p.ValidCard, env);
+      if (p.Activator) r = and(r, matchP(ev.pid, p.Activator, env));
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: ev.pid, ...(ev.forMana ? { produced: ev.forMana } : {}) };
     }
     case 'LandPlayed': {
       if (ev.t !== 'landPlayed') return null;
@@ -481,6 +513,7 @@ function push(state: GameState, ctx: Ctx, t: QueuedTrigger) {
   const tn = t.auto.targets.flat().map((r) => targetName(state, ctx, r));
   const desc = t.text.startsWith(`${t.sourceName}: `) ? t.text.slice(t.sourceName.length + 2) : t.text;
   log(state, ctx, t.controller, `${t.sourceName}'s trigger${tn.length ? ` (targeting ${tn.join(', ')})` : ''}: ${desc}${t.manual ? ' — resolve it by hand' : ''}`);
+  if (item.auto?.targets.flat().length) wardReminders(state, ctx, t.controller, item.auto.targets); // "becomes the target" events + ward
 }
 
 /**

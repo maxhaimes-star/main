@@ -188,6 +188,7 @@ describe('engine: counterspells', () => {
   it('Mana Leak: decline → countered', () => {
     const { g, ctx, gg, c, spell } = onStack('mana_leak');
     act(g, ctx, 'b', { t: 'cast', iid: c, targets: [[cardRef(gg)]] }); // card ref to a spell is accepted
+    act(g, ctx, 'a', { t: 'addMana', mana: 'R', n: 3 }); // can pay: asked (a player who can't pay isn't asked)
     act(g, ctx, 'a', { t: 'pass' });
     expect(g.pending).toHaveLength(1);
     const q = g.pending[0];
@@ -200,6 +201,14 @@ describe('engine: counterspells', () => {
     expect(g.pending).toHaveLength(0);
     expect(g.cards[gg].zone).toBe('graveyard');
     expect(g.stack).toHaveLength(0);
+  });
+
+  it("Mana Leak: a player who can't pay isn't asked — countered", () => {
+    const { g, ctx, gg, c } = onStack('mana_leak');
+    act(g, ctx, 'b', { t: 'cast', iid: c, targets: [[cardRef(gg)]] });
+    act(g, ctx, 'a', { t: 'pass' });
+    expect(g.pending).toHaveLength(0);
+    expect(g.cards[gg].zone).toBe('graveyard');
   });
 
   it('Mana Leak: pay → spell stays and resolves', () => {

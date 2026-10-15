@@ -233,11 +233,18 @@ describe('keyword abilities: Level up, Crew, Ninjutsu, Ward', () => {
     expect(g.cards[fs].attacking).toBe('b');
   });
 
-  it('Ward: targeting an opponent\'s ward permanent logs a reminder', () => {
+  it('Ward: targeting an opponent\'s ward permanent triggers "counter it unless that player pays"', () => {
     const { g, ctx } = setup(['lightning_bolt'], ['kappa_cannoneer']);
     const kc = put(g, ctx, 'b', 'kappa_cannoneer');
     const bolt = tutor(g, ctx, 'a', 'lightning_bolt');
     act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: [[card(kc)]] });
-    expect(g.log.some((l) => /Ward — Kappa Cannoneer/.test(l.text) && /\{4\}/.test(l.text))).toBe(true);
+    // the ward trigger goes on the stack above the Bolt
+    expect(g.stack).toHaveLength(2);
+    expect(g.stack[1].text).toMatch(/Ward \{4\}/);
+    act(g, ctx, 'a', { t: 'pass' }); // the ward trigger resolves; a can't pay {4}: Bolt is countered without a question
+    expect(g.pending).toHaveLength(0);
+    expect(g.cards[bolt].zone).toBe('graveyard');
+    expect(g.stack).toHaveLength(0);
+    expect(g.cards[kc].damage).toBe(0);
   });
 });

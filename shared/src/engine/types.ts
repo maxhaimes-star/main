@@ -141,6 +141,8 @@ export interface TriggerContext {
   source?: string;
   /** Damage amount etc. */
   amount?: number;
+  /** TapsForMana: the mana the permanent produced ("G", "UU"). */
+  produced?: string;
   /** Delayed / reflexive triggers: the objects the creating effect remembered. */
   remembered?: string[];
   /** Last-known information (e.g. the creature that died). */
@@ -243,6 +245,8 @@ export type TimedEffect =
   | { kind: 'dash'; id: string; controller: string; until: 'eot'; iid: string }
   /** A keyword granted to a card outside the battlefield until end of turn (Snapcaster Mage: flashback), engine/permissions.ts. */
   | { kind: 'grant'; id: string; controller: string; until: 'eot' | 'permanent'; iid: string; zone: string; keyword: string; source: string }
+  /** Keywords a player has for a while ("you gain protection from everything until your next turn"), engine/protection.ts. */
+  | { kind: 'playerKw'; id: string; controller: string; until: 'eot' | 'yourNextTurn'; pid: string; keywords: string[]; turn: number }
   | EffectRecord;
 
 /** When an Effect / animation ends. */

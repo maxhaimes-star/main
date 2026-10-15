@@ -6,6 +6,7 @@
 import { type Lookup, faceOf, hasKeyword } from '../game/rules.ts';
 import { type CardInstance, type GameState, type ViewCard, isHidden } from '../game/types.ts';
 import type { TargetRef, TargetSpec } from './types.ts';
+import { playerTargetable, protectedFrom } from './protection.ts';
 
 export type Tri = boolean | 'unknown';
 
@@ -221,6 +222,7 @@ export function isValidTarget(state: TargetState, spec: TargetSpec, ref: TargetR
     if (!spec.players) return false;
     const p = state.players.find((x) => x.pid === ref.pid);
     if (!p || p.conceded) return false;
+    if ('effects' in state || state.battlefield.length) { if (!playerTargetable(state as never, ref.pid, controller, sourceIid, lookup)) return false; } // shroud / hexproof / protection
     return matchPlayer(ref.pid, spec.valid, env) !== false;
   }
   if (ref.kind === 'stack') {
@@ -241,6 +243,7 @@ export function isValidTarget(state: TargetState, spec: TargetSpec, ref: TargetR
   if (c.zone === 'battlefield') {
     if (hasKeyword(c, lookup, 'Shroud', state)) return false;
     if (c.controller !== controller && hasKeyword(c, lookup, 'Hexproof', state)) return false;
+    if (sourceIid && protectedFrom(state as never, c.iid, sourceIid, lookup)) return false; // protection from the source's quality
   }
   return matchCard(c, spec.valid, env) !== false;
 }

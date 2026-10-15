@@ -1,14 +1,14 @@
 /**
  * Runtime side of keyword-granted abilities (see keywords.ts for how they are synthesized):
  * activation zone / timing checks, Crew and Ninjutsu costs, the custom effect APIs (Unattach, Crew,
- * Ninjutsu), Ward reminders and level-up helpers.
+ * Ninjutsu), Ward triggers / "becomes the target" events and level-up helpers.
  */
-import { cardName, effectivePT, hasKeyword, isCreature } from '../game/rules.ts';
-import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
+import { cardName, effectivePT, faceOf, hasKeyword, isCreature } from '../game/rules.ts';
+import { type Ctx, emit, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem } from '../game/types.ts';
-import { levelStats, type LevelStats, wardCost } from './keywords.ts';
+import { levelStats, type LevelStats } from './keywords.ts';
 import { scriptFaceOf } from './script.ts';
-import { type ParsedAbility, type Pending, SYNTH_BASE, type TargetRef } from './types.ts';
+import { type AutoInfo, type ParsedAbility, type Pending, SYNTH_BASE, type TargetRef } from './types.ts';
 
 const ZONE_WORD: Record<string, string> = { hand: 'hand', graveyard: 'graveyard', exile: 'exile', battlefield: 'the battlefield' };
 
@@ -168,16 +168,49 @@ export function execKeywordStep(state: GameState, ctx: Ctx, step: ParsedAbility,
 
 // ------------------------------------------------------------------ ward
 
-/** Log a Ward reminder for each opponent's permanent with ward that `pid` just targeted. */
+/** A permanent's ward cost as a Forge cost ("2", "PayLife<2>"), from its K:Ward line or a static granting it (Lavaspur Boots). */
+export function wardForgeCost(state: GameState, c: CardInstance, lookup: Ctx['lookup']): string | undefined {
+  const own = scriptFaceOf(c)?.keywords.find((k) => /^Ward:/.test(k));
+  if (own) return own.slice(5).trim();
+  if (!hasKeyword(c, lookup, 'Ward', state)) return undefined;
+  for (const iid of state.battlefield) {
+    const h = state.cards[iid];
+    for (const line of scriptFaceOf(h)?.statics ?? []) {
+      const m = /AddKeyword\$[^|]*Ward:([^&|]+)/.exec(line);
+      if (!m) continue;
+      if ((/AffectedDefined\$ Equipped|AffectedDefined\$ Enchanted/.test(line) && h.attachedTo === c.iid) || /AffectedDefined\$ Self/.test(line) && h.iid === c.iid) return m[1].trim();
+    }
+  }
+  const m = /Ward[ —-]+\{(\d+)\}/.exec(faceOf(c, lookup).oracle);
+  return m ? m[1] : '2';
+}
+
+/**
+ * A spell / ability (the top stack item) controlled by `pid` was put on the stack with these targets: emit "becomes the
+ * target" events (Bonecrusher Giant, Leovold ...) and queue Ward triggers ("counter it unless that player pays").
+ */
 export function wardReminders(state: GameState, ctx: Ctx, pid: string, targets: TargetRef[][]) {
+  const item = [...state.stack].reverse().find((s) => s.controller === pid && s.auto?.targets === targets) ?? state.stack[state.stack.length - 1];
+  if (!item) return;
+  const seen = new Set<string>();
   for (const ref of targets.flat()) {
+    const key = ref.kind === 'card' ? ref.iid : ref.kind === 'player' ? ref.pid : '';
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    emit(state, { t: 'targeted', target: key, item: item.id, sourceIid: item.iid ?? item.sourceIid, spell: item.kind === 'spell', pid });
     if (ref.kind !== 'card') continue;
     const c = state.cards[ref.iid];
     if (!c || c.zone !== 'battlefield' || c.controller === pid || c.faceDown) continue;
-    const f = scriptFaceOf(c);
-    const cost = f ? wardCost(f) : undefined;
-    if (!cost && !hasKeyword(c, ctx.lookup, 'Ward')) continue;
-    log(state, ctx, c.controller, `Ward — ${cardName(c, ctx.lookup)} was targeted: counter that spell or ability unless ${pname(state, pid)} pays ${cost ?? 'the ward cost'} (handle by hand).`);
+    const cost = wardForgeCost(state, c, ctx.lookup);
+    if (!cost) continue;
+    const name = cardName(c, ctx.lookup);
+    const text = /^\d+$/.test(cost) ? `{${cost}}` : cost.replace(/PayLife<(\d+)>/, '$1 life');
+    const auto: AutoInfo = {
+      cardId: c.cardId ?? '', face: c.transformed ? 1 : 0, source: 'trigger', index: -1, targets: [],
+      line: `DB$ Counter | Defined$ TriggeredStackItem | UnlessCost$ ${cost} | UnlessPayer$ TriggeredActivator | SpellDescription$ Ward — counter it unless that player pays ${text}.`,
+      trigger: { mode: 'BecomesTarget', card: c.iid, source: item.id, player: pid },
+    };
+    (state.triggerQueue ??= []).push({ id: randomId(ctx.rng), controller: c.controller, sourceIid: c.iid, sourceName: name, text: `${name}: Ward ${text} — counter ${item.text} unless ${pname(state, pid)} pays ${text}.`, auto, targetsChosen: true });
   }
 }
 

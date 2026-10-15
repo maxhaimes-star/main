@@ -23,6 +23,7 @@ import { answerExtPending, execExtStep, EXT_APIS, type StepApi } from './ext.ts'
 import { canPayCost, costText, parseCostTokens, payCostNow, timesPayable } from './paycost.ts';
 import { answerMorePending, answerMoreTargets, execMoreStep, MORE_APIS, moreDefinedValue, moreVar, type MoreRun } from './more.ts';
 import { checkTargets } from './play.ts';
+import { enterAttacking } from './combat-rules.ts';
 import { getCard } from '../cube.ts';
 
 // ------------------------------------------------------------------ run context
@@ -608,8 +609,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   if (i === 0 && step.kind === 'AB' && p.Cost && r.item.kind === 'trigger' && !r.costPaid) return optionalCost(state, ctx, r, step);
   // Targets for a step added while resolving (a mode / branch chosen now): asked now.
   if (step.params.ValidTgts && r.specOf[i] == null && !r.lateTargets?.[i]) return askLateTargets(state, ctx, r, i);
-  // "... unless <player> pays <cost>" / UnlessSwitched "if <player> pays <cost>, ...".
-  if (step.params.UnlessCost && step.api !== 'Counter' && r.unless?.[i] === undefined) return askUnless(state, ctx, r, i);
+  // "... unless <player> pays <cost>" / UnlessSwitched "if <player> pays <cost>, ..." (also "counter it unless its controller pays").
+  if (step.params.UnlessCost && r.unless?.[i] === undefined) return askUnless(state, ctx, r, i);
   if (r.unless?.[i] === false) return 'ok';
   const cond = condition(state, ctx, r, i);
   if (cond === false) {
@@ -665,6 +666,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const c = onBattlefield(state, iid);
         const k = dmgOf(iid);
         if (!c || k <= 0) continue;
+        const stopped = damagePrevented(state, ctx.lookup, iid, srcObj);
+        if (stopped) { log(state, ctx, null, `Damage to ${cardName(c, ctx.lookup)} is prevented (${stopped}).`); continue; }
         damageCard(state, ctx, r, c, k, deathtouch);
         hit.push(division && many ? `${cardName(c, ctx.lookup)} (${k})` : cardName(c, ctx.lookup));
         dealt += k;
@@ -673,7 +676,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const pid of o.players) {
         const k = dmgOf(pid);
         if (k <= 0) continue;
-        const prev = damagePrevented(state, ctx.lookup, pid);
+        const prev = damagePrevented(state, ctx.lookup, pid, srcObj);
         if (prev) { log(state, ctx, pid, `Damage to ${pname(state, pid)} is prevented (${prev}).`); continue; }
         player(state, pid).life -= k;
         noteLife(state, pid, -k);
@@ -698,9 +701,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const cs = state.battlefield.map((x) => state.cards[x]);
         const ms = cs.map((c) => matchCard(c, p.ValidCards, E));
         if (ms.includes('unknown')) return bad();
-        cs.forEach((c, k) => { if (ms[k]) { damageCard(state, ctx, r, c, n, false); hit.push(cardName(c, ctx.lookup)); } });
+        cs.forEach((c, k) => { if (ms[k] && !damagePrevented(state, ctx.lookup, c.iid, r.sourceIid)) { damageCard(state, ctx, r, c, n, false); hit.push(cardName(c, ctx.lookup)); if (r.sourceIid) emit(state, { t: 'damage', source: r.sourceIid, target: c.iid, amount: n, combat: false }); } });
       }
-      if (p.ValidPlayers) for (const pl of state.players) if (!pl.conceded && matchPlayer(pl.pid, p.ValidPlayers, E) !== false && !damagePrevented(state, ctx.lookup, pl.pid)) { pl.life -= n; hit.push(pl.name); }
+      if (p.ValidPlayers) for (const pl of state.players) if (!pl.conceded && matchPlayer(pl.pid, p.ValidPlayers, E) !== false && !damagePrevented(state, ctx.lookup, pl.pid, r.sourceIid)) { pl.life -= n; noteLife(state, pl.pid, -n); hit.push(pl.name); if (r.sourceIid) emit(state, { t: 'damage', source: r.sourceIid, target: pl.pid, amount: n, combat: false }); }
       log(state, ctx, r.controller, `${r.sourceName} deals ${n} damage to ${hit.join(', ') || 'nothing'}.`);
       return 'ok';
     }
@@ -879,7 +882,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         }
       }
       remember(made);
-      if (p.TokenAttacking) log(state, ctx, r.controller, 'Reminder: the token enters attacking — declare it by hand.');
+      if (p.TokenAttacking) for (const iid of made) if (state.cards[iid]) enterAttacking(state, ctx, state.cards[iid], r.sourceIid);
       if (p.AtEOT && made.length) atEndOf(state, ctx, r, made, p.AtEOT);
       return 'ok';
     }
@@ -955,13 +958,14 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       return 'ok';
     }
     case 'Counter': {
-      const refs = ownTargets(r, i) ?? (p.Defined ? (defined(state, r, i, p.Defined)?.cards ?? []).map((iid) => ({ kind: 'card', iid }) as TargetRef) : []);
+      const refs = p.Defined === 'TriggeredStackItem' ? (r.trig?.source ? [{ kind: 'stack', id: r.trig.source } as TargetRef] : [])
+        : ownTargets(r, i) ?? (p.Defined ? (defined(state, r, i, p.Defined)?.cards ?? []).map((iid) => ({ kind: 'card', iid }) as TargetRef) : []);
       for (const ref of refs) {
         const item = ref.kind === 'stack' ? state.stack.find((s) => s.id === ref.id) : ref.kind === 'card' ? state.stack.find((s) => s.iid === ref.iid) : undefined;
         if (!item) continue;
         const uncounterable = cantBeCountered(state, ctx, item);
         if (uncounterable) { log(state, ctx, r.controller, `${item.text} can't be countered — ${uncounterable}`); continue; }
-        if (p.UnlessCost) {
+        if (p.UnlessCost && r.unless?.[i] === undefined) { // decided by askUnless (paycost.ts) normally
           const x = amount(state, ctx, r, 'X', 0) ?? 0;
           const cost = manaString(p.UnlessCost, x);
           if (!cost) return bad();
@@ -1368,7 +1372,9 @@ function definedCost(state: GameState, ctx: Ctx, r: Run, raw: string): string | 
 function askUnless(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const step = r.steps[i];
   const p = step.params;
-  const payer = (p.UnlessPayer ? defined(state, r, i, p.UnlessPayer)?.players[0] : defined(state, r, i, 'TargetedController')?.players[0]) ?? r.controller;
+  const stackRef = p.Defined === 'TriggeredStackItem' ? state.stack.find((s) => s.id === r.trig?.source) : undefined;
+  const payer = (stackRef?.controller ?? (p.UnlessPayer ? defined(state, r, i, p.UnlessPayer)?.players[0] : defined(state, r, i, 'TargetedController')?.players[0])) ?? r.controller;
+  if (step.api === 'Counter' && p.Defined === 'TriggeredStackItem' && !stackRef) { r.unless = { ...(r.unless ?? {}), [i]: false }; return 'ok'; }
   const cost = definedCost(state, ctx, r, p.UnlessCost) ?? p.UnlessCost;
   const x = /X/.test(cost) ? amount(state, ctx, r, 'X', 0) ?? 0 : 0;
   const { toks } = parseCostTokens(cost);
@@ -1434,13 +1440,14 @@ function dealDamageTo(state: GameState, ctx: Ctx, r: Run, source: string | undef
   if (n <= 0) return 0;
   const src = source ? state.cards[source] : undefined;
   if (state.players.some((p) => p.pid === key)) {
-    const prev = damagePrevented(state, ctx.lookup, key);
+    const prev = damagePrevented(state, ctx.lookup, key, source);
     if (prev) { log(state, ctx, key, `Damage to ${pname(state, key)} is prevented (${prev}).`); return 0; }
     player(state, key).life -= n;
     noteLife(state, key, -n);
   } else {
     const c = onBattlefield(state, key);
     if (!c) return 0;
+    if (damagePrevented(state, ctx.lookup, key, source)) return 0;
     damageCard(state, ctx, r, c, n, !!src && hasKeyword(src, ctx.lookup, 'Deathtouch', state));
   }
   if (source) emit(state, { t: 'damage', source, target: key, amount: n, combat: false });

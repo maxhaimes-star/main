@@ -14,6 +14,8 @@ import { tokenCopy } from '../engine/copy.ts';
 import { skipsStep, untapPrevented } from '../engine/replacements.ts';
 import { wardReminders } from '../engine/keyword-play.ts';
 import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
+import { enforceAttackRequirements, enforceBlockRestrictions } from '../engine/combat-rules.ts';
+import { noteTapped } from '../engine/manatriggers.ts';
 import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
 } from './state.ts';
@@ -952,10 +954,11 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
 }
 
 function confirmAttackers(state: GameState, ctx: Ctx) {
+  enforceAttackRequirements(state, ctx); // "attacks each combat if able" (engine/combat-rules.ts)
   const atk = state.battlefield.filter((id) => state.cards[id].attacking);
   for (const id of atk) {
     const c = state.cards[id];
-    if (!hasKeyword(c, ctx.lookup, 'Vigilance', state)) c.tapped = true;
+    if (!hasKeyword(c, ctx.lookup, 'Vigilance', state) && !c.tapped) { c.tapped = true; noteTapped(state, id, c.controller); }
   }
   state.combat.attackersDeclared = true;
   for (const id of atk) {
@@ -969,6 +972,7 @@ function confirmAttackers(state: GameState, ctx: Ctx) {
 }
 
 function confirmBlockers(state: GameState, ctx: Ctx, pid: string) {
+  enforceBlockRestrictions(state, ctx, pid); // menace, "three or more blockers", evasion (engine/combat-rules.ts)
   state.combat.blockersDeclared = true;
   const blocks = state.battlefield.filter((id) => state.cards[id].blocking && state.cards[id].controller === pid);
   for (const b of blocks) emit(state, { t: 'blocks', iid: b, attacker: state.cards[b].blocking! });

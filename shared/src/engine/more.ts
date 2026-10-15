@@ -129,6 +129,7 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       return 'ok';
     }
     case 'Charm': return askModes(state, ctx, r);
+    case '_SetChosenType': r.chosen.type = p.Type; return 'ok';
     case 'Branch': {
       const raw = p.BranchConditionSVar ?? p.BranchCondition;
       const v = r.amount(raw, 0);

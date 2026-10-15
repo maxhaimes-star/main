@@ -132,6 +132,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   for (const tok of tokens) {
     let m: RegExpExecArray | null;
     if (/^(\d+|[WUBRGCSX]|[WUBRG2]\/[WUBRGP])$/.test(tok)) mana += `{${tok === 'X' ? x : tok}}`;
+    else if (/^[WUBRG]{2}$/.test(tok)) mana += `{${tok[0]}/${tok[1]}}`; // hybrid ("GW")
     else if (tok === 'T') tap = true;
     else if (tok === 'Q') untap = true;
     else if ((m = /^PayLife<(\d+|X)>$/.exec(tok))) life += num(m[1]);

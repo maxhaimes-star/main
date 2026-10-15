@@ -29,9 +29,12 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
 
   const deal = (src: string, target: string, amount: number) => {
     if (amount <= 0) return;
-    hits.push({ source: src, target, amount });
     const s = cards[src];
     const name = cardName(s, lookup);
+    // Protection, Maze of Ith ... (engine/replacements.ts); players' "prevent all damage" too.
+    const stopped = damagePrevented(state, lookup, target, src, true);
+    if (stopped) { lines.push(`${name}'s damage to ${cards[target] ? cardName(cards[target], lookup) : state.players.find((p) => p.pid === target)?.name ?? 'player'} is prevented (${stopped})`); return; }
+    hits.push({ source: src, target, amount });
     const infect = hasKeyword(s, lookup, 'Infect', state);
     if (cards[target]) {
       if (infect && !isPW(target)) {
@@ -45,8 +48,6 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
       if (hasKeyword(s, lookup, 'Deathtouch', state) && !isPW(target)) deathtouched.add(target);
     } else {
       const pl = state.players.find((p) => p.pid === target);
-      const prevented = damagePrevented(state, lookup, target);
-      if (prevented) { lines.push(`${name}'s damage to ${pl?.name ?? 'player'} is prevented (${prevented})`); return; }
       if (infect) {
         poison[target] = (poison[target] ?? 0) + amount;
         lines.push(`${name} gives ${pl?.name ?? 'player'} ${amount} poison`);

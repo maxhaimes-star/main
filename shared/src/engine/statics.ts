@@ -18,6 +18,7 @@ import { type CardInstance, type ViewCard, isHidden } from '../game/types.ts';
 import { getScript, grantedLines, parseParams, scriptRef } from './script.ts';
 import type { EffectRecord, TimedEffect } from './types.ts';
 import { type MatchEnv, type Tri, matchCard } from './targets.ts';
+import { evasionRestriction } from './protection.ts';
 
 // ------------------------------------------------------------------ types
 
@@ -466,9 +467,11 @@ const CONT_HANDLED_KEYS = new Set([
   'AddKeyword', 'RemoveKeyword', 'AddType', 'RemoveType', 'RemoveCardTypes', 'Condition', 'IsPresent', 'PresentCompare', 'PresentZone',
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone',
 ]);
-const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated']);
+const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated',
+  // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)
+  'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost']);
 /** Modes that are listed and logged as reminders. */
-const REMINDER_MODES = new Set(['MustAttack', 'MinMaxBlocker', 'CantDraw']);
+const REMINDER_MODES = new Set<string>([]);
 
 function exprSupported(s: StaticAbility, raw: string | undefined): boolean {
   if (raw == null) return true;
@@ -536,6 +539,11 @@ function active(st: StaticsState, lookup: Lookup, mode: string): { s: StaticAbil
   return c.statics.filter((s) => s.modes.includes(mode) && ev.active(s) === true).map((s) => ({ s, ev }));
 }
 
+/** Active statics of a mode with their match environment (combat-rules.ts: MustAttack). */
+export function staticsOfKind(st: StaticsState, lookup: Lookup, mode: string): { s: StaticAbility; env: MatchEnv }[] {
+  return active(st, lookup, mode).map(({ s, ev }) => ({ s, env: ev.env(s) }));
+}
+
 function srcName(st: StaticsState, s: StaticAbility, lookup: Lookup): string {
   if (s.sourceName) return s.sourceName;
   const c = visible(st, s.sourceIid);
@@ -567,6 +575,8 @@ export function blockRestriction(st: StaticsState, blocker: string, attacker: st
     if (s.params.ValidCard && matchCard(b, s.params.ValidCard, ev.env(s)) === true) return `${bn} can't block (${srcName(st, s, lookup)}: ${s.description})`;
   }
   if (!a) return null;
+  const ev0 = evasionRestriction(st, b, a, lookup); // flying, shadow, landwalk, fear, protection ... (engine/protection.ts)
+  if (ev0) return `${bn} can't block: ${ev0}`;
   for (const { s, ev } of active(st, lookup, 'CantBlockBy')) {
     const env = ev.env(s);
     const okA = !s.params.ValidAttacker || matchCard(a, s.params.ValidAttacker, env) === true;
@@ -613,9 +623,13 @@ export function castRestriction(st: StaticsState, iid: string, pid: string, look
   return null;
 }
 
-/** Reminder lines for statics that aren't enforced (MustAttack, MinMaxBlocker) at the given combat point. */
+/**
+ * Reminder lines for combat statics that aren't enforced. MustAttack and MinMaxBlocker are enforced now
+ * (engine/combat-rules.ts), so this returns nothing; kept for callers.
+ */
 export function combatReminders(st: StaticsState, lookup: Lookup, when: 'attackers' | 'blockers'): string[] {
   const out: string[] = [];
+  if (out.length === 0) return out;
   if (when === 'attackers') {
     for (const { s, ev } of active(st, lookup, 'MustAttack')) {
       const env = ev.env(s);

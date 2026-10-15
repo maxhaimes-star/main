@@ -19,6 +19,7 @@ import { parseAbility, scriptFaceOf } from './script.ts';
 import { activateRestriction } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 import { chapterManaLines } from './turns.ts';
+import { manaTapped } from './manatriggers.ts';
 
 const BASIC: Record<string, string> = { Plains: 'W', Island: 'U', Swamp: 'B', Mountain: 'R', Forest: 'G' };
 const ANY = ['W', 'U', 'B', 'R', 'G'];
@@ -132,6 +133,7 @@ export function activateMana(state: GameState, ctx: Ctx, pid: string, a: Extract
   if (opt.life) me.life -= opt.life;
   if (opt.discardHand) for (const iid of [...me.zones.hand]) moveCard(state, ctx, iid, 'graveyard');
   for (const s of opt.produces) me.manaPool[s] = (me.manaPool[s] ?? 0) + 1;
+  if (opt.tap) manaTapped(state, ctx, pid, c.iid, opt.produces); // High Tide, Utopia Sprawl, Mana Flare ... (engine/manatriggers.ts)
   if (opt.selfDamage) me.life -= opt.selfDamage;
   const sick = opt.tap && c.summoningSick && faceOf(c, ctx.lookup).types.includes('Creature') && !faceOf(c, ctx.lookup).keywords.includes('Haste') && !c.tempKeywords?.includes('Haste');
   const notes = opt.sideEffects.filter((x) => !/^Pay \{/.test(x));

@@ -114,6 +114,7 @@ export function durationsAtCleanup(state: GameState, ctx: Ctx) {
   for (const e of state.effects) {
     if (e.kind === 'control' && e.until === 'eot') { revertControl(state, ctx, e.iid, e.previous); continue; }
     if (e.kind === 'grant' && e.until === 'eot') continue; // "until end of turn" keyword grants (Snapcaster Mage)
+    if (e.kind === 'playerKw' && e.until === 'eot') continue;
     if (e.kind === 'dash') {
       const c = state.cards[e.iid];
       if (c?.zone === 'battlefield') { moveCard(state, ctx, e.iid, 'hand'); log(state, ctx, e.controller, `${cardName(c, ctx.lookup)} returns to its owner's hand (dash).`); }
@@ -139,6 +140,10 @@ export function durationsAtTurnStart(state: GameState, ctx: Ctx, pid: string) {
   if (!state.effects?.length) return;
   const keep: TimedEffect[] = [];
   for (const e of state.effects) {
+    if (e.kind === 'playerKw' && e.until === 'yourNextTurn' && e.controller === pid && state.turn > e.turn) {
+      log(state, ctx, null, `"Until your next turn" effect ends: ${state.players.find((p) => p.pid === e.pid)?.name ?? 'a player'} no longer has ${e.keywords.join(', ').toLowerCase()}.`);
+      continue;
+    }
     if (e.kind === 'pump' && e.controller === pid) {
       const names: string[] = [];
       for (const iid of e.cards) {

@@ -189,7 +189,13 @@ export type GameEvent =
   | { t: 'cast'; iid: string; pid: string; nth: number }
   | { t: 'drawn'; iid: string; pid: string; nth: number; firstInDrawStep?: boolean }
   | { t: 'damage'; source: string; target: string; amount: number; combat: boolean; sourceSnap?: CardInstance; targetSnap?: CardInstance }
-  | { t: 'landPlayed'; iid: string; pid: string };
+  | { t: 'landPlayed'; iid: string; pid: string }
+  /** A spell / ability (stack item `item`, controlled by `pid`, from card `sourceIid`) targets a permanent iid or player id. */
+  | { t: 'targeted'; target: string; item: string; sourceIid?: string; spell: boolean; pid: string }
+  /** A permanent transformed (Mode$ Transformed triggers). */
+  | { t: 'transformed'; iid: string }
+  /** A permanent became tapped (Mode$ Taps), or was tapped for mana (Mode$ TapsForMana, with what it produced). */
+  | { t: 'tapped'; iid: string; forMana?: string; pid: string };
 
 /**
  * Actions a player can send. All are validated in the reducer.

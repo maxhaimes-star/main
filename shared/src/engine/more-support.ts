@@ -7,7 +7,7 @@ import type { ParsedAbility } from './types.ts';
 export const MORE_APIS = new Set([
   'Branch', 'RepeatEach', 'Repeat', 'GenericChoice', 'ChooseCard', 'ChooseNumber', 'TapOrUntap', 'Amass', 'Proliferate', 'Connive',
   'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'DamageResolve',
-  'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember',
+  'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType',
 ]);
 
 /** Defined$ values more.ts resolves (beyond script.ts SUPPORTED_DEFINED). */
@@ -15,6 +15,7 @@ export const MORE_DEFINED = new Set([
   'ChosenCard', 'ChosenCardLKI', 'ChosenCardController', 'ChosenCardOwner', 'Imprinted', 'ReplacedCard', 'TriggeredSpellAbility', 'TriggeredCardOpponent',
   'TriggeredDefender', 'TargetedOrController', 'ExiledWith', 'Remembered', 'RememberedController', 'RememberedOwner', 'ThisTargetedCard', 'ThisTargetedPlayer',
   'TriggeredDefender.Opponent & Valid Planeswalker.TriggeredDefender', 'Enchanted', 'TriggeredAttackingPlayer', 'TriggeredActivator', 'Player.Opponent',
+  'TriggeredStackItem',
 ]);
 
 /** Counting variables more.ts evaluates. */

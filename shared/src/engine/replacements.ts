@@ -22,6 +22,7 @@ import { type Ctx, emit, log, moveCard, moveHooks, type MoveOpts, newInstance, p
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import { getScript, parseParams, SCRIPTS, scriptRef } from './script.ts';
 import { matchCard, matchPlayer, type MatchEnv } from './targets.ts';
+import { playerProtectedFrom, protectedFrom } from './protection.ts';
 import type { EffectRecord, Pending } from './types.ts';
 
 interface RLine { params: Record<string, string>; svars: Record<string, string>; name: string }
@@ -376,14 +377,33 @@ export function untapPrevented(state: GameState, ctx: Ctx, c: CardInstance): boo
   return false;
 }
 
-/** Damage to this player is prevented (Glacial Chasm, Solitary Confinement): the source's name, or undefined. */
-export function damagePrevented(state: GameState, lookup: Lookup, pid: string): string | undefined {
-  for (const id of state.battlefield) {
-    const host = state.cards[id];
-    for (const r of replacementsOf(host)) {
-      if (r.params.Event !== 'DamageDone' || r.params.Prevent !== 'True' || !isActive(r)) continue;
-      if (r.params.ValidTarget === 'You' && host.controller === pid) return cardName(host, lookup);
+/**
+ * Is damage to `target` (a player id or a permanent's iid) from `source` prevented? Glacial Chasm / Solitary Confinement
+ * ("prevent all damage that would be dealt to you"), protection (engine/protection.ts), effects' prevention
+ * replacements (Maze of Ith: combat damage to and by that creature; Kytheon). Returns the reason, or undefined.
+ */
+export function damagePrevented(state: GameState, lookup: Lookup, target: string, source?: string, combat = false): string | undefined {
+  const isPlayer = state.players.some((p) => p.pid === target);
+  if (isPlayer) {
+    for (const id of state.battlefield) {
+      const host = state.cards[id];
+      for (const r of replacementsOf(host)) {
+        if (r.params.Event !== 'DamageDone' || r.params.Prevent !== 'True' || !isActive(r)) continue;
+        if (r.params.ValidTarget === 'You' && host.controller === target) return cardName(host, lookup);
+      }
     }
+    if (playerProtectedFrom(state, target, source, lookup)) return 'protection';
+  } else if (source && protectedFrom(state, target, source, lookup)) return 'protection';
+  const src = source ? state.cards[source] : undefined;
+  const tgt = isPlayer ? undefined : state.cards[target];
+  for (const { e, r } of effectReplacements(state, 'DamageDone')) {
+    const p = r.params;
+    if (p.Prevent !== 'True' || (p.IsCombat === 'True' && !combat)) continue;
+    const env: MatchEnv = { controller: e.controller, sourceIid: e.hostIid, lookup, remembered: e.remembered };
+    const cardOk = (c: CardInstance | undefined, valid: string) => !!c && (valid === 'Card.EffectSource' ? c.iid === e.hostIid : matchCard(c, valid, env) === true);
+    if (p.ValidTarget && !(isPlayer ? matchPlayer(target, p.ValidTarget, env) === true : cardOk(tgt, p.ValidTarget))) continue;
+    if (p.ValidSource && !cardOk(src, p.ValidSource)) continue;
+    return e.name;
   }
   return undefined;
 }
