@@ -517,3 +517,6 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .se-row:hover { background: var(--bg3); }
 .se-foot { display: flex; gap: 6px; margin-top: 4px; }
 .se-note { margin: 2px 0 0; max-width: 240px; }
+
+.modal-head-btns { display: flex; gap: 6px; align-items: center; }
+.modal-undo { justify-content: flex-end; margin-bottom: 0; }

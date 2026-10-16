@@ -269,6 +269,13 @@ export function ContextMenu({ x, y, items, title, onClose }: { x: number; y: num
 
 // ---------------------------------------------------------------- prompt
 
+/** Undo button for popups (closes the popup, then undoes); nothing outside a game or when there is nothing to undo. */
+function UndoButton() {
+  const ctx = useContext(Ctx);
+  if (!ctx?.g.canUndo || !ctx.me) return null;
+  return <button className="tiny undo-btn" onClick={ctx.undo} title="Ctrl+Z">Undo</button>;
+}
+
 export function Prompt({ label, initial, numeric, onDone }: { label: string; initial: string; numeric: boolean; onDone: (v: string | null) => void }) {
   const [v, setV] = useState(initial);
   return (
@@ -278,7 +285,7 @@ export function Prompt({ label, initial, numeric, onDone }: { label: string; ini
           <input autoFocus type={numeric ? 'number' : 'text'} value={v} onChange={(e) => setV(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') onDone(v); if (e.key === 'Escape') onDone(null); }} />
         </label>
-        <div className="row"><button className="primary" onClick={() => onDone(v)}>OK</button><button onClick={() => onDone(null)}>Cancel</button></div>
+        <div className="row"><button className="primary" onClick={() => onDone(v)}>OK</button><button onClick={() => onDone(null)}>Cancel</button><UndoButton /></div>
       </div>
     </div>
   );
@@ -288,7 +295,7 @@ export function Modal({ title, onClose, children, wide }: { title: ReactNode; on
   return (
     <div className="modal-bg" onMouseDown={onClose}>
       <div className={`modal ${wide ? 'wide' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-head"><h3>{title}</h3><button className="tiny" onClick={onClose}>✕</button></div>
+        <div className="modal-head"><h3>{title}</h3><span className="modal-head-btns"><UndoButton /><button className="tiny" onClick={onClose}>✕</button></span></div>
         {children}
       </div>
     </div>

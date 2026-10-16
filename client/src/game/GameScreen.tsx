@@ -164,7 +164,24 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     showCardSheet(iid);
   };
 
-  const undo = useCallback(() => { void act({ t: 'requestUndo' }); }, [act]);
+  // Undo first closes whatever is open (menus, prompts, pickers, targeting, viewers, the touch sheet), so it can be
+  // pressed again and again: no stale popup is left waiting for an answer about a state that no longer exists.
+  const popups = useRef({ prompt, modes, picker, dividing, forceAsk, mode });
+  popups.current = { prompt, modes, picker, dividing, forceAsk, mode };
+  const closeAll = useCallback(() => {
+    const p = popups.current;
+    setMenu(null);
+    if (p.mode?.kind === 'target') p.mode.onDone(null);
+    setMode(null);
+    p.prompt?.resolve(null); setPrompt(null);
+    p.modes?.resolve(null); setModes(null);
+    p.picker?.resolve(null); setPicker(null);
+    p.dividing?.resolve(null); setDividing(null);
+    p.forceAsk?.resolve(false); setForceAsk(null);
+    setZone(null); setTokens(false);
+    hideSheet(); setPreview(null);
+  }, []);
+  const undo = useCallback(() => { closeAll(); void act({ t: 'requestUndo' }); }, [act, closeAll]);
 
   // Names -> card data for choices about cards the view keeps hidden (a library search lists names only).
   const myDeck = realMe ? match.decks?.[realMe] : undefined;
@@ -198,6 +215,8 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
 
   // Keyboard shortcuts
   const okRef = useRef<() => void>(() => {});
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
   const modeRef = useRef<Mode>(null);
   modeRef.current = mode;
   useEffect(() => {
@@ -206,7 +225,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
       if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return;
       if (e.key === 'F2' || (e.key === ' ' && !e.ctrlKey && !e.repeat && t.tagName !== 'BUTTON')) { e.preventDefault(); okRef.current(); }
       if (e.key === 'F6' || (e.ctrlKey && e.code === 'Space')) { e.preventDefault(); act({ t: 'passUntilEOT' }); }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); act({ t: 'requestUndo' }); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') { e.preventDefault(); undoRef.current(); }
       if (e.key === 'Escape') { if (modeRef.current?.kind === 'target') modeRef.current.onDone(null); setMode(null); }
     };
     window.addEventListener('keydown', on);
@@ -299,6 +318,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
         )}
         {toastMsg && <div className="toast">{toastMsg}</div>}
         <PendingChoices />
+        {g.undoRequest && g.undoRequest === me && <div className="undo-req pending-wait">Waiting for your opponent to allow the undo…</div>}
         {g.undoRequest && g.undoRequest !== me && me && (
           <div className="undo-req">
             {g.players.find((p) => p.pid === g.undoRequest)?.name} wants to undo the last action.
@@ -807,7 +827,7 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
 }
 
 function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
-  const { g, me, act, openMenu } = useGame();
+  const { g, me, act, openMenu, undo } = useGame();
   const phone = useLayout() !== 'desktop';
   const myTurn = g.activePlayer === me;
   const havePriority = g.priority === me && g.phase === 'playing';
@@ -848,7 +868,7 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
         <button className="more-btn" aria-label="More actions" onClick={(e) => openMenu(e.clientX, e.clientY, [
           ...(myTurn ? [{ label: 'End turn', onClick: () => act({ t: 'nextTurn' }) }] : []),
           { label: 'Pass to end of turn', onClick: () => act({ t: 'passUntilEOT' }) },
-          { label: 'Undo', disabled: !g.canUndo, onClick: () => act({ t: 'requestUndo' }) },
+          { label: 'Undo', disabled: !g.canUndo, onClick: undo },
           ...(!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) ? [{ label: 'Fix board (ask opponent)', onClick: () => act({ t: 'requestFixMode' } as never) }] : []),
         ], 'Actions')}>⋯</button>
       )}
@@ -857,7 +877,7 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
           {myTurn && <button className="tiny" onClick={() => act({ t: 'nextTurn' })} title="Skip to the end of your turn">End turn</button>}
           <button className="tiny" onClick={() => act({ t: 'passUntilEOT' })} title="F6 / Ctrl+Space: auto-pass until end of turn">Pass to EOT</button>
           {!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) && <button className="tiny" title="Ask your opponent to let you fix the board by hand" onClick={() => act({ t: 'requestFixMode' } as never)}>Fix board</button>}
-          <button className="tiny" disabled={!g.canUndo} onClick={() => act({ t: 'requestUndo' })} title="Ctrl+Z">Undo</button>
+          <button className="tiny undo-btn" disabled={!g.canUndo} onClick={undo} title="Ctrl+Z (closes any open popup first)">Undo</button>
           <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
             { label: 'Stops: gold dot = your turn, red dot = opponent\'s turn. Edit both under "Stops".', disabled: true },
             { label: 'Right-click a phase to toggle a stop for the current turn type.', disabled: true },
@@ -980,7 +1000,7 @@ function GraveyardPicker({ spec }: { spec: TargetSpec }) {
 }
 
 function PendingChoices() {
-  const { g, me, act, mode, setMode } = useGame();
+  const { g, me, act, mode, setMode, undo } = useGame();
   const mine = g.pending?.find((p) => p.pid === me);
   const others = (g.pending ?? []).filter((p) => p.pid !== me);
   const handling = useRef<string | null>(null); // pending id currently in targeting mode
@@ -1035,6 +1055,7 @@ function PendingChoices() {
               {tg && <button className="primary" onClick={() => startTargeting(mine)}>Choose targets for {tg.label}</button>}
               {mine.options.filter((o) => !revealedIds.includes(o.value)).map((o) => <PendingOption key={o.value} o={o} onClick={() => act({ t: 'choose', id: mine.id, value: o.value })} />)}
             </div>
+            {g.canUndo && <div className="row modal-undo"><button className="tiny undo-btn" onClick={undo} title="Ctrl+Z">Undo</button></div>}
           </div>
         </div>
       )}
