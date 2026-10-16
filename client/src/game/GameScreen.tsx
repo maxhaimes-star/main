@@ -230,6 +230,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
           <CenterBar match={match} onLeave={onLeave} auto={auto} setAuto={setAuto} phone={phone} onLog={() => setLogOpen(true)}>
             {layout === 'portrait' && <div className="center-row2">{hint ?? <><Stack yields={auto.yields} setAuto={setAuto} /><PassButton okRef={okRef} /></>}</div>}
             {layout === 'landscape' && hint}
+            {!phone && <button className="side-toggle" onClick={() => setAuto({ sidePanel: !auto.sidePanel })} title="Toggle log / active effects">{auto.sidePanel ? 'Log ›' : '‹ Log'}</button>}
           </CenterBar>
           <PlayerArea pid={self} />
           {me && <Hand pid={me} />}
@@ -237,7 +238,6 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
           </div>
           {layout !== 'portrait' && <Stack yields={auto.yields} setAuto={setAuto} />}
         </div>
-        {!phone && <button className="side-toggle" onClick={() => setAuto({ sidePanel: !auto.sidePanel })} title="Toggle log / active effects">{auto.sidePanel ? '›' : '‹ Log'}</button>}
         <div className="table-side">
           {phone && (
             <div className="side-head">
@@ -532,8 +532,9 @@ function Hand({ pid }: { pid: string }) {
   const drop = useDrop((iid) => dropTo(ctx, iid, 'hand'));
   const left = landPlaysLeft(g, pid);
   const played = (p as { landsPlayed?: number }).landsPlayed ?? 0;
+  const n = p.zones.hand.length;
   return (
-    <div className={`hand ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
+    <div className={`hand ${drop.over ? 'drop-over' : ''}`} style={handStyle(n)} {...drop.props}>
       {left != null && <span className={`land-plays ${left === 0 ? 'none' : ''}`} title="Land drops this turn">Lands: {played}/{played + left} played</span>}
       {p.zones.hand.map((iid, i) => <HandCard key={iid} iid={iid} i={i} n={p.zones.hand.length} />)}
       {p.zones.hand.length === 0 && <span className="muted">Your hand is empty.</span>}
@@ -543,14 +544,27 @@ function Hand({ pid }: { pid: string }) {
 }
 
 /** Arc layout for the hand: CSS variables only, no animation. */
+const fanStep = (n: number) => Math.min(3.5, 28 / Math.max(n, 1)); // degrees between neighbours
+const fanDrop = (n: number) => Math.min(1.6, 10 / Math.max(n, 1)); // px per t² (arc depth)
 function fanStyle(i: number, n: number): React.CSSProperties {
   const t = i - (n - 1) / 2;
-  const step = Math.min(5, 44 / Math.max(n, 1));
   return {
-    '--rot': `${(t * step).toFixed(2)}deg`,
-    '--dy': `${(t * t * Math.min(2.2, 14 / Math.max(n, 1))).toFixed(1)}px`,
-    '--ov': String(Math.min(0.62, Math.max(0.08, (n - 4) * 0.06))),
+    '--rot': `${(t * fanStep(n)).toFixed(2)}deg`,
+    '--dy': `${(t * t * fanDrop(n)).toFixed(1)}px`,
     zIndex: i + 1,
+  } as React.CSSProperties;
+}
+/**
+ * Hand strip variables: --n (card count, for the overlap that fits the strip) and --lift, how far every card is raised so
+ * the lowest point of the arc (outer cards: arc drop + the corner a rotation pushes down) stays on screen.
+ */
+function handStyle(n: number): React.CSSProperties {
+  const t = (n - 1) / 2;
+  const sin = Math.sin((t * fanStep(n) * Math.PI) / 180);
+  return {
+    '--n': String(Math.max(n, 1)),
+    '--ov': String(Math.min(0.62, Math.max(0.08, (n - 4) * 0.06))),
+    '--lift': `calc(${(t * t * fanDrop(n)).toFixed(1)}px + var(--hw) * ${(sin / 2).toFixed(3)} + 2px)`,
   } as React.CSSProperties;
 }
 
