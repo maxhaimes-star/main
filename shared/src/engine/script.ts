@@ -531,11 +531,31 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   return null;
 }
 
+const DIG_ZONES = new Set(['Hand', 'Library', 'Graveyard', 'Exile', 'Battlefield']);
+
+/**
+ * Static mirror of resolve.ts: a library-look step (Dig / RearrangeTopOfLibrary / Scry / Surveil) that would open the
+ * by-hand "look at the top cards" window instead of asking engine questions. Returns the reason, or null.
+ */
+export function peekFallback(step: ParsedAbility): string | null {
+  const p = step.params;
+  const self = (!p.Defined || p.Defined === 'You') && !p.ValidTgts;
+  if (step.api === 'Scry' || step.api === 'Surveil') return self ? null : `peek: ${step.api} (other player)`;
+  if (step.api === 'RearrangeTopOfLibrary') return 'peek: RearrangeTopOfLibrary';
+  if (step.api !== 'Dig' || p.ChangeNum === 'All') return null;
+  const bad = ['ValidTgts', 'Choser', 'NoLooking', 'SkipReorder', 'ExileWithCounters', 'DestinationZone3'].find((k) => p[k] != null);
+  if (bad) return `peek: Dig (${bad}$)`;
+  if (!self) return 'peek: Dig (other player)';
+  const dest = p.DestinationZone ?? 'Hand', dest2 = p.DestinationZone2 ?? 'Library';
+  if (!DIG_ZONES.has(dest) || !DIG_ZONES.has(dest2) || dest2 === 'Battlefield') return 'peek: Dig (zone)';
+  return null;
+}
+
 export function isAutomatable(ab: ParsedAbility): { ok: boolean; unsupported: string[] } {
   const unsupported: string[] = [];
   const visit = (a: ParsedAbility) => {
     for (let s: ParsedAbility | undefined = a; s; s = s.sub) {
-      const r = unsupportedReason(s);
+      const r = unsupportedReason(s) ?? peekFallback(s);
       if (r) unsupported.push(r);
       if (s.api === 'Charm' && s.choices) for (const c of s.choices) visit(c.ability);
     }

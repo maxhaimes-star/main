@@ -532,6 +532,8 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
       }
     } else if (g.players.some((p) => p.peek)) {
       const p = g.players.find((x) => x.peek)!;
+      // Engine-opened look windows other than scry / surveil are cards the player has to sort by hand.
+      if (p.peek!.mode !== 'scry' && p.peek!.mode !== 'surveil') G.issues.push({ kind: 'manual', card: cardIn(p.peek!.label ?? '') ?? G.context, text: `look-at-the-top window (${p.peek!.mode}): ${p.peek!.label ?? '?'}`, seed, turn: g.turn });
       if (!resolvePeek(G, p.pid)) { p.peek = null; }
     } else if (g.phase === 'playing') {
       // Empty library draw = loss (rule 704.5b) when the engine doesn't handle it.
