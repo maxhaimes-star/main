@@ -7,6 +7,7 @@ import {
   mayPlayFrom, moveCard, parseStatic, scriptRef, spellAbility, staticGaps, triggerSupport,
 } from '../src/index.ts';
 import { createTokenInstance } from '../src/engine/resolve.ts';
+import { effectivePT, faceOf } from '../src/game/rules.ts';
 import { SCRIPTS } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
 
@@ -533,5 +534,90 @@ describe('6: Nadu, Winged Wisdom', () => {
     }
     expect(g.activePlayer).toBe('a');
     expect(target(g1, g2)).toBe(1);
+  });
+});
+
+describe('7: Figure of Fable', () => {
+  const FIG = 'figure_of_fable';
+  function figure(fill = 'basic_forest', lands = 9, opp: string[] = []) {
+    const { g, ctx } = setup([FIG], opp, fill, 'basic_mountain');
+    const fig = put(g, ctx, 'a', FIG);
+    for (let k = 0; k < lands; k++) put(g, ctx, 'a', fill);
+    return { g, ctx, fig };
+  }
+  const level = (g: GameState, ctx: Ctx, fig: string, k: number) => {
+    const err = applyAction(g, 'a', { t: 'activate', iid: fig, text: '', ability: activatedAbilitiesOf(FIG, 0)[k].index }, ctx);
+    if (err) throw new Error(err);
+    drain(g, ctx);
+  };
+  const subtypes = (g: GameState, fig: string) => faceOf(g.cards[fig], getCard).typeLine.split('—')[1]?.trim().split(/\s+/) ?? [];
+  const untapAll = (g: GameState) => { for (const i of g.battlefield) g.cards[i].tapped = false; };
+
+  it('step 1 ({G/W}, paid with G): a Kithkin Scout with base 2/3, other creature types gone', () => {
+    const { g, ctx, fig } = figure();
+    expect(effectivePT(g.cards[fig], getCard, g)).toEqual([1, 1]);
+    level(g, ctx, fig, 0);
+    expect(effectivePT(g.cards[fig], getCard, g), logTail(g)).toEqual([2, 3]);
+    expect(subtypes(g, fig).sort()).toEqual(['Kithkin', 'Scout']);
+    expect(g.battlefield.filter((i) => g.cards[i].tapped).length, logTail(g, 10)).toBe(1);
+  });
+
+  it('the hybrid cost can be paid with W', () => {
+    const { g, ctx, fig } = figure('basic_plains', 1);
+    level(g, ctx, fig, 0);
+    expect(g.battlefield.filter((i) => g.cards[i].tapped).length, logTail(g)).toBe(1);
+    expect(effectivePT(g.cards[fig], getCard, g), logTail(g)).toEqual([2, 3]);
+  });
+
+  it('step 2 on a Scout: Kithkin Soldier 4/5; step 3 on a Soldier: Kithkin Avatar 7/8 with protection from opponents', () => {
+    const { g, ctx, fig } = figure('basic_forest', 12, ['lightning_bolt']);
+    level(g, ctx, fig, 0);
+    untapAll(g);
+    level(g, ctx, fig, 1);
+    expect(effectivePT(g.cards[fig], getCard, g), logTail(g)).toEqual([4, 5]);
+    expect(subtypes(g, fig).sort()).toEqual(['Kithkin', 'Soldier']);
+    untapAll(g);
+    level(g, ctx, fig, 2);
+    expect(effectivePT(g.cards[fig], getCard, g), logTail(g)).toEqual([7, 8]);
+    expect(subtypes(g, fig).sort()).toEqual(['Avatar', 'Kithkin']);
+    // the opponent can't target it
+    put(g, ctx, 'b', 'basic_mountain');
+    const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+    g.priority = 'b';
+    expect(applyAction(g, 'b', { t: 'cast', iid: bolt, targets: card(fig) }, ctx), logTail(g)).toBeTruthy();
+    expect(g.cards[bolt].zone).toBe('hand');
+  });
+
+  it('a step whose condition fails does nothing (step 2 on a fresh Figure, step 3 on a Scout)', () => {
+    const { g, ctx, fig } = figure('basic_forest', 12);
+    level(g, ctx, fig, 1);
+    expect(effectivePT(g.cards[fig], getCard, g), logTail(g)).toEqual([1, 1]);
+    untapAll(g);
+    level(g, ctx, fig, 0);
+    untapAll(g);
+    level(g, ctx, fig, 2);
+    expect(effectivePT(g.cards[fig], getCard, g), logTail(g)).toEqual([2, 3]);
+    expect(subtypes(g, fig).sort()).toEqual(['Kithkin', 'Scout']);
+  });
+
+  it('the latest step wins (no stacking) and it lasts across turns', () => {
+    const { g, ctx, fig } = figure('basic_forest', 12);
+    level(g, ctx, fig, 0);
+    untapAll(g);
+    level(g, ctx, fig, 1);
+    untapAll(g);
+    level(g, ctx, fig, 0); // back to a Scout 2/3
+    expect(effectivePT(g.cards[fig], getCard, g)).toEqual([2, 3]);
+    expect(subtypes(g, fig).sort()).toEqual(['Kithkin', 'Scout']);
+    untapAll(g);
+    level(g, ctx, fig, 1);
+    for (let k = 0; k < 300 && !(g.turn >= 3 && g.step === 'main1'); k++) {
+      const q = g.pending[0];
+      if (q) { act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(g.turn).toBeGreaterThanOrEqual(3);
+    expect(effectivePT(g.cards[fig], getCard, g)).toEqual([4, 5]);
+    expect(subtypes(g, fig).sort()).toEqual(['Kithkin', 'Soldier']);
   });
 });

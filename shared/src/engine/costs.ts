@@ -60,6 +60,7 @@ export function parseCost(cost: string, selfName = 'it'): { mana: string; parts:
   const parts: CostPart[] = [];
   for (const tok of cost.trim().match(/\S+<[^>]*>|\S+/g) ?? []) {
     if (MANA_TOK.test(tok)) { mana += `{${tok}}`; continue; }
+    if (/^[WUBRG]{2}$/.test(tok)) { mana += `{${tok[0]}/${tok[1]}}`; continue; } // hybrid ("GW")
     if (/^XMin\d+$/.test(tok)) continue; // "X can't be 0": not checked
     if (tok === 'T' || tok === 'Q') continue; // tap / untap symbols: handled by the caller
     const m = /^(\w+)<([^/>]+)(?:\/([^/>]+))?(?:\/([^>]+))?>$/.exec(tok);

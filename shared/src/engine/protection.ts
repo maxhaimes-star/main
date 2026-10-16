@@ -51,6 +51,8 @@ export function protectionsOf(st: St, c: CardInstance, lookup: Lookup): string[]
   for (const k of kws) {
     if (!/^Protection/i.test(k)) continue;
     if (/ChosenPlayer/.test(k)) { if (c.chosen?.player) out.push(`player:${c.chosen.player}`); continue; }
+    // "Protection from each of your opponents" (Figure of Fable): sources an opponent of its controller controls.
+    if (/^Protection:Player\.Opponent\b/.test(k)) { out.push(`opponentOf:${c.controller}`); continue; }
     // "Protection from red and from blue"
     for (const part of k.split(/ and from /i)) { const q = protectionQuality(/^Protection/i.test(part) ? part : `Protection from ${part}`); if (q) out.push(q); }
   }
@@ -60,6 +62,7 @@ export function protectionsOf(st: St, c: CardInstance, lookup: Lookup): string[]
 /** Does `quality` protect against `source` (a card on the stack / battlefield)? */
 function qualityMatches(st: St, quality: string, source: CardInstance, lookup: Lookup): boolean {
   if (quality.startsWith('player:')) return source.controller === quality.slice(7);
+  if (quality.startsWith('opponentOf:')) return source.controller !== quality.slice(11);
   return matchCard(source, quality, { controller: source.controller, sourceIid: source.iid, lookup }) === true;
 }
 

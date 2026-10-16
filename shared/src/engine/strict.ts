@@ -388,6 +388,7 @@ function abilityCost(cost: string, x: number): AbilityCost {
   for (const tok of cost.match(/\S+<[^>]*>|\S+/g) ?? []) {
     let m: RegExpExecArray | null;
     if (/^(\d+|[WUBRGCSX]|[WUBRG2]\/[WUBRGP])$/.test(tok)) out.mana += `{${tok === 'X' ? x : tok}}`;
+    else if (/^[WUBRG]{2}$/.test(tok)) out.mana += `{${tok[0]}/${tok[1]}}`; // hybrid ("GW": Figure of Fable)
     else if ((m = /^Waterbend<(\d+)>$/.exec(tok))) out.mana += `{${m[1]}}`;
     else if (tok === 'T') out.tap = true;
     else if (tok === 'Q') out.untap = true;
