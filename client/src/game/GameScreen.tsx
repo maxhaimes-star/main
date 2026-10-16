@@ -432,8 +432,9 @@ function PlayerPanel({ p }: { p: ViewPlayer }) {
       </div>
       {p.designations.length > 0 && <div className="designations">{p.designations.map((d) => <span key={d} className="desig" onClick={() => isMe && act({ t: 'designation', name: d, on: false })}>{d === 'Monarch' ? '👑' : d === 'Initiative' ? '🗺' : '✦'} {d}</span>)}</div>}
       {(pool.length > 0 || (isMe && manual)) && (
-        <div className="mana-pool">
-          {pool.map(([m, n]) => <span key={m} className={`pip pip-${m}`} title="click to spend 1" onClick={() => isMe && manual && act({ t: 'addMana', mana: m, n: -1 })}>{m}{n > 1 ? `×${n}` : ''}</span>)}
+        <div className={`mana-pool ${pool.length ? 'floating' : ''}`} title={pool.length ? `${p.name}'s floating mana (empties at the end of the step)` : undefined}>
+          {pool.length > 0 && <span className="mp-label">Mana</span>}
+          <ManaPips pool={p.manaPool} onSpend={isMe && manual ? (m) => act({ t: 'addMana', mana: m, n: -1 }) : undefined} />
           {isMe && manual && <AddMana />}
         </div>
       )}
@@ -442,6 +443,20 @@ function PlayerPanel({ p }: { p: ViewPlayer }) {
       {isMe && !phone && <MyTools p={p} />}
       {!isMe && p.zones.hand.some((iid) => !isHidden(g.cards[iid])) && <button className="tiny" onClick={() => openZone(p.pid, 'hand')}>See revealed</button>}
     </div>
+  );
+}
+
+const POOL_ORDER = ['W', 'U', 'B', 'R', 'G', 'C'];
+/** Floating mana as pips with counts ("R ×3"), in WUBRGC order. */
+function ManaPips({ pool, onSpend }: { pool: Record<string, number>; onSpend?: (m: string) => void }) {
+  const entries = Object.entries(pool).filter(([, n]) => n > 0).sort(([a], [b]) => (POOL_ORDER.indexOf(a) + 99) % 99 - (POOL_ORDER.indexOf(b) + 99) % 99);
+  return (
+    <>
+      {entries.map(([m, n]) => (
+        <span key={m} className={`pip pool-pip pip-${m.replace('/', '')}`} title={onSpend ? 'Click to spend 1' : `${n} ${m} floating`}
+          onClick={onSpend ? () => onSpend(m) : undefined}>{m}{n > 1 && <b className="pool-n">×{n}</b>}</span>
+      ))}
+    </>
   );
 }
 
@@ -720,6 +735,8 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
   const attackers = g.battlefield.filter((id) => g.cards[id].attacking).length;
   const landLeft = me ? landPlaysLeft(g, me) : null;
   const landsPlayed = (g.players.find((p) => p.pid === me) as { landsPlayed?: number } | undefined)?.landsPlayed ?? 0;
+  // Floating mana of both players, right by the pass button (me first).
+  const pools = g.players.filter((pl) => Object.values(pl.manaPool).some((n) => n > 0)).sort((a) => (a.pid === me ? -1 : 1));
 
   let okLabel = 'Pass';
   if (g.stack.length) okLabel = 'Resolve';
@@ -735,6 +752,15 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
   return (
     <div className="priority">
       {phone && g.phase === 'playing' && me && landLeft != null && <span className={`land-plays land-chip ${landLeft === 0 ? 'none' : ''}`}>Land {landsPlayed}/{landsPlayed + landLeft}</span>}
+      {pools.length > 0 && (
+        <div className="pool-float">
+          {pools.map((pl) => (
+            <span key={pl.pid} className={`pool-chip ${pl.pid === me ? 'mine' : 'theirs'}`} title={`${pl.name}'s floating mana`}>
+              <span className="mp-label">{pl.pid === me ? 'Your mana' : pl.name}</span><ManaPips pool={pl.manaPool} />
+            </span>
+          ))}
+        </div>
+      )}
       {g.phase === 'playing' && me && (havePriority
         ? <button className="primary ok" onClick={() => act({ t: 'pass' })} title="F2 / Space">{okLabel}</button>
         : <span className="waiting">Waiting for {name(g.priority)}…</span>)}

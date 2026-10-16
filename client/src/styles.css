@@ -493,3 +493,13 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .hp-img { width: 100%; border-radius: 4.5% / 3.2%; box-shadow: 0 8px 30px #000e, 0 0 0 1px #000; }
 .hp-back { width: 55%; margin-top: 6px; border-radius: 4.5% / 3.2%; }
 .hp-extra { margin-top: 6px; background: #000e; color: var(--accent2); font-size: 12px; padding: 5px 8px; border-radius: 6px; }
+
+/* floating mana: in each player panel and next to the pass button */
+.mana-pool.floating { background: #000a; border: 1px solid var(--gold); border-radius: 10px; padding: 3px 6px; justify-content: center; box-shadow: 0 0 10px #d9b45a55; }
+.mp-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--gold); }
+.pool-pip { min-width: 24px; height: 24px; border-radius: 12px; font-size: 13px; border: 1px solid #0006; box-shadow: 0 0 6px #fff6; }
+.pool-pip .pool-n { margin-left: 2px; font-size: 12px; }
+.pool-float { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.pool-chip { display: inline-flex; align-items: center; gap: 4px; background: #0d1117ee; border: 1px solid var(--gold); border-radius: 999px; padding: 2px 8px; }
+.pool-chip.theirs { border-color: #c25d5d; }
+.pool-chip.theirs .mp-label { color: #e29a9a; }

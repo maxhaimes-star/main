@@ -340,3 +340,6 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .lay-landscape .priority { right: calc(8px + var(--safe-r)); bottom: 6px; flex-direction: row; align-items: center; }
 .lay-landscape .priority > .sub-actions { display: none; }
 .lay-landscape .hand { padding-left: 8px; padding-right: 190px; }
+
+.lay-portrait .pool-pip, .lay-landscape .pool-pip { min-width: 20px; height: 20px; font-size: 11px; }
+.lay-portrait .pool-chip .mp-label, .lay-landscape .pool-chip .mp-label { display: none; }
