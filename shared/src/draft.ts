@@ -1,4 +1,6 @@
-import { type CardData, type Color, COLORS } from './cards.ts';
+import { type CardData, COLORS } from './cards.ts';
+import { botDeck, botPick, cardScore } from './bots.ts';
+import { emptyDeck, multisetDiff } from './deckutil.ts';
 import type { AuctionState, Deck, DraftState, Player, RoomState } from './room.ts';
 
 export type Rng = () => number;
@@ -47,17 +49,7 @@ export function cubeList(room: RoomState, defaultList: string[]): string[] {
   return room.settings.customList?.length ? room.settings.customList : defaultList;
 }
 
-export function multisetDiff(a: string[], b: string[]): string[] {
-  const counts = new Map<string, number>();
-  for (const x of b) counts.set(x, (counts.get(x) ?? 0) + 1);
-  return a.filter((x) => {
-    const c = counts.get(x) ?? 0;
-    if (c > 0) { counts.set(x, c - 1); return false; }
-    return true;
-  });
-}
-
-export const emptyDeck = (): Deck => ({ main: [], side: [], basics: { W: 0, U: 0, B: 0, R: 0, G: 0 }, ready: false });
+export { multisetDiff, emptyDeck };
 
 // ===================================================================== booster draft
 
@@ -181,66 +173,6 @@ export function draftTick(room: RoomState, now: number, lookup: CardLookup, rng:
     }
   }
   return changed;
-}
-
-// ===================================================================== bots
-
-/** Colors a bot leans toward given its picks so far. */
-export function colorWeights(picks: string[], lookup: CardLookup): Record<Color, number> {
-  const w: Record<Color, number> = { W: 0, U: 0, B: 0, R: 0, G: 0 };
-  for (const id of picks) {
-    const c = lookup(id);
-    if (!c || c.types.includes('Land')) continue;
-    const power = 1 + Math.max(0, 1 - c.rank / 600);
-    for (const col of c.colors) w[col] += power / c.colors.length;
-  }
-  return w;
-}
-
-export function cardScore(card: CardData, picks: string[], lookup: CardLookup): number {
-  // Earlier in the list ≈ the cube owner's sort order; use a gentle prior plus color fit.
-  let score = 1 - Math.min(card.rank, 600) / 600;
-  score += 0.5; // baseline so nothing scores negative
-  if (picks.length >= 4) {
-    const w = colorWeights(picks, lookup);
-    const top = (Object.entries(w) as [Color, number][]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c]) => c);
-    if (card.colors.length === 0) score += 0.25;
-    else if (card.colors.every((c) => top.includes(c))) score += 0.6;
-    else if (card.colors.some((c) => top.includes(c))) score += 0.1;
-    else score -= 0.4 * Math.min(1, picks.length / 15);
-  }
-  if (card.types.includes('Land') && card.colorIdentity.length >= 2) score -= 0.15;
-  return score;
-}
-
-export function botPick(pack: string[], picks: string[], lookup: CardLookup, rng: Rng): string {
-  let best = pack[0];
-  let bestScore = -Infinity;
-  for (const id of pack) {
-    const c = lookup(id);
-    const s = (c ? cardScore(c, picks, lookup) : 0) + rng() * 0.15;
-    if (s > bestScore) { bestScore = s; best = id; }
-  }
-  return best;
-}
-
-/** Bot deckbuilding: two best colors, 23 spells, 17 lands. */
-export function botDeck(pool: string[], lookup: CardLookup): Deck {
-  const w = colorWeights(pool, lookup);
-  const top = (Object.entries(w) as [Color, number][]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c]) => c);
-  const fits = (c: CardData) => c.colors.every((x) => top.includes(x));
-  const cards = pool.map((id) => lookup(id)).filter(Boolean) as CardData[];
-  const spells = cards.filter((c) => !c.types.includes('Land') && fits(c)).sort((a, b) => a.rank - b.rank).slice(0, 23);
-  const lands = cards.filter((c) => c.types.includes('Land') && c.producedMana.some((m) => top.includes(m as Color)) && c.producedMana.every((m) => top.includes(m as Color) || m === 'C')).slice(0, 7);
-  const main = [...spells, ...lands].map((c) => c.id);
-  const deck = emptyDeck();
-  deck.main = main;
-  deck.side = multisetDiff(pool, main);
-  const basicsNeeded = Math.max(0, 40 - main.length);
-  deck.basics[top[0]] = Math.ceil(basicsNeeded / 2);
-  deck.basics[top[1] ?? top[0]] += Math.floor(basicsNeeded / 2);
-  deck.ready = true;
-  return deck;
 }
 
 // ===================================================================== sealed
