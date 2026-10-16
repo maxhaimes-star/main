@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NumberField } from '../NumberField.tsx';
-import { effectivePT, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
+import { effectivePT, type Face, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
 import { isStrict, summoningSickNoHaste } from './engine.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 import { isTouch, useLongPress } from '../touch.ts';
@@ -67,6 +67,10 @@ export interface GameCtx {
   /** Sources auto-pay would tap (hand card hover). */
   payPreview: string[];
   setPayPreview: (iids: string[]) => void;
+  /** Face of a card named in a choice whose card the client cannot see (library search picks): from my deck list. */
+  faceByName: (name: string) => Face | undefined;
+  /** Close every popup / prompt / targeting mode, then ask to undo. */
+  undo: () => void;
 }
 
 export const Ctx = createContext<GameCtx>(null as unknown as GameCtx);

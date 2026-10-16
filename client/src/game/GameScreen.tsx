@@ -3,7 +3,7 @@ import {
   type GameAction, type GameView, isHidden, faceOf, type MatchView, STEP_LABELS, STEPS, type Step, type TargetRef, type TargetSpec, type ViewPlayer, type Zone,
 } from '@ojb/shared';
 import type { RoomProps } from '../Room.tsx';
-import { backFaceOf, CardBack, CardImage, getCard, HoverPreview, setHoverZoom, setPreview, useHoverZoom } from '../cards.tsx';
+import { backFaceOf, CardBack, CardImage, cardFace, getCard, HoverPreview, setHoverZoom, setPreview, useHoverZoom } from '../cards.tsx';
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 import { hideSheet, showSheet } from '../sheet.tsx';
 import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
@@ -164,10 +164,32 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
     showCardSheet(iid);
   };
 
+  const undo = useCallback(() => { void act({ t: 'requestUndo' }); }, [act]);
+
+  // Names -> card data for choices about cards the view keeps hidden (a library search lists names only).
+  const myDeck = realMe ? match.decks?.[realMe] : undefined;
+  const byName = useMemo(() => {
+    const m = new Map<string, string>();
+    const add = (id: string | undefined) => {
+      const card = id ? getCard(id) : undefined;
+      if (!card) return;
+      for (const n of [card.name, ...(card.faces?.map((f) => f.name) ?? [])]) if (!m.has(n.toLowerCase())) m.set(n.toLowerCase(), card.id);
+    };
+    for (const id of [...(myDeck?.main ?? []), ...(myDeck?.side ?? [])]) add(id);
+    for (const c of Object.values(g.cards)) if (!isHidden(c)) add(c.cardId);
+    return m;
+  }, [myDeck, g.cards]);
+  const faceByName = useCallback((label: string) => {
+    const id = byName.get(label.toLowerCase()) ?? byName.get(label.replace(/\s*\(.*\)\s*$/, '').toLowerCase());
+    const card = id ? getCard(id) : undefined;
+    return card ? cardFace(card) : undefined;
+  }, [byName]);
+
   const ctx: GameCtx = {
     g, me, self, opp, act, openMenu, mode, setMode, ask, askText, pickModes, pickOption, divide, showCardSheet, tapCard,
     openZone: (pid, z) => setZone({ pid, zone: z }), openTokens: () => setTokens(true), menuFor, defaultAction,
     target, pickTarget, isLegal, cast: (iid, face) => { castWithX(base, iid, face); }, toast, hoverTargets, setHoverTargets, payPreview, setPayPreview,
+    faceByName, undo,
   };
 
   useAutoPass({ g, me, act, settings: auto, busy: !!mode || !!menu || !!prompt || !!modes || !!picker || !!dividing || !!forceAsk, controlled });
@@ -962,10 +984,11 @@ function RevealedPick({ pending }: { pending: { id: string; options: { value: st
 
 /** A pending answer: a small card image (hover preview) when the value is a visible card, else a text button. */
 function PendingOption({ o, onClick, tiny }: { o: { value: string; label: string }; onClick: () => void; tiny?: boolean }) {
-  const { g } = useGame();
+  const { g, faceByName } = useGame();
   const c = g.cards[o.value];
-  if (c && !isHidden(c)) {
-    const face = faceOf(c, getCard);
+  // A card the view keeps hidden (library search): picture from my deck list by the option's name.
+  const face = c && !isHidden(c) ? faceOf(c, getCard) : (!c || isHidden(c)) && o.value !== 'none' && /^[\w-]{6,}$/.test(o.value) ? faceByName(o.label) : undefined;
+  if (face) {
     return (
       <button className="pend-card" title={o.label} onMouseEnter={() => setPreview({ face })} onClick={onClick}>
         <CardImage face={face} /><span>{o.label}</span>
