@@ -7,7 +7,7 @@ import { backFaceOf, CardBack, CardImage, cardFace, getCard, HoverPreview, setHo
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 import { hideSheet, showSheet } from '../sheet.tsx';
 import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
-import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, type PickOption } from './ui.tsx';
+import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, RevealedZone, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
@@ -273,6 +273,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
             {layout === 'landscape' && hint}
             {!phone && <button className="side-toggle" onClick={() => setAuto({ sidePanel: !auto.sidePanel })} title="Toggle log / active effects">{auto.sidePanel ? 'Log ›' : '‹ Log'}</button>}
           </CenterBar>
+          <RevealedZone />
           <PlayerArea pid={self} />
           {me && <Hand pid={me} />}
           {layout !== 'portrait' && <PassButton okRef={okRef} />}
