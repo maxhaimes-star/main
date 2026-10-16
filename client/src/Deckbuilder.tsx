@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { type CardData, type Color, COLORS, type Deck, deckToCockatrice, deckToText, deckToXmage, multisetDiff, parseManaSymbols, BASIC_LANDS } from '@ojb/shared';
+import { BUCKET_ORDER, type CardData, type Color, colorBucket, COLORS, type Deck, deckToCockatrice, deckToText, deckToXmage, multisetDiff, parseManaSymbols, BASIC_LANDS } from '@ojb/shared';
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
-import { Curve, PoolSummary } from './Draft.tsx';
+import { compareCards, cmcBucket, Curve, PoolSummary } from './Draft.tsx';
+import { SortToggle, useSortMode } from './sort.tsx';
 import { download } from './net.ts';
 import { Constructed } from './Constructed.tsx';
 
@@ -60,16 +61,22 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
   const toMain = (id: string) => setDeck((d) => ({ ...d, main: [...d.main, id] }));
   const toSide = (index: number) => setDeck((d) => ({ ...d, main: d.main.filter((_, i) => i !== index) }));
 
-  // Main deck laid out in CMC columns, creatures above non-creatures.
-  const columns: { label: string; cards: { c: CardData; i: number }[] }[] = [];
-  for (let cmc = 0; cmc <= 7; cmc++) columns.push({ label: cmc === 7 ? '7+' : String(cmc), cards: [] });
-  const landCol: { c: CardData; i: number }[] = [];
+  // Main deck laid out in columns: by mana value (creatures above non-creatures) or by colour (mana value within).
+  const sortMode = useSortMode();
+  type Entry = { c: CardData; i: number };
+  const columns: { label: string; cards: Entry[] }[] = (sortMode === 'cmc' ? ['0', '1', '2', '3', '4', '5', '6', '7+'] : BUCKET_ORDER.filter((b) => b !== 'Land')).map((label) => ({ label, cards: [] }));
+  const landCol: Entry[] = [];
   deck.main.forEach((id, i) => {
     const c = getCard(id);
     if (!c) return;
-    if (c.types.includes('Land')) landCol.push({ c, i });
-    else columns[Math.min(7, Math.floor(c.cmc))].cards.push({ c, i });
+    if (c.types.includes('Land')) { landCol.push({ c, i }); return; }
+    const key = sortMode === 'cmc' ? cmcBucket(c) : colorBucket(c);
+    columns.find((col) => col.label === key)?.cards.push({ c, i });
   });
+  const visibleColumns = sortMode === 'cmc' ? columns : columns.filter((col) => col.cards.length > 0);
+  const sortColumn = (cards: Entry[]) => cards.sort((x, y) => (sortMode === 'cmc'
+    ? Number(y.c.types.includes('Creature')) - Number(x.c.types.includes('Creature')) || compareCards('cmc', x.c, y.c)
+    : compareCards('color', x.c, y.c)));
 
   if (!isPlayer) return <div className="center-msg">Players are building decks. <MatchList view={view} send={send} onWatch={onWatch} /></div>;
 
@@ -83,12 +90,12 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <Curve cards={mainCards} />
           <label className="ready"><input type="checkbox" checked={ready} onChange={(e) => setReady(e.target.checked)} /> Deck ready</label>
         </div>
-        <p className="muted"><span className="hide-touch">Click cards in your pool to add them; click cards in your deck to take them out.</span><span className="show-touch">Tap a card to zoom, then Add to / Remove from deck.</span></p>
+        <p className="muted"><SortToggle /> <span className="hide-touch">Click cards in your pool to add them; click cards in your deck to take them out.</span><span className="show-touch">Tap a card to zoom, then Add to / Remove from deck.</span></p>
         <div className="db-columns">
-          {columns.map((col) => (
+          {visibleColumns.map((col) => (
             <div key={col.label} className="db-col">
               <div className="db-col-title">{col.label} <small>({col.cards.length})</small></div>
-              {col.cards.sort((x, y) => Number(y.c.types.includes('Creature')) - Number(x.c.types.includes('Creature')) || x.c.name.localeCompare(y.c.name)).map(({ c, i }) => (
+              {sortColumn(col.cards).map(({ c, i }) => (
                 <CubeCard key={`${c.id}-${i}`} id={c.id} onClick={() => toSide(i)} className="stacked" tapLabel="Remove from deck" />
               ))}
             </div>

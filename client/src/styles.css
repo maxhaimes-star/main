@@ -125,6 +125,10 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .seat .packs { color: var(--accent); letter-spacing: -2px; }
 .picks { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 8px; }
 .picks-head { display: flex; align-items: center; gap: 24px; }
+.sort-toggle { display: inline-flex; align-items: center; gap: 4px; }
+.sort-toggle button { padding: 2px 8px; font-size: 12px; }
+.sort-toggle button.active { background: var(--accent); color: #111; border-color: var(--accent); }
+.picks-main, .picks-side { margin-top: 8px; }
 .pool-summary { display: flex; flex-wrap: wrap; gap: 8px; }
 .pool-summary h4 { width: 100%; }
 .pool-group { min-width: 110px; flex: 0 0 110px; }
