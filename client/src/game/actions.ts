@@ -3,7 +3,7 @@ import {
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { AUTO_LABEL, autoStatus, isStrict, manualOk, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
+import { AUTO_LABEL, autoStatus, isStrict, manualOk, phyrexianChoice, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
 type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'pickOption' | 'divide' | 'setMode' | 'opp' | 'target'> & { toast?: (m: string) => void } & { mode: Mode };
@@ -112,6 +112,20 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
     if (v == null) return;
     x = v;
   }
+  // Phyrexian mana (strict auto-pay): mana first by default; offer paying life instead when that differs.
+  let phyrexian: 'mana' | 'life' | undefined;
+  const phy = manual ? undefined : phyrexianChoice(base.g, base.me, iid, face, costOption, x);
+  if (phy && phy.life.ok && phy.life.life !== phy.mana.life) {
+    if (!phy.mana.ok) phyrexian = 'life';
+    else {
+      const how = await base.pickOption('Pay Phyrexian mana', [
+        { value: 'mana', label: phy.mana.life ? `Mana where possible (${phy.mana.life} life)` : 'Pay with mana', detail: 'Tap mana for the Phyrexian symbols' },
+        { value: 'life', label: `Pay ${phy.life.life} life`, detail: '2 life per Phyrexian symbol' },
+      ]);
+      if (!how) return;
+      phyrexian = how as 'mana' | 'life';
+    }
+  }
   let targets: TargetRef[][] | undefined;
   let modes: string[] | undefined;
   const sa = manual ? undefined : safeSpell(c?.cardId, face ?? 0);
@@ -135,7 +149,7 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
     if (d === null) return;
     division = d;
   }
-  base.act({ t: 'cast', iid, face, x, ...(costOption ? { costOption } : {}), ...(division ? { division } : {}), ...(targets ? { targets } : {}), ...(modes ? { modes } : {}), ...(manual ? { manual: true } : {}) });
+  base.act({ t: 'cast', iid, face, x, ...(phyrexian === 'life' ? { phyrexian } : {}), ...(costOption ? { costOption } : {}), ...(division ? { division } : {}), ...(targets ? { targets } : {}), ...(modes ? { modes } : {}), ...(manual ? { manual: true } : {}) });
 }
 
 /** DividedAsYouChoose$: ask how to split the damage. undefined = nothing to divide, null = cancelled. */

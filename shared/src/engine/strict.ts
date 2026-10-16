@@ -116,10 +116,11 @@ export function manaSources(state: AnyState, pid: string, lookup: Lookup = getCa
 }
 
 /**
- * Permanents that may be tapped to help pay generic mana: Improvise (artifacts), Convoke (creatures), Waterbend
- * (artifacts and creatures, up to the waterbend amount). Each tapped one pays for {1}.
+ * Permanents that may be tapped to help pay: Improvise (artifacts), Convoke (creatures), Waterbend (artifacts and
+ * creatures, up to the waterbend amount). Each tapped one pays for {1}; with `colored` (Convoke, rule 702.51a) a
+ * creature may instead pay one colored symbol of one of its colors (hybrid / Phyrexian symbols of that color too).
  */
-export interface PayHelp { artifacts?: boolean; creatures?: boolean; max?: number; label: string }
+export interface PayHelp { artifacts?: boolean; creatures?: boolean; colored?: boolean; max?: number; label: string }
 
 /** Improvise / Convoke on the card being cast (script K: lines). */
 export function castHelp(c: CardInstance, face?: number): PayHelp | undefined {
@@ -127,7 +128,7 @@ export function castHelp(c: CardInstance, face?: number): PayHelp | undefined {
   const kws = ref ? getScript(ref.cardId)?.[ref.face]?.keywords ?? [] : [];
   const improvise = kws.includes('Improvise'), convoke = kws.includes('Convoke');
   if (!improvise && !convoke) return undefined;
-  return { artifacts: improvise, creatures: convoke, label: improvise && convoke ? 'improvise / convoke' : improvise ? 'improvise' : 'convoke' };
+  return { artifacts: improvise, creatures: convoke, colored: convoke, label: improvise && convoke ? 'improvise / convoke' : improvise ? 'improvise' : 'convoke' };
 }
 
 /** Waterbend<N> in an ability cost: N generic mana that untapped artifacts / creatures may help pay. */
@@ -138,6 +139,15 @@ export function waterbendOf(cost: string): number {
 }
 
 const HELP_OPTION = 'help';
+
+/** A permanent's current colors (W/U/B/R/G letters; face-down: none). */
+function permanentColors(c: CardInstance, lookup: Lookup): string[] {
+  if (c.faceDown) return [];
+  const f = faceOf(c, lookup);
+  const data = c.cardId ? lookup(c.cardId) : undefined;
+  const colors = f.colors ?? (c.token && !c.cardId ? c.token.colors : data?.colors ?? []);
+  return [...new Set(colors)].filter((m) => /^[WUBRG]$/.test(m));
+}
 
 function helpSources(state: AnyState, pid: string, help: PayHelp, lookup: Lookup, exclude: Set<string>, sources: PaySource[]): PaySource[] {
   const byKey = new Map(sources.map((s) => [s.key, s]));
@@ -150,48 +160,76 @@ function helpSources(state: AnyState, pid: string, help: PayHelp, lookup: Lookup
     const creature = isCreature(c, lookup, state as StaticsState);
     const artifact = faceOf(c, lookup).types.includes('Artifact');
     if (!((help.artifacts && artifact) || (help.creatures && creature))) continue;
-    const opt = { id: HELP_OPTION, produces: '*', penalty: creature ? 4 : 2 };
-    if (byKey.has(iid)) outByKey.get(iid)!.options.push(opt);
-    else out.push({ key: iid, options: [opt] });
+    const opts: PaySource['options'] = [{ id: HELP_OPTION, produces: '*', penalty: creature ? 4 : 2 }];
+    if (help.colored && creature) {
+      // Convoke: one colored symbol of one of the creature's colors (slightly dearer than generic, so generic uses '*')
+      for (const m of permanentColors(c, lookup)) opts.push({ id: `${HELP_OPTION}:${m}`, produces: m, penalty: 4.5, helper: true });
+    }
+    if (byKey.has(iid)) outByKey.get(iid)!.options.push(...opts);
+    else out.push({ key: iid, options: opts });
   }
   return out;
 }
 
-/** Plan paying `cost` (pool first, then untapped sources; `help`: Improvise / Convoke / Waterbend). null = can't be paid. */
-export function planAutoPay(state: AnyState, pid: string, cost: string, x: number, lookup: Lookup = getCard, exclude: Set<string> = new Set(), help?: PayHelp): PayResult | null {
+/**
+ * Plan paying `cost` (pool first, then untapped sources; `help`: Improvise / Convoke / Waterbend). null = can't be paid.
+ * Phyrexian symbols: by default with mana when possible, else 2 life — but auto-pay never pays life down to 0 or below.
+ * `phyrexian: 'life'` (the player's choice) pays them with life whenever the player has that much life.
+ */
+export function planAutoPay(state: AnyState, pid: string, cost: string, x: number, lookup: Lookup = getCard, exclude: Set<string> = new Set(), help?: PayHelp, phyrexian?: 'mana' | 'life'): PayResult | null {
   const p = state.players.find((q) => q.pid === pid);
   if (!p) return null;
   if (!parseManaSymbols(cost).length) return { picks: [], lifePaid: 0, spent: [] };
   let sources = [...poolSources(p.manaPool), ...manaSources(state, pid, lookup, exclude)];
   if (help && (help.max ?? 1) > 0) sources = helpSources(state, pid, help, lookup, exclude, sources);
-  return solveMana(cost, x, sources, p.life, help?.max ?? Infinity);
+  const life = phyrexian === 'life' ? p.life : p.life - 1;
+  return solveMana(cost, x, sources, life, help?.max ?? Infinity, phyrexian === 'life');
+}
+
+/** Does this cost have Phyrexian symbols ({B/P}, {G/U/P} ...)? */
+export function hasPhyrexian(cost: string): boolean {
+  return parseManaSymbols(cost).some((s) => /P/.test(s) && s.length > 1);
 }
 
 /**
  * Activate the mana abilities a plan picked (mana goes to the pool; the caller then pays from the pool).
- * Permanents tapped to help (Improvise / Convoke / Waterbend) are tapped here: returns how many generic mana they paid,
- * which the caller removes from the cost before paying the rest from the pool (reduceGeneric).
+ * Permanents tapped to help (Improvise / Convoke / Waterbend) are tapped here: returns how many generic mana they paid
+ * (`generic`, which the caller removes from the cost with reduceGeneric) and the colored symbols convoked creatures
+ * paid (`symbols`, removed with removeSymbols) before paying the rest from the pool.
  */
-export function executeAutoPay(state: GameState, ctx: Ctx, pid: string, plan: PayResult, help?: PayHelp): number {
+export function executeAutoPay(state: GameState, ctx: Ctx, pid: string, plan: PayResult, help?: PayHelp): { generic: number; symbols: string[] } {
   let helped = 0;
+  const symbols: string[] = [];
   const names: string[] = [];
   for (const pk of plan.picks) {
     if (pk.pool) continue;
-    if (pk.option === HELP_OPTION) {
+    if (pk.option === HELP_OPTION || pk.option.startsWith(`${HELP_OPTION}:`)) {
       const c = state.cards[pk.key];
       if (!c || c.tapped || c.zone !== 'battlefield') continue;
       c.tapped = true;
       noteTapped(state, c.iid, pid);
-      names.push(cardName(c, ctx.lookup));
-      helped++;
+      if (pk.option === HELP_OPTION) { helped++; names.push(cardName(c, ctx.lookup)); }
+      else { symbols.push(...(pk.paid ?? [])); names.push(`${cardName(c, ctx.lookup)} for {${pk.paid?.join('}{') ?? pk.produces}}`); }
       continue;
     }
     const via = /^via:([^:]+):(.+)$/.exec(pk.option); // a mana ability of another permanent that taps this one (Urza)
     const err = via ? activateMana(state, ctx, pid, { t: 'activateMana', iid: via[1], option: via[2] }) : activateMana(state, ctx, pid, { t: 'activateMana', iid: pk.key, option: pk.option });
     if (err) log(state, ctx, pid, `Auto-pay: ${err}`);
   }
-  if (helped) log(state, ctx, pid, `${player(state, pid).name} taps ${names.join(', ')} (${help?.label ?? 'help'}: pays {${helped}}).`);
-  return helped;
+  if (names.length) log(state, ctx, pid, `${player(state, pid).name} taps ${names.join(', ')} (${help?.label ?? 'help'}: pays ${[...(helped ? [`{${helped}}`] : []), ...symbols.map((s) => `{${s}}`)].join('')}).`);
+  return { generic: helped, symbols };
+}
+
+/** Remove these mana symbols (as parseManaSymbols spells them) from a cost, one occurrence each. */
+export function removeSymbols(mana: string, symbols: string[]): string {
+  if (!symbols.length) return mana;
+  const out = parseManaSymbols(mana);
+  for (const sym of symbols) {
+    let i = out.indexOf(sym);
+    if (i < 0) i = out.findIndex((s) => !/^\d+$|^[XYZ]$/.test(s) && s.replace('/', '').includes(sym.replace(/[^WUBRG]/g, '').charAt(0)));
+    if (i >= 0) out.splice(i, 1);
+  }
+  return out.map((s) => `{${s}}`).join('');
 }
 
 /** Remove up to `n` generic mana from a cost (X counts as generic = x). */
@@ -250,9 +288,12 @@ function hasX(cost: string): boolean {
   return parseManaSymbols(cost).includes('X');
 }
 
-/** Which sources auto-pay will tap for a cast (Arena-style preview). */
-export function autoPayPreview(state: AnyState, pid: string, iid: string, face?: number, costOption?: string, x?: number, lookup: Lookup = getCard):
-  { ok: boolean; taps: { iid: string; mana: string }[]; reason?: string; cost?: string; life?: number } {
+/**
+ * Which sources auto-pay will tap for a cast (Arena-style preview). `phyrexian`: as the cast action's (pay Phyrexian
+ * symbols with mana first, or with life). `phyrexian` in the result: the cost has Phyrexian symbols (a choice to offer).
+ */
+export function autoPayPreview(state: AnyState, pid: string, iid: string, face?: number, costOption?: string, x?: number, lookup: Lookup = getCard, phyrexian?: 'mana' | 'life'):
+  { ok: boolean; taps: { iid: string; mana: string }[]; reason?: string; cost?: string; life?: number; phyrexian?: boolean } {
   const c = visibleCard(state, iid);
   if (!c) return { ok: false, taps: [], reason: 'No such card' };
   const opts = castOptions(asGame(state), iid, face, lookup);
@@ -261,9 +302,10 @@ export function autoPayPreview(state: AnyState, pid: string, iid: string, face?:
   const free = c.zone !== 'hand' ? mayPlayPermission(state as StaticsState, iid, pid, lookup, asGame(state).remembered)?.free : false;
   const delve = opt.extra.some((e) => /^Delve/.test(e));
   const cost = free ? '' : castManaCost(state, pid, c, face, opt.cost, { delve, x: x ?? 0 }, lookup);
-  const plan = planAutoPay(state, pid, cost, x ?? 0, lookup, undefined, castHelp(c, face));
-  if (!plan) return { ok: false, taps: [], reason: 'Not enough mana', cost };
-  return { ok: true, taps: plan.picks.filter((p) => !p.pool).map((p) => ({ iid: p.key, mana: p.produces })), cost, ...(plan.lifePaid ? { life: plan.lifePaid } : {}) };
+  const plan = planAutoPay(state, pid, cost, x ?? 0, lookup, undefined, castHelp(c, face), phyrexian);
+  const phy = hasPhyrexian(cost) ? { phyrexian: true } : {};
+  if (!plan) return { ok: false, taps: [], reason: 'Not enough mana', cost, ...phy };
+  return { ok: true, taps: plan.picks.filter((p) => !p.pool).map((p) => ({ iid: p.key, mana: p.produces })), cost, ...(plan.lifePaid ? { life: plan.lifePaid } : {}), ...phy };
 }
 
 // ------------------------------------------------------------------ casting / activating checks
@@ -318,6 +360,8 @@ export function castability(state: AnyState, pid: string, iid: string, lookup: L
     if (z) { if (o.id === 'normal') reason = z; continue; }
     const pv = autoPayPreview(state, pid, iid, undefined, o.id, hasX(o.cost) ? 0 : undefined, lookup);
     if (pv.ok) return { ok: true };
+    // castable by choosing to pay Phyrexian symbols with life (down to 0)
+    if (pv.phyrexian && autoPayPreview(state, pid, iid, undefined, o.id, hasX(o.cost) ? 0 : undefined, lookup, 'life').ok) return { ok: true };
   }
   return { ok: false, reason };
 }

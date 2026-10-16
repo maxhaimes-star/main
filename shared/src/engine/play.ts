@@ -179,7 +179,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (untap) c.tapped = false;
   if (mana) {
     const wb = waterbendOf(rawCost);
-    const helped = strictPlan ? executeAutoPay(state, ctx, pid, strictPlan, { label: 'waterbend' }) : 0;
+    const helped = strictPlan ? executeAutoPay(state, ctx, pid, strictPlan, { label: 'waterbend' }).generic : 0;
     const adj = adjustCost(state, c, pid, mana, 'Ability', ctx.lookup);
     if (adj.notes.length) { mana = adj.cost; notes.push(`cost ${mana || '{0}'}: ${adj.notes.join(', ')}`); }
     if (helped) mana = reduceGeneric(mana, Math.min(helped, wb), x);

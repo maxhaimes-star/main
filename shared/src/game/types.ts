@@ -249,7 +249,9 @@ type GameActionBody =
    * costOption: id from castOptions() (default normal). kicked: pay kicker. division: DividedAsYouChoose$ damage, target key (iid / pid) -> amount.
    * force: ignore timing and static restrictions (e.g. "can't be cast", sorcery speed).
    */
-  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[]; costOption?: string; kicked?: boolean; force?: boolean; division?: Record<string, number> }
+  /** phyrexian: how to pay Phyrexian mana symbols — 'mana' when possible (default; 2 life only for a missing color while
+   *  above 2 life) or 'life' (2 life each whenever possible). */
+  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[]; costOption?: string; kicked?: boolean; force?: boolean; division?: Record<string, number>; phyrexian?: 'mana' | 'life' }
   /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. force: ignore timing / limits. */
   | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number; force?: boolean; division?: Record<string, number> }
   /** Activate a mana ability: option = id from manaOptionsFor(). */

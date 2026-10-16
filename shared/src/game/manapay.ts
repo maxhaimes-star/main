@@ -11,9 +11,14 @@
  */
 import { parseManaSymbols } from '../cards.ts';
 
-export interface PayOption { id: string; produces: string; penalty: number }
+/** helper: a permanent tapped to pay one colored symbol (Convoke with a creature of that color) — not mana. */
+export interface PayOption { id: string; produces: string; penalty: number; helper?: boolean }
 export interface PaySource { key: string; options: PayOption[]; pool?: boolean }
-export interface PayPick { key: string; option: string; produces: string; pool?: boolean }
+export interface PayPick {
+  key: string; option: string; produces: string; pool?: boolean;
+  /** For a helper option: the cost symbol it paid (e.g. 'G', 'G/W', 'G/P'), as parseManaSymbols spells it. */
+  paid?: string[];
+}
 export interface PayResult {
   /** Sources used (pool units included, with pool: true). */
   picks: PayPick[];
@@ -22,7 +27,7 @@ export interface PayResult {
   spent: string[];
 }
 
-interface Req { accept: string[]; alt?: 'life' | 'generic2' }
+interface Req { accept: string[]; alt?: 'life' | 'generic2'; sym: string }
 
 const COLORS = ['W', 'U', 'B', 'R', 'G', 'C'];
 
@@ -33,14 +38,14 @@ export function parseRequirements(cost: string, x = 0): { reqs: Req[]; generic: 
     if (/^\d+$/.test(s)) generic += parseInt(s, 10);
     else if (s === 'X' || s === 'Y' || s === 'Z') generic += s === 'X' ? x : 0;
     else if (s === 'S') generic += 1;
-    else if (/^[WUBRGC]$/.test(s)) reqs.push({ accept: [s] });
+    else if (/^[WUBRGC]$/.test(s)) reqs.push({ accept: [s], sym: s });
     else if (s.includes('/') || /^[WUBRGCP2]{2,3}$/.test(s)) {
       // "{W/U}", "{B/P}", "{2/W}" — or the slash-less card-data spelling "{WU}", "{BP}", "{2W}"
       const parts = s.includes('/') ? s.split('/') : s.split('');
       const colors = parts.filter((p) => /^[WUBRGC]$/.test(p));
-      if (parts.includes('P')) reqs.push({ accept: colors, alt: 'life' });
-      else if (parts.includes('2')) reqs.push({ accept: colors, alt: 'generic2' });
-      else if (colors.length) reqs.push({ accept: colors });
+      if (parts.includes('P')) reqs.push({ accept: colors, alt: 'life', sym: s });
+      else if (parts.includes('2')) reqs.push({ accept: colors, alt: 'generic2', sym: s });
+      else if (colors.length) reqs.push({ accept: colors, sym: s });
       else return null;
     } else if (s === 'H' || s === 'HW') generic += 0; // half mana (un-cards): ignore
     else return null;
@@ -54,10 +59,13 @@ export function parseRequirements(cost: string, x = 0): { reqs: Req[]; generic: 
 const MAX_NODES = 20000;
 
 /**
- * Find a payment. `maxLife`: life that may be paid for Phyrexian symbols. `maxHelp`: how many "helper" units
- * (produces '*': an artifact / creature tapped for Improvise, Convoke or Waterbend — generic mana only) may be used.
+ * Find a payment. `maxLife`: life that may be paid for Phyrexian symbols (`preferLife`: pay them with life whenever
+ * possible instead of mana first). `maxHelp`: how many "helper" units
+ * (produces '*': an artifact / creature tapped for Improvise, Convoke or Waterbend — generic mana) may be used.
+ * Options flagged `helper` (Convoke: a creature paying one colored symbol of one of its colors) report the symbol they
+ * paid in PayPick.paid.
  */
-export function solveMana(cost: string, x: number, sources: PaySource[], maxLife = Infinity, maxHelp = Infinity): PayResult | null {
+export function solveMana(cost: string, x: number, sources: PaySource[], maxLife = Infinity, maxHelp = Infinity, preferLife = false): PayResult | null {
   const parsed = parseRequirements(cost, x);
   if (!parsed) return null;
   const { reqs, generic } = parsed;
@@ -67,7 +75,7 @@ export function solveMana(cost: string, x: number, sources: PaySource[], maxLife
   const minPen = (s: PaySource) => Math.min(...s.options.map((o) => o.penalty));
   const byKey = new Map(sources.map((s) => [s.key, s]));
   /** Committed sources: key -> chosen option and unspent units. */
-  const used = new Map<string, { option: PayOption; left: string[] }>();
+  const used = new Map<string, { option: PayOption; left: string[]; paid?: string[] }>();
   const spent: string[] = [];
   let nodes = 0;
 
@@ -107,7 +115,7 @@ export function solveMana(cost: string, x: number, sources: PaySource[], maxLife
       left -= k;
       used.set(e.key, { option: e.option, left: units.slice(k) });
     }
-    return [...used.entries()].map(([key, u]) => ({ key, option: u.option.id, produces: u.option.produces, ...(byKey.get(key)?.pool ? { pool: true } : {}) }));
+    return [...used.entries()].map(([key, u]) => ({ key, option: u.option.id, produces: u.option.produces, ...(byKey.get(key)?.pool ? { pool: true } : {}), ...(u.paid ? { paid: [...u.paid] } : {}) }));
   };
 
   const rec = (i: number, life: number, extraGeneric: number): PayResult | null => {
@@ -117,6 +125,8 @@ export function solveMana(cost: string, x: number, sources: PaySource[], maxLife
       return picks ? { picks, lifePaid: life, spent: [...spent] } : null;
     }
     const req = reqs[i];
+    // the player chose to pay Phyrexian symbols with life: try that first
+    if (preferLife && req.alt === 'life' && life + 2 <= maxLife) { const r = rec(i + 1, life + 2, extraGeneric); if (r) return r; }
     // a) a unit left over from a source already used
     const tried = new Set<string>();
     for (const [key, u] of used) {
@@ -148,7 +158,7 @@ export function solveMana(cost: string, x: number, sources: PaySource[], maxLife
       const units = o.produces.split('');
       const idx = units.findIndex((m) => req.accept.includes(m));
       const [m] = units.splice(idx, 1);
-      used.set(s.key, { option: o, left: units });
+      used.set(s.key, { option: o, left: units, ...(o.helper ? { paid: [req.sym] } : {}) });
       spent.push(m);
       const r = rec(i + 1, life, extraGeneric);
       if (r) return r;
@@ -156,7 +166,7 @@ export function solveMana(cost: string, x: number, sources: PaySource[], maxLife
       used.delete(s.key);
     }
     // c) alternatives
-    if (req.alt === 'life' && life + 2 <= maxLife) { const r = rec(i + 1, life + 2, extraGeneric); if (r) return r; }
+    if (req.alt === 'life' && !preferLife && life + 2 <= maxLife) { const r = rec(i + 1, life + 2, extraGeneric); if (r) return r; }
     if (req.alt === 'generic2') { const r = rec(i + 1, life, extraGeneric + 2); if (r) return r; }
     return null;
   };

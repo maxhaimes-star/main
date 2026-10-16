@@ -251,6 +251,8 @@ export interface CastPlan {
   parts: CostPart[];
   kicked: boolean;
   x: number;
+  /** Pay Phyrexian symbols with 2 life each whenever possible (the player's choice; default: mana first). */
+  preferLife?: boolean;
 }
 
 /**
@@ -284,7 +286,7 @@ export function planCast(state: GameState, c: CardInstance, pid: string, a: Cast
   }
   const esc = escalateParts(c, a.modes, name, parseCost); // Escalate (engine/castkw.ts)
   if (esc) { mana += esc.mana; parts = [...parts, ...esc.parts]; }
-  const plan: CastPlan = { def, mana, parts, kicked, x };
+  const plan: CastPlan = { def, mana, parts, kicked, x, ...(a.phyrexian === 'life' ? { preferLife: true } : {}) };
 
   // Engine info (targets). Overload: "target" becomes "each" — every legal object is affected.
   if (def.flags.overloaded && c.cardId) {
@@ -326,7 +328,7 @@ export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, p
   if (plan.def.delve && graveyard > 0 && genericOf(plan.mana, plan.x) > 0) return { note, colors: [], deferred: true };
   if (!plan.mana) return { note, colors: [], deferred: false };
   const before = { ...me.manaPool };
-  const res = payFromPool(plan.mana, me.manaPool, plan.x);
+  const res = payFromPool(plan.mana, me.manaPool, plan.x, !!plan.preferLife);
   if (res) {
     me.manaPool = res.pool;
     if (res.lifePaid) { me.life -= res.lifePaid; note += ` (paid ${res.lifePaid} life)`; }

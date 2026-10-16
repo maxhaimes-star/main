@@ -200,11 +200,12 @@ export function triggeredAbilities(oracle: string): string[] {
 
 /**
  * Try to pay a mana cost from a pool. Returns the new pool, or null if it can't be paid.
- * Phyrexian symbols are paid with colored mana when possible, otherwise 2 life (reported in lifePaid).
+ * Phyrexian symbols are paid with colored mana when possible, otherwise 2 life (reported in lifePaid); `preferLife`:
+ * with life whenever possible (the player's choice).
  * Uses the backtracking solver (game/manapay.ts), so symbol order never makes a payable cost fail.
  */
-export function payFromPool(cost: string, pool: Record<string, number>, x = 0): { pool: Record<string, number>; lifePaid: number } | null {
-  const r = solveMana(cost, x, poolSources(pool));
+export function payFromPool(cost: string, pool: Record<string, number>, x = 0, preferLife = false): { pool: Record<string, number>; lifePaid: number } | null {
+  const r = solveMana(cost, x, poolSources(pool), Infinity, Infinity, preferLife);
   if (!r) return null;
   return { pool: poolAfter(pool, r.picks), lifePaid: r.lifePaid };
 }

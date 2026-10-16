@@ -128,6 +128,22 @@ export function autoPayPreview(g: GameView, pid: string | null, iid: string, fac
   return r ? { ok: r.ok, taps: (r.taps ?? []).map((t) => t.iid), reason: r.reason } : undefined;
 }
 
+/**
+ * Phyrexian mana choice for a cast (strict): how auto-pay would pay with mana first vs. with life. undefined = the
+ * cost has no Phyrexian symbols (or not strict). Each entry: can it be paid that way, and the life it would cost.
+ */
+export function phyrexianChoice(g: GameView, pid: string | null, iid: string, face?: number, costOption?: string, x?: number):
+  { mana: { ok: boolean; life: number }; life: { ok: boolean; life: number } } | undefined {
+  const fn = shared.autoPayPreview;
+  if (!pid || !fn || !isStrict(g)) return undefined;
+  type Pv = { ok: boolean; life?: number; phyrexian?: boolean };
+  const run = (how: 'mana' | 'life') => safe(() => (fn as unknown as (...a: unknown[]) => Pv)(g, pid, iid, face, costOption, x, getCard, how));
+  const m = run('mana');
+  if (!m?.phyrexian) return undefined;
+  const l = run('life');
+  return { mana: { ok: m.ok, life: m.life ?? 0 }, life: { ok: !!l?.ok, life: l?.life ?? 0 } };
+}
+
 /** A creature that cannot attack this turn because of summoning sickness (no haste). */
 export function summoningSickNoHaste(g: GameView, iid: string): boolean {
   const c = g.cards[iid] as never as { summoningSick?: boolean; tempKeywords?: string[] } | undefined;
