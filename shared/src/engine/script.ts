@@ -568,14 +568,17 @@ const DIG_ZONES = new Set(['Hand', 'Library', 'Graveyard', 'Exile', 'Battlefield
  * by-hand "look at the top cards" window instead of asking engine questions. Returns the reason, or null.
  */
 export function peekFallback(step: ParsedAbility): string | null {
+  if (uniqueReason(step) !== undefined) return null; // run by unique.ts (Jace's +2)
   const p = step.params;
   const self = (!p.Defined || p.Defined === 'You') && !p.ValidTgts;
   if (step.api === 'Scry' || step.api === 'Surveil') return self ? null : `peek: ${step.api} (other player)`;
-  if (step.api === 'RearrangeTopOfLibrary') return 'peek: RearrangeTopOfLibrary';
+  // Dig / RearrangeTopOfLibrary: one library (yours, or a target / defined player's), chosen by you or an opponent.
+  const several = p.Defined === 'Player' || (!!p.ValidTgts && parseInt(p.TargetMax ?? '1', 10) !== 1);
+  if (step.api === 'RearrangeTopOfLibrary') return several ? 'peek: RearrangeTopOfLibrary (several players)' : null;
   if (step.api !== 'Dig' || p.ChangeNum === 'All') return null;
-  const bad = ['ValidTgts', 'Choser', 'NoLooking', 'SkipReorder', 'ExileWithCounters', 'DestinationZone3'].find((k) => p[k] != null);
-  if (bad) return `peek: Dig (${bad}$)`;
-  if (!self) return 'peek: Dig (other player)';
+  if (p.DestinationZone3) return 'peek: Dig (DestinationZone3$)';
+  if (p.Choser && p.Choser !== 'Player.Opponent' && p.Choser !== 'Opponent') return `peek: Dig (Choser$ ${p.Choser})`;
+  if (several) return 'peek: Dig (several players)';
   const dest = p.DestinationZone ?? 'Hand', dest2 = p.DestinationZone2 ?? 'Library';
   if (!DIG_ZONES.has(dest) || !DIG_ZONES.has(dest2) || dest2 === 'Battlefield') return 'peek: Dig (zone)';
   return null;

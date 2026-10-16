@@ -308,11 +308,10 @@ describe('engine: cards & libraries', () => {
     act(g, ctx, 'a', { t: 'cast', iid: pd });
     act(g, ctx, 'b', { t: 'pass' });
     const me = P(g, 'a');
-    expect(me.peek?.mode).toBe('look');
-    expect(me.peek?.iids).toHaveLength(3);
+    expect(me.peek).toBeNull(); // the order is asked card by card (no by-hand window)
     expect(me.zones.hand).toHaveLength(hand - 1);
-    const [x, y, z] = me.peek!.iids;
-    act(g, ctx, 'a', { t: 'resolvePeek', top: [z, y, x], bottom: [], graveyard: [], hand: [], battlefield: [], exile: [], shuffle: false });
+    const [, y, z] = me.zones.library.slice(0, 3);
+    for (const v of [z, y, 'no']) { const q = g.pending[0]; expect(q.options.some((o) => o.value === v), q.prompt).toBe(true); act(g, ctx, 'a', { t: 'choose', id: q.id, value: v }); }
     expect(me.zones.hand).toHaveLength(hand);
     expect(me.zones.hand.at(-1)).toBe(z);
   });

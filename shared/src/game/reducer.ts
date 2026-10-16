@@ -19,7 +19,7 @@ import { enforceAttackRequirements, enforceBlockRestrictions, takeExtraCombat } 
 import { noteTapped } from '../engine/manatriggers.ts';
 import {
   answerStrictPending, attackError, blockError, blockersError, castHelp, castManaCost, reduceGeneric, removeSymbols, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
-  isLandCard, landPlayError, planAutoPay, strictActionError, summoningSick,
+  isLandCard, landPlayError, peekDestinationError, planAutoPay, strictActionError, summoningSick,
 } from '../engine/strict.ts';
 import { maxHandSize, mayPlayPermission } from '../engine/statics.ts';
 import { castSpellAbility, spellAbility, targetSpecs } from '../engine/script.ts';
@@ -594,6 +594,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       const all = lists.flat();
       if (!all.every((i) => allowed.has(i))) return 'Those cards are not available';
       if (new Set(all).size !== all.length) return 'A card was chosen twice';
+      const badDest = peekDestinationError(state, me.peek.mode, r);
+      if (badDest) return badDest;
       const mode = me.peek.mode;
       const then = me.peek.then;
       me.peek = null;

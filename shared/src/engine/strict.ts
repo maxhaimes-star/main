@@ -460,6 +460,21 @@ export const MANUAL_ACTIONS = new Set<GameAction['t']>([
 const PRIORITY_ACTIONS = new Set<GameAction['t']>(['cast', 'activate', 'playLand']);
 
 /** Strict-mode gate, before the reducer runs the action. null = go ahead. */
+type PeekResult = Record<'top' | 'bottom' | 'graveyard' | 'hand' | 'battlefield' | 'exile', string[]> & { shuffle?: boolean };
+
+/**
+ * Rules-enforced games: a scry window may only put cards on top or on the bottom, a surveil window on top or into the
+ * graveyard (no shuffling). Other windows are free (fix mode / by-hand looks). null = fine.
+ */
+export function peekDestinationError(state: Pick<GameState, 'strict' | 'fixMode'>, mode: string, r: PeekResult): string | null {
+  if (!state.strict || state.fixMode?.on) return null;
+  const allowed = mode === 'scry' ? ['top', 'bottom'] : mode === 'surveil' ? ['top', 'graveyard'] : null;
+  if (!allowed) return null;
+  const bad = (['top', 'bottom', 'graveyard', 'hand', 'battlefield', 'exile'] as const).find((k) => r[k].length && !allowed.includes(k));
+  if (bad || r.shuffle) return `${mode === 'scry' ? 'Scry' : 'Surveil'} puts cards only on top of your library or ${mode === 'scry' ? 'on the bottom' : 'into your graveyard'}`;
+  return null;
+}
+
 export function strictActionError(state: GameState, pid: string, a: GameAction): string | null {
   if (!state.strict) return null;
   const fix = fixModeOn(state);

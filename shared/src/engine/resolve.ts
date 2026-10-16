@@ -595,7 +595,7 @@ function startPicks(state: GameState, ctx: Ctx, picks: Omit<PickData, 'queue' | 
 
 
 /** Dig with a choice (Narset, Parter of Veils; Once Upon a Time; Stock Up; Thassa's Oracle ...): the rest of the looked-at cards. */
-interface DigRest { top: string[]; dest2: Zone; toTop: boolean; random: boolean; owner: string; source: string }
+interface DigRest { top: string[]; dest2: Zone; toTop: boolean; random: boolean; owner: string; source: string; counter?: string }
 
 /**
  * "Look at the top N, put up to / exactly M (matching ChangeValid$) into <zone>, the rest on the bottom / into the
@@ -603,11 +603,21 @@ interface DigRest { top: string[]; dest2: Zone; toTop: boolean; random: boolean;
  * into a hand that had to match a restriction (or with Reveal$) is revealed to everyone. undefined = not a shape this
  * handles (the peek window does it by hand).
  */
-function digChoose(state: GameState, ctx: Ctx, r: Run, i: number, me: GamePlayer, E: ReturnType<typeof env>): StepResult | undefined {
+function digChoose(state: GameState, ctx: Ctx, r: Run, i: number, _me: GamePlayer, E: ReturnType<typeof env>): StepResult | undefined {
   const p = r.steps[i].params;
-  if (p.ValidTgts || p.Choser || p.NoLooking || p.SkipReorder || p.ExileWithCounters || p.DestinationZone3) return undefined;
+  if (p.DestinationZone3) return undefined;
+  // Whose library: the controller's, a targeted / defined player's (Jace's +2 fateseal).
   const o = objects(state, r, i, 'You');
-  if (!o || o.players.length !== 1 || o.players[0] !== r.controller) return undefined;
+  if (!o || o.players.length !== 1) return undefined;
+  const me = player(state, o.players[0]);
+  // Who chooses: the controller, or an opponent (Karn, Scion of Urza: "An opponent chooses one of them").
+  let chooser = r.controller;
+  if (p.Choser) {
+    if (p.Choser !== 'Player.Opponent' && p.Choser !== 'Opponent') return undefined;
+    const opp = state.players.find((q) => q.pid !== r.controller && !q.conceded);
+    if (!opp) return undefined;
+    chooser = opp.pid;
+  }
   const n = amount(state, ctx, r, p.DigNum, 1);
   const dest = zoneOf(p.DestinationZone ?? 'Hand');
   const dest2 = zoneOf(p.DestinationZone2 ?? 'Library');
@@ -621,24 +631,71 @@ function digChoose(state: GameState, ctx: Ctx, r: Run, i: number, me: GamePlayer
   if (matches.some((x) => x === 'unknown')) return undefined;
   const cands = top.filter((_, k) => matches[k] === true);
   const reveal = p.Reveal === 'True';
+  const whose = me.pid === r.controller ? 'their' : `${me.name}'s`;
   if (reveal && top.length) {
     for (const x of top) state.cards[x].revealedTo = state.players.map((q) => q.pid);
     log(state, ctx, r.controller, `${me.name} reveals ${names(state, ctx, top)} (${r.sourceName}).`);
-  } else log(state, ctx, r.controller, `${me.name} looks at the top ${top.length} card${top.length === 1 ? '' : 's'} of their library (${r.sourceName}).`);
+  } else if (p.NoLooking !== 'True') log(state, ctx, r.controller, `${pname(state, r.controller)} looks at the top ${top.length === 1 ? 'card' : `${top.length} cards`} of ${whose} library (${r.sourceName}).`);
   const rest: DigRest = {
     top, dest2, toTop: dest2 === 'library' && p.LibraryPosition2 != null && parseInt(p.LibraryPosition2, 10) >= 0, random: p.RestRandomOrder === 'True', owner: me.pid, source: r.sourceName,
+    ...(p.ExileWithCounters && dest2 === 'exile' ? { counter: counterKind(p.ExileWithCounters) } : {}),
   };
   const showChosen = dest === 'hand' && p.NoReveal !== 'True' && (reveal || valid !== 'Card' || !!p.ForceRevealToController);
-  const where = dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of your library' : 'on top of your library') : dest === 'battlefield' ? 'onto the battlefield' : `into your ${dest}`;
+  // Forge's Dig puts a chosen card on the bottom of the library unless LibraryPosition$ says otherwise.
+  const params = dest === 'library' ? { ...p, LibraryPosition: p.LibraryPosition ?? '-1' } : p;
+  const yours = me.pid === chooser ? 'your' : `${me.name}'s`;
+  const where = dest === 'library' ? (params.LibraryPosition === '-1' ? `on the bottom of ${yours} library` : `on top of ${yours} library`) : dest === 'battlefield' ? 'onto the battlefield' : `into ${yours} ${dest}`;
   const created = startPicks(state, ctx, [{
-    kind: 'pick', action: 'move', chooser: r.controller, candidates: cands, left: Math.min(m, cands.length), optional: any || p.Optional === 'True',
-    dest, params: p, dig: rest, ...(showChosen ? { revealChosen: true } : {}),
+    kind: 'pick', action: 'move', chooser, candidates: cands, left: Math.min(m, cands.length), optional: any || p.Optional === 'True',
+    dest, params, dig: rest, ...(showChosen ? { revealChosen: true } : {}),
     label: `${r.sourceName}: choose ${p.ChangeValidDesc ? `a ${p.ChangeValidDesc} card` : 'a card'} to put ${where}`,
   }], contAt(r, i + 1));
   if (created) return 'wait';
   if (top.length) log(state, ctx, r.controller, `${r.sourceName}: no ${p.ChangeValidDesc ? `${p.ChangeValidDesc} ` : ''}card to take.`);
   finishDig(state, ctx, rest);
   return 'ok';
+}
+
+/** RearrangeTopOfLibrary (Ponder, Sensei's Divining Top, Mirri's Guile): the order is asked card by card, then "shuffle?". */
+interface RearrangeData { kind: 'rearrange'; chooser: string; owner: string; left: string[]; placed: string[]; mayShuffle: boolean; source: string; cont: AutoCont }
+interface RShuffleData { kind: 'rshuffle'; chooser: string; owner: string; source: string; cont: AutoCont }
+
+function rearrangeStep(state: GameState, ctx: Ctx, r: Run, i: number, me: GamePlayer): StepResult {
+  const p = r.steps[i].params;
+  const n = amount(state, ctx, r, p.NumCards, 1);
+  const o = objects(state, r, i, 'You');
+  if (n == null || !o || o.players.length !== 1) return peekStep(state, ctx, r, i, me);
+  const owner = player(state, o.players[0]);
+  const top = owner.zones.library.slice(0, Math.max(0, n));
+  log(state, ctx, r.controller, `${pname(state, r.controller)} looks at the top ${top.length === 1 ? 'card' : `${top.length} cards`} of ${owner.pid === r.controller ? 'their' : `${owner.name}'s`} library (${r.sourceName}).`);
+  const d: RearrangeData = { kind: 'rearrange', chooser: r.controller, owner: owner.pid, left: top, placed: [], mayShuffle: p.MayShuffle === 'True', source: r.sourceName, cont: contAt(r, i + 1) };
+  return askRearrange(state, ctx, d) ? 'wait' : 'ok';
+}
+
+const ORDINAL = ['top', 'second from the top', 'third from the top', 'fourth from the top', 'fifth from the top'];
+
+/** Ask for the next card of the new order, or put them back (and ask "shuffle?"). true = a question is open. */
+function askRearrange(state: GameState, ctx: Ctx, d: RearrangeData): boolean {
+  const owner = player(state, d.owner);
+  const inLib = (x: string) => state.cards[x]?.zone === 'library' && owner.zones.library.includes(x);
+  const left = d.left.filter(inLib);
+  if (left.length > 1) {
+    state.pending.push({
+      id: randomId(ctx.rng), pid: d.chooser, prompt: `${d.source}: choose the card to put ${ORDINAL[d.placed.length] ?? `#${d.placed.length + 1} from the top`}`,
+      options: left.map((x) => ({ value: x, label: cardName(state.cards[x], ctx.lookup) })), data: { ...d, left } as unknown as Record<string, unknown>,
+    });
+    return true;
+  }
+  const order = [...d.placed.filter(inLib), ...left];
+  owner.zones.library = [...order, ...owner.zones.library.filter((x) => !order.includes(x))];
+  if (order.length) log(state, ctx, d.chooser, `${pname(state, d.chooser)} puts ${order.length === 1 ? 'the card' : `the ${order.length} cards`} back on top of ${d.owner === d.chooser ? 'their' : `${owner.name}'s`} library in the chosen order (${d.source}).`);
+  if (!d.mayShuffle) return false;
+  const q: RShuffleData = { kind: 'rshuffle', chooser: d.chooser, owner: d.owner, source: d.source, cont: d.cont };
+  state.pending.push({
+    id: randomId(ctx.rng), pid: d.chooser, prompt: `${d.source}: shuffle ${d.owner === d.chooser ? 'your' : `${owner.name}'s`} library?`,
+    options: [{ value: 'yes', label: 'Shuffle' }, { value: 'no', label: "Don't shuffle" }], data: q as unknown as Record<string, unknown>,
+  });
+  return true;
 }
 
 /** The looked-at cards that weren't taken: bottom (or top) of the library, or the graveyard. */
@@ -657,8 +714,12 @@ function finishDig(state: GameState, ctx: Ctx, d: DigRest) {
     for (const x of rest) state.cards[x].revealedTo = [];
     log(state, ctx, d.owner, `${owner.name} puts ${rest.length} card${rest.length === 1 ? '' : 's'} on the ${d.toTop ? 'top' : 'bottom'} of their library (${d.source}).`);
   } else {
-    for (const x of rest) moveCard(state, ctx, x, d.dest2);
-    log(state, ctx, d.owner, `${d.source}: ${names(state, ctx, rest)} → ${d.dest2}.`);
+    for (const x of rest) {
+      moveCard(state, ctx, x, d.dest2);
+      const moved = state.cards[x];
+      if (d.counter && moved?.zone === d.dest2) moved.counters[d.counter] = (moved.counters[d.counter] ?? 0) + 1; // Karn: "with a silver counter on it"
+    }
+    log(state, ctx, d.owner, `${d.source}: ${names(state, ctx, rest)} → ${d.dest2}${d.counter ? ` (with a ${d.counter} counter)` : ''}.`);
   }
 }
 
@@ -1374,7 +1435,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       remember(moved);
       return 'ok';
     }
-    case 'Scry': case 'Surveil': case 'RearrangeTopOfLibrary': return peekStep(state, ctx, r, i, me);
+    case 'Scry': case 'Surveil': return peekStep(state, ctx, r, i, me);
+    case 'RearrangeTopOfLibrary': return rearrangeStep(state, ctx, r, i, me);
     case 'GainControl': {
       const o = objects(state, r, i, 'Self');
       const to = p.NewController ? defined(state, r, i, p.NewController)?.players[0] : r.controller;
@@ -1916,8 +1978,22 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (ext !== undefined) return ext;
   const more = answerMorePending(state, ctx, pend, value); // engine/more.ts
   if (more !== undefined) return more;
-  const data = pend.data as unknown as PickData | UnlessData | ColorData | OptCostData | LateData | Unless2Data | DivideData;
+  const data = pend.data as unknown as PickData | UnlessData | ColorData | OptCostData | LateData | Unless2Data | DivideData | RearrangeData | RShuffleData;
   const who = player(state, pid);
+  if (data.kind === 'rearrange') {
+    const d: RearrangeData = { ...data, placed: [...data.placed, value], left: data.left.filter((x) => x !== value) };
+    if (!askRearrange(state, ctx, d)) runFrom(state, ctx, d.cont);
+    return null;
+  }
+  if (data.kind === 'rshuffle') {
+    if (value === 'yes') {
+      const owner = player(state, data.owner);
+      shuffleLibrary(state, owner, ctx.rng);
+      log(state, ctx, pid, `${who.name} shuffles ${data.owner === pid ? 'their' : `${owner.name}'s`} library (${data.source}).`);
+    }
+    runFrom(state, ctx, data.cont);
+    return null;
+  }
   if (data.kind === 'divide') {
     const err = answerDivision(state, ctx, data, value);
     if (err) state.pending.push(pend); // invalid division: ask again
@@ -1986,14 +2062,17 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
         const hidden = (z: Zone) => (z === 'hand' || z === 'library') && !data.revealChosen;
         const moved = state.cards[value];
         if (data.revealChosen && moved) { moved.revealedTo = state.players.map((q) => q.pid); log(state, ctx, pid, `${who.name} reveals ${nm}.`); }
-        log(state, ctx, pid, `${who.name} puts ${hidden(from) && hidden(data.dest ?? 'hand') ? 'a card' : nm} ${data.dest === 'library' ? (p.LibraryPosition === '-1' ? 'on the bottom of their library' : 'on top of their library') : `into ${data.dest === 'battlefield' ? 'play' : `their ${data.dest}`}`}.`);
+        const their = c.owner === pid ? 'their' : `${pname(state, c.owner)}'s`;
+        log(state, ctx, pid, `${who.name} puts ${hidden(from) && hidden(data.dest ?? 'hand') ? 'a card' : nm} ${data.dest === 'library' ? (p.LibraryPosition === '-1' ? `on the bottom of ${their} library` : `on top of ${their} library`) : `into ${data.dest === 'battlefield' ? 'play' : `${their} ${data.dest}`}`}.`);
       }
     }
     left--;
     candidates = candidates.filter((x) => x !== value);
   } else left = 0;
-  if (left > 0 && pickPending(state, ctx, { ...data, left, candidates })) return null;
-  if (data.dig) finishDig(state, ctx, data.dig);
+  // Dig: a chosen card put back into the library (Thassa's Oracle, Expressive Iteration) is not one of "the rest".
+  const dig = data.dig && value !== 'none' ? { ...data.dig, top: data.dig.top.filter((x) => x !== value) } : data.dig;
+  if (left > 0 && pickPending(state, ctx, { ...data, left, candidates, ...(dig ? { dig } : {}) })) return null;
+  if (dig) finishDig(state, ctx, dig);
   if (data.shuffle) {
     const owner = state.players.find((x) => x.pid === data.shuffle);
     const held = (data.toLibrary ?? []).filter((x) => state.cards[x]?.zone === 'library');

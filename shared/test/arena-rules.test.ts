@@ -4,7 +4,7 @@ import { getCard } from '../src/cube.ts';
 import { CUBE } from '../src/cube.ts';
 import {
   abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, handClick, castableFaces, castOptions, createGame, type Ctx, type GameAction, type GameState, getScript, isAutomatable,
-  moveCard, parseStatic, scriptRef, spellAbility, staticGaps, triggerSupport,
+  mayPlayFrom, moveCard, parseStatic, scriptRef, spellAbility, staticGaps, triggerSupport,
 } from '../src/index.ts';
 import { createTokenInstance } from '../src/engine/resolve.ts';
 import { SCRIPTS } from '../src/engine/script.ts';
@@ -91,13 +91,13 @@ const card = (iid: string) => [[{ kind: 'card' as const, iid }]];
 const logTail = (g: GameState, n = 6) => g.log.slice(-n).map((l) => l.text).join('\n');
 
 describe('0: the audit sees look-at-the-top windows', () => {
-  // Fails until item 5 (look-at-top effects as engine questions) lands.
-  it.fails('every cube card with a library look is automatable (no by-hand look window)', () => {
+  it('every cube card with a library look is automatable (no by-hand look window)', () => {
     const bad: string[] = [];
     for (const c of CUBE.cards) {
       (getScript(c.id) ?? []).forEach((_f, face) => {
         const abs = [spellAbility(c.id, face)?.ability, ...activatedAbilitiesOf(c.id, face).map((e) => e.ability)];
         for (const ab of abs) if (ab) for (const u of isAutomatable(ab).unsupported) if (/^peek/.test(u)) bad.push(`${c.name}: ${u}`);
+        (getScript(c.id)?.[face]?.triggers ?? []).forEach((_l, k) => { const t = triggerSupport(c.id, face, k); if (/peek/.test(t.reason ?? '')) bad.push(`${c.name}: trigger ${t.reason}`); });
       });
     }
     expect(bad).toEqual([]);
@@ -267,5 +267,195 @@ describe('3: token abilities', () => {
       if (!f.abilities.length && !f.triggers.length && !f.statics.length) bad.push(`${key}: empty token script`);
     }
     expect(bad).toEqual([]);
+  });
+});
+
+const lib = (g: GameState, pid: string) => g.players.find((p) => p.pid === pid)!.zones.library;
+const pickVal = (iid: string) => (q: Q) => (q.options.some((o) => o.value === iid) ? iid : q.options[0].value);
+const loyalty = (id: string, k: number) => activatedAbilitiesOf(id, 0).filter((e) => e.loyalty != null)[k].index;
+const noManual = (g: GameState) => g.log.filter((l) => /by hand|not automated|manual/i.test(l.text)).map((l) => l.text);
+
+describe('5: look-at-the-top effects are engine questions', () => {
+  it("Jace, the Mind Sculptor +2: look at the top card of target player's library, may put it on the bottom", () => {
+    const { g, ctx } = setup(['jace_the_mind_sculptor'], ['lightning_bolt', 'ponder'], 'basic_island');
+    const jace = put(g, ctx, 'a', 'jace_the_mind_sculptor');
+    const [bolt] = stackLibrary(g, 'b', ['lightning_bolt']);
+    act(g, ctx, 'a', { t: 'activate', iid: jace, text: '', ability: loyalty('jace_the_mind_sculptor', 0), targets: [[{ kind: 'player', pid: 'b' }]] });
+    passUntilQuestion(g, ctx);
+    expect(g.players.every((p) => !p.peek), 'no by-hand look window').toBe(true);
+    const q = g.pending[0];
+    expect(q?.pid, logTail(g)).toBe('a');
+    expect(q.options.map((o) => o.value)).toEqual(['top', 'bottom']);
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: 'bottom' });
+    drain(g, ctx);
+    expect(lib(g, 'b').at(-1)).toBe(bolt);
+    expect(g.cards[jace].counters.loyalty).toBe(5);
+  });
+
+  it('Jace +2 on myself: keeping it leaves it on top', () => {
+    const { g, ctx } = setup(['jace_the_mind_sculptor', 'ponder'], [], 'basic_island');
+    const jace = put(g, ctx, 'a', 'jace_the_mind_sculptor');
+    const [pd] = stackLibrary(g, 'a', ['ponder']);
+    act(g, ctx, 'a', { t: 'activate', iid: jace, text: '', ability: loyalty('jace_the_mind_sculptor', 0), targets: [[{ kind: 'player', pid: 'a' }]] });
+    drain(g, ctx, () => 'top');
+    expect(lib(g, 'a')[0]).toBe(pd);
+  });
+
+  it('Jace 0: draw three, put two back', () => {
+    const { g, ctx } = setup(['jace_the_mind_sculptor'], [], 'basic_island');
+    const jace = put(g, ctx, 'a', 'jace_the_mind_sculptor');
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'activate', iid: jace, text: '', ability: loyalty('jace_the_mind_sculptor', 1) });
+    drain(g, ctx);
+    expect(g.players[0].zones.hand.length, logTail(g)).toBe(hand + 1);
+    expect(noManual(g)).toEqual([]);
+  });
+
+  it('Jace −1: return target creature to its owner\'s hand', () => {
+    const { g, ctx } = setup(['jace_the_mind_sculptor'], ['giver_of_runes'], 'basic_island');
+    const jace = put(g, ctx, 'a', 'jace_the_mind_sculptor');
+    const giver = put(g, ctx, 'b', 'giver_of_runes');
+    act(g, ctx, 'a', { t: 'activate', iid: jace, text: '', ability: loyalty('jace_the_mind_sculptor', 2), targets: card(giver) });
+    drain(g, ctx);
+    expect(g.cards[giver].zone).toBe('hand');
+    expect(noManual(g)).toEqual([]);
+  });
+
+  it('Jace −12: exile target player\'s library, they shuffle their hand into it', () => {
+    const { g, ctx } = setup(['jace_the_mind_sculptor'], [], 'basic_island');
+    const jace = put(g, ctx, 'a', 'jace_the_mind_sculptor');
+    g.cards[jace].counters.loyalty = 12;
+    const hand = g.players[1].zones.hand.length;
+    act(g, ctx, 'a', { t: 'activate', iid: jace, text: '', ability: loyalty('jace_the_mind_sculptor', 3), targets: [[{ kind: 'player', pid: 'b' }]] });
+    drain(g, ctx);
+    expect(g.players[1].zones.hand.length, logTail(g)).toBe(0);
+    expect(lib(g, 'b').length).toBe(hand);
+    expect(noManual(g)).toEqual([]);
+  });
+
+  it('Expressive Iteration: one to hand, one to the bottom, one exiled and playable this turn', () => {
+    const { g, ctx } = setup(['expressive_iteration', 'ponder', 'lightning_bolt', 'giver_of_runes', 'basic_mountain'], [], 'basic_island');
+    put(g, ctx, 'a', 'basic_island'); put(g, ctx, 'a', 'basic_mountain');
+    const ei = toZone(g, ctx, 'a', 'expressive_iteration', 'hand');
+    const [pd, bolt, giver] = stackLibrary(g, 'a', ['ponder', 'lightning_bolt', 'giver_of_runes']);
+    act(g, ctx, 'a', { t: 'cast', iid: ei });
+    passUntilQuestion(g, ctx);
+    expect(g.players.every((p) => !p.peek), 'no by-hand look window').toBe(true);
+    const q1 = g.pending[0];
+    expect(q1.options.map((o) => o.value).sort()).toEqual([pd, bolt, giver].sort());
+    act(g, ctx, 'a', { t: 'choose', id: q1.id, value: bolt }); // hand
+    const q2 = g.pending[0];
+    expect(q2.options.map((o) => o.value).sort(), logTail(g)).toEqual([pd, giver].sort());
+    act(g, ctx, 'a', { t: 'choose', id: q2.id, value: giver }); // bottom
+    drain(g, ctx);
+    expect(g.cards[bolt].zone).toBe('hand');
+    expect(lib(g, 'a').at(-1), logTail(g, 12)).toBe(giver);
+    expect(g.cards[pd].zone, logTail(g)).toBe('exile');
+    expect(mayPlayFrom(g, 'a', pd, getCard)).toBe(true);
+  });
+
+  it('Ponder: put the top three back in a chosen order, may shuffle, then draw', () => {
+    const { g, ctx } = setup(['ponder', 'lightning_bolt', 'giver_of_runes', 'expressive_iteration'], [], 'basic_island');
+    put(g, ctx, 'a', 'basic_island');
+    const pd = toZone(g, ctx, 'a', 'ponder', 'hand');
+    const [a1, a2, a3] = stackLibrary(g, 'a', ['lightning_bolt', 'giver_of_runes', 'expressive_iteration']);
+    act(g, ctx, 'a', { t: 'cast', iid: pd });
+    passUntilQuestion(g, ctx);
+    expect(g.players.every((p) => !p.peek), 'no by-hand look window').toBe(true);
+    let q = g.pending[0];
+    expect(q.options.map((o) => o.value).sort()).toEqual([a1, a2, a3].sort());
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: a3 });
+    q = g.pending[0];
+    expect(q.options.map((o) => o.value).sort()).toEqual([a1, a2].sort());
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: a1 });
+    q = g.pending[0];
+    expect(q.options.map((o) => o.value).sort(), q.prompt).toEqual(['no', 'yes']);
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: 'no' });
+    drain(g, ctx);
+    expect(g.cards[a3].zone, logTail(g)).toBe('hand'); // drawn
+    expect(lib(g, 'a').slice(0, 2)).toEqual([a1, a2]);
+  });
+
+  it("Sensei's Divining Top: {1}: rearrange the top three", () => {
+    const { g, ctx } = setup(['senseis_divining_top', 'lightning_bolt', 'giver_of_runes', 'ponder']);
+    const top = put(g, ctx, 'a', 'senseis_divining_top');
+    put(g, ctx, 'a', 'basic_mountain');
+    const [a1, a2, a3] = stackLibrary(g, 'a', ['lightning_bolt', 'giver_of_runes', 'ponder']);
+    act(g, ctx, 'a', { t: 'activate', iid: top, text: '', ability: activatedAbilitiesOf('senseis_divining_top', 0)[0].index });
+    passUntilQuestion(g, ctx);
+    expect(g.players.every((p) => !p.peek), 'no by-hand look window').toBe(true);
+    answer(g, ctx, pickVal(a2));
+    drain(g, ctx);
+    expect(lib(g, 'a')[0]).toBe(a2);
+    expect(lib(g, 'a').slice(0, 3).sort()).toEqual([a1, a2, a3].sort());
+    expect(g.pending.length).toBe(0);
+  });
+
+  it('Karn, Scion of Urza +1: an opponent chooses; that card to my hand, the other exiled with a silver counter', () => {
+    const { g, ctx } = setup(['karn_scion_of_urza', 'lightning_bolt', 'ponder']);
+    const karn = put(g, ctx, 'a', 'karn_scion_of_urza');
+    const [bolt, pd] = stackLibrary(g, 'a', ['lightning_bolt', 'ponder']);
+    act(g, ctx, 'a', { t: 'activate', iid: karn, text: '', ability: loyalty('karn_scion_of_urza', 0) });
+    passUntilQuestion(g, ctx);
+    expect(g.players.every((p) => !p.peek), 'no by-hand look window').toBe(true);
+    const q = g.pending[0];
+    expect(q?.pid, logTail(g)).toBe('b');
+    act(g, ctx, 'b', { t: 'choose', id: q.id, value: pd });
+    drain(g, ctx);
+    expect(g.cards[pd].zone).toBe('hand');
+    expect(g.cards[bolt].zone).toBe('exile');
+    expect(g.cards[bolt].counters.silver).toBe(1);
+  });
+
+  it("Thassa's Oracle: the chosen card goes on top, the rest on the bottom", () => {
+    const { g, ctx } = setup(['thassas_oracle', 'lightning_bolt', 'ponder', 'jace_the_mind_sculptor'], [], 'basic_island');
+    put(g, ctx, 'a', 'basic_island'); put(g, ctx, 'a', 'basic_island');
+    put(g, ctx, 'a', 'jace_the_mind_sculptor'); // devotion: UU (Jace) + UU (Oracle) = 4
+    const to = toZone(g, ctx, 'a', 'thassas_oracle', 'hand');
+    const top = stackLibrary(g, 'a', ['lightning_bolt', 'ponder']);
+    act(g, ctx, 'a', { t: 'cast', iid: to });
+    drain(g, ctx, pickVal(top[1]));
+    expect(g.players.every((p) => !p.peek)).toBe(true);
+    expect(lib(g, 'a')[0], logTail(g, 14)).toBe(top[1]);
+    expect(lib(g, 'a').slice(-3)).toContain(top[0]);
+  });
+
+  it("Mirri's Guile: at my upkeep, may rearrange the top three", () => {
+    const { g, ctx } = setup(['mirris_guile', 'lightning_bolt', 'giver_of_runes', 'ponder']);
+    put(g, ctx, 'a', 'mirris_guile');
+    const [, a2] = stackLibrary(g, 'a', ['lightning_bolt', 'giver_of_runes', 'ponder']);
+    let asked = 0;
+    for (let k = 0; k < 300 && !(g.turn >= 3 && !['untap', 'upkeep'].includes(g.step)); k++) {
+      if (g.players.some((p) => p.peek)) throw new Error('by-hand look window');
+      const q = g.pending[0];
+      if (q) { if (/Mirri/.test(q.prompt)) asked++; act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options.find((o) => o.value === a2 || /^(yes|true)$/i.test(o.value))?.value ?? q.options[0].value }); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(asked, logTail(g, 12)).toBeGreaterThanOrEqual(2);
+    expect(g.cards[a2].zone, logTail(g, 12)).toBe('hand'); // put on top at upkeep, then drawn
+  });
+
+  it('scry / surveil destinations are checked on the server', () => {
+    const { g, ctx } = setup(['opt', 'consider'], [], 'basic_island');
+    put(g, ctx, 'a', 'basic_island'); put(g, ctx, 'a', 'basic_island');
+    const opt = toZone(g, ctx, 'a', 'opt', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: opt });
+    passUntilQuestion(g, ctx);
+    const pk = g.players[0].peek!;
+    expect(pk.mode).toBe('scry');
+    const none = { top: [], bottom: [], graveyard: [], hand: [], battlefield: [], exile: [], shuffle: false };
+    expect(applyAction(g, 'a', { t: 'resolvePeek', ...none, graveyard: [pk.iids[0]] }, ctx)).toMatch(/scry/i);
+    expect(applyAction(g, 'a', { t: 'resolvePeek', ...none, hand: [pk.iids[0]] }, ctx)).toMatch(/scry/i);
+    expect(applyAction(g, 'a', { t: 'resolvePeek', ...none, shuffle: true }, ctx)).toMatch(/scry/i);
+    act(g, ctx, 'a', { t: 'resolvePeek', ...none, bottom: [pk.iids[0]] });
+    drain(g, ctx);
+    const con = toZone(g, ctx, 'a', 'consider', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: con });
+    passUntilQuestion(g, ctx);
+    const pk2 = g.players[0].peek!;
+    expect(pk2.mode).toBe('surveil');
+    expect(applyAction(g, 'a', { t: 'resolvePeek', ...none, bottom: [pk2.iids[0]] }, ctx)).toMatch(/surveil/i);
+    act(g, ctx, 'a', { t: 'resolvePeek', ...none, graveyard: [pk2.iids[0]] });
+    expect(g.cards[pk2.iids[0]].zone).toBe('graveyard');
   });
 });
