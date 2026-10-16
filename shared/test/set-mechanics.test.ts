@@ -21,7 +21,18 @@ const land: CardData = {
   ...base, id: 'test_behold_land', name: 'Test Behold Land', manaCost: '', cmc: 0, colors: [], typeLine: 'Land', types: ['Land'], producedMana: ['G'],
   oracle: 'As this land enters, you may behold an Elf. If you don\'t, this land enters tapped.\n{T}: Add {G}.',
 } as unknown as CardData;
-registerCards([...defs.map((d) => d[0]), land]);
+const heroic: CardData = {
+  ...base, id: 'test_heroic', name: 'Test Heroic', manaCost: '{W}', colors: ['W'], typeLine: 'Creature — Human', types: ['Creature'], power: '2', toughness: '4',
+  oracle: 'Whenever you cast a spell that targets a creature you control, put a +1/+1 counter on this creature.',
+} as unknown as CardData;
+registerCards([...defs.map((d) => d[0]), land, heroic]);
+registerScripts({
+  test_heroic: [{
+    name: 'Test Heroic', abilities: [], statics: [], replacements: [], keywords: [],
+    triggers: ['Mode$ SpellCast | ValidCard$ Card | Execute$ TrigPutCounter | ValidActivatingPlayer$ You | TriggerZones$ Battlefield | TargetsValid$ Creature.inZoneBattlefield+YouCtrl | TriggerDescription$ Whenever you cast a spell that targets a creature you control, put a +1/+1 counter on CARDNAME.'],
+    svars: { TrigPutCounter: 'DB$ PutCounter | Defined$ Self | CounterType$ P1P1 | CounterNum$ 1' },
+  }],
+} as never);
 registerScripts(Object.assign({}, ...defs.map((d) => d[1]), {
   test_behold_land: [{
     name: 'Test Behold Land', abilities: ['AB$ Mana | Cost$ T | Produced$ G | SpellDescription$ Add {G}.'], triggers: [], statics: [], keywords: [],
@@ -149,5 +160,21 @@ describe('Behold (enters tapped unless you behold)', () => {
     expect(g.cards[l2].tapped).toBe(false);
     expect(logText(g)).toMatch(/beholds Llanowar Elves/);
     expect(logText(g)).not.toMatch(/by hand/);
+  });
+});
+
+describe('SpellCast triggers with TargetsValid', () => {
+  it('trigger only for a spell targeting a creature you control', () => {
+    const { g, ctx } = setup(['test_heroic', 'lightning_bolt', 'lightning_bolt']);
+    const h = put(g, ctx, 'test_heroic');
+    g.players[0].manaPool.R = 2;
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[h].counters['+1/+1'] ?? 0).toBe(0);
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'card', iid: h }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[h].counters['+1/+1']).toBe(1);
+    expect(g.cards[h].damage).toBe(3);
+    expect(logText(g)).not.toMatch(/Check by hand/);
   });
 });

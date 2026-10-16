@@ -51,6 +51,7 @@ const KNOWN_PARAMS = new Set([
   'PresentCompare', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
   'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA', 'CheckDefinedPlayer', 'FirstAttack', 'Delirium', 'ResolvedLimit',
   'ValidDefenders', 'ValidAttackingPlayer', 'ValidToken', 'CounterType', 'SearchOwnLibrary', 'ThisDoor', 'ValidAttacker', 'ValidBlocker',
+  'TargetsValid',
 ]);
 
 const PROWESS_LINE = 'DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Prowess: +1/+1 until end of turn.';
@@ -294,6 +295,29 @@ function matchC(c: CardInstance | undefined, valid: string | undefined, env: Mat
   return matchCard(c, valid, env);
 }
 
+/**
+ * TargetsValid$ (heroic, "Repartee", "whenever you cast a spell that targets ..."): does the spell just cast target
+ * something matching? Player alternatives (You / Opponent / Player) are checked against player targets, the others
+ * against card targets. The spell's chosen targets are on its stack item.
+ */
+function spellTargets(state: GameState, iid: string, valid: string, env: MatchEnv): Tri {
+  const item = state.stack.find((s) => s.iid === iid);
+  if (!item) return 'unknown';
+  const targets = item.auto?.targets.flat() ?? [];
+  const alts = valid.split(',').map((x) => x.trim());
+  const playerAlts = alts.filter((a) => /^(You|Player|Opponent)\b/.test(a)).join(',');
+  const cardAlts = alts.filter((a) => !/^(You|Player|Opponent)\b/.test(a)).join(',');
+  let r: Tri = false;
+  for (const t of targets) {
+    let m: Tri = false;
+    if (t.kind === 'player') m = playerAlts ? matchPlayer(t.pid, playerAlts, env) : false;
+    else if (t.kind === 'card') m = cardAlts ? matchC(state.cards[t.iid], cardAlts, env) : false;
+    if (m === true) return true;
+    if (m === 'unknown') r = 'unknown';
+  }
+  return r;
+}
+
 function isPlayerId(state: GameState, id: string): boolean {
   return state.players.some((p) => p.pid === id);
 }
@@ -376,6 +400,7 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (ev.t !== 'cast') return null;
       r = and(matchC(state.cards[ev.iid], p.ValidCard ?? 'Card', env), matchP(ev.pid, p.ValidActivatingPlayer, env));
       if (p.ActivatorThisTurnCast) r = and(r, cmp(ev.nth, p.ActivatorThisTurnCast, () => undefined));
+      if (p.TargetsValid && r !== false) r = and(r, spellTargets(state, ev.iid, p.TargetsValid, env));
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: ev.pid };
     }
