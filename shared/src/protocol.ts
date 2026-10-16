@@ -20,6 +20,8 @@ export type ClientMsg =
   | { t: 'rename'; name: string }
   | { t: 'start' }
   | { t: 'pick'; cardId: string }
+  /** During the draft: which of my picks are in the main deck (a sub-multiset of my picks; the rest is sideboard). */
+  | { t: 'draftMain'; main: string[] }
   | { t: 'nominate'; cardId: string; amount?: number }
   | { t: 'skipLot'; cardId: string }
   | { t: 'passLot' }
@@ -42,6 +44,8 @@ export interface DraftView {
   pack: string[] | null;
   queued: number;
   picks: string[];
+  /** The picks currently in the main deck (a sub-multiset of `picks`). */
+  main: string[];
   pickNumber: number;
   deadline: number | null;
   /** Number of packs waiting per seat (for the "waiting on" display). */

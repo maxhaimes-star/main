@@ -100,6 +100,8 @@ export interface DraftState {
   deadlines: (number | null)[];
   /** Picks per seat in order. */
   picks: string[][];
+  /** Per seat: the picks the player has moved into their main deck (the rest are sideboard). Carried into deckbuilding. */
+  main?: string[][];
   /** Packs not yet opened, per round per seat. */
   unopened: string[][][];
   pickNumber: number[];

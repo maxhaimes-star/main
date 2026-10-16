@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import {
   type ClientMsg, type DraftView, type Match, type MatchView, type Player, type RoomState, type RoomView,
-  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, emptyDeck,
+  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, setDraftMain, emptyDeck,
   finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, placeBid, skipCard, seatedPlayers, startAuction, startDraft,
   startSealed, viewFor, type Color, type RoomSettings, type Deck, startDraftWithPacks, startSealedWithPools,
   CONSTRUCTED_FORMATS, type CardPayload,
@@ -135,6 +135,10 @@ export class Rooms {
         const err = draftPick(s, me.seat, msg.cardId, now);
         if (!err) this.afterPools(s);
         return err;
+      }
+      case 'draftMain': {
+        if (!me || s.phase !== 'drafting') return 'Not drafting';
+        return setDraftMain(s, me.seat, msg.main);
       }
       case 'nominate': {
         if (!me || s.phase !== 'auction') return 'No auction';
@@ -396,7 +400,7 @@ export class Rooms {
       const d = s.draft;
       draft = {
         round: d.round, rounds: s.settings.packs, pack: d.queues[me.seat][0] ?? null, queued: Math.max(0, d.queues[me.seat].length - 1),
-        picks: d.picks[me.seat], pickNumber: d.pickNumber[me.seat], deadline: d.deadlines[me.seat],
+        picks: d.picks[me.seat], main: d.main?.[me.seat] ?? [], pickNumber: d.pickNumber[me.seat], deadline: d.deadlines[me.seat],
         waiting: d.queues.map((q) => q.length), direction: passDirection(d.round),
       };
     }

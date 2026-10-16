@@ -84,6 +84,7 @@ export function startDraftWithPacks(room: RoomState, unopened: string[][][], now
     queues: Array.from({ length: n }, () => []),
     deadlines: Array(n).fill(null),
     picks: Array.from({ length: n }, () => []),
+    main: Array.from({ length: n }, () => []),
     unopened,
     pickNumber: Array(n).fill(0),
     done: false,
@@ -143,9 +144,21 @@ export function draftPick(room: RoomState, seat: number, cardId: string, now: nu
       openRound(room, now);
     } else {
       d.done = true;
-      finishPools(room, (seatIdx) => d.picks[seatIdx]);
+      finishPools(room, (seatIdx) => d.picks[seatIdx], (seatIdx) => d.main?.[seatIdx] ?? []);
     }
   }
+  return null;
+}
+
+/** The player in `seat` chooses which of their picks form the main deck; the rest is sideboard. */
+export function setDraftMain(room: RoomState, seat: number, main: string[]): string | null {
+  const d = room.draft;
+  if (!d || d.done) return 'No draft in progress';
+  const picks = d.picks[seat];
+  if (!picks) return 'No such seat';
+  if (!Array.isArray(main) || main.some((x) => typeof x !== 'string')) return 'Invalid deck';
+  if (multisetDiff(picks, main).length !== picks.length - main.length) return 'Those cards are not in your picks';
+  (d.main ??= d.picks.map(() => []))[seat] = main.slice();
   return null;
 }
 
@@ -244,13 +257,18 @@ export function startSealedWithPools(room: RoomState, pools: string[][]) {
   finishPools(room, (seat) => pools[seat] ?? []);
 }
 
-function finishPools(room: RoomState, poolForSeat: (seat: number) => string[]) {
+function finishPools(room: RoomState, poolForSeat: (seat: number) => string[], mainForSeat?: (seat: number) => string[]) {
   const players = seatedPlayers(room);
   room.pools = {};
   room.decks = {};
   players.forEach((p, seat) => {
     room.pools[p.id] = poolForSeat(seat).slice();
-    room.decks[p.id] = { ...emptyDeck(), side: room.pools[p.id].slice() };
+    const pool = room.pools[p.id];
+    const main = mainForSeat ? mainForSeat(seat) : [];
+    const leftover = multisetDiff(pool, main);
+    // Only honour a main-deck split that really is a subset of the pool.
+    const ok = leftover.length === pool.length - main.length;
+    room.decks[p.id] = { ...emptyDeck(), main: ok ? main.slice() : [], side: ok ? leftover : pool.slice() };
   });
   room.phase = 'deckbuilding';
 }

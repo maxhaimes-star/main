@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BUCKET_ORDER, type CardData, colorBucket } from '@ojb/shared';
+import { BUCKET_ORDER, type CardData, colorBucket, multisetDiff } from '@ojb/shared';
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
 import { useTick } from './net.ts';
@@ -60,6 +60,8 @@ export function Draft({ view, send, skew }: RoomProps) {
   const d = view.draft!;
   const [sel, setSel] = useState<string | null>(null);
   const pick = (id: string) => { send({ t: 'pick', cardId: id }); setSel(null); };
+  const setMain = (main: string[]) => send({ t: 'draftMain', main });
+  const sideboard = multisetDiff(d.picks, d.main);
   const players = view.players;
   const mySeat = players.find((p) => p.id === view.me)?.seat ?? 0;
   const packTotal = view.settings.pickTimer && d.pack ? Math.max(8, Math.round(view.settings.pickTimer * d.pack.length / view.settings.packSize)) * 1000 : undefined;
@@ -95,8 +97,16 @@ export function Draft({ view, send, skew }: RoomProps) {
           <div className="center-msg">Waiting for the next pack… {players.filter((p) => d.waiting[p.seat] > 0).map((p) => p.name).join(', ') && `(still picking: ${players.filter((p) => d.waiting[p.seat] > 0).map((p) => p.name).join(', ')})`}</div>
         )}
         <div className="picks">
-          <div className="picks-head"><h3>Your picks ({d.picks.length})</h3><Curve cards={d.picks.map((id) => getCard(id)!).filter(Boolean)} /></div>
-          <PoolSummary ids={d.picks} />
+          <div className="picks-head"><h3>Your picks ({d.picks.length})</h3><Curve cards={(d.main.length ? d.main : d.picks).map((id) => getCard(id)!).filter(Boolean)} /></div>
+          <p className="muted"><span className="hide-touch">Click a pick to move it between your main deck and sideboard — the split carries into deckbuilding.</span><span className="show-touch">Tap a pick, then move it between main deck and sideboard.</span></p>
+          <div className="picks-main">
+            <PoolSummary ids={d.main} title="Main deck" tapLabel="Move to sideboard"
+              onClick={(id) => setMain(multisetDiff(d.main, [id]))} />
+          </div>
+          <div className="picks-side">
+            <PoolSummary ids={sideboard} title="Sideboard" tapLabel="Move to main deck"
+              onClick={(id) => setMain([...d.main, id])} />
+          </div>
         </div>
       </div>
       <div className="side"><PreviewPanel /></div>
