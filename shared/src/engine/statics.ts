@@ -93,14 +93,6 @@ interface Computed {
 
 // ------------------------------------------------------------------ token statics
 
-/** Token scripts don't carry S: lines in scripts.json; the few that matter, keyed by token oracle text. */
-const TOKEN_STATICS: Record<string, { statics: string[]; svars: Record<string, string> }> = {
-  'This creature gets +1/+1 for each artifact you control.': {
-    statics: ['Mode$ Continuous | Affected$ Card.Self | AddPower$ X | AddToughness$ X | Description$ This creature gets +1/+1 for each artifact you control.'],
-    svars: { X: 'Count$Valid Artifact.YouCtrl' },
-  },
-};
-
 // ------------------------------------------------------------------ helpers
 
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -168,13 +160,9 @@ function staticsOfCard(c: CardInstance, lookup: Lookup): StaticAbility[] {
   if (c.faceDown) return [];
   let lines: string[] = [], svars: Record<string, string> = {}, name = '';
   const ref = scriptRef(c); // copies use the copied card's script (engine/copy.ts)
-  const tok = c.zone === 'battlefield' && c.copyToken ? c.copyToken : c.token && !c.cardId ? c.token : undefined;
-  if (ref) {
+  if (ref) { // tokens: their predefined abilities (script.ts TOKEN_ABILITIES)
     const face = getScript(ref.cardId)?.[ref.face];
     if (face) { lines = face.statics; svars = face.svars; name = face.name; }
-  } else if (tok && !c.animations?.some((a) => a.removeAllAbilities)) {
-    const t = TOKEN_STATICS[tok.oracle.trim()];
-    if (t) { lines = t.statics; svars = t.svars; name = tok.name; }
   }
   void lookup;
   const make = (line: string, sv: Record<string, string>, nm: string): StaticAbility => {

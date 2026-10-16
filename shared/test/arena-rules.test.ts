@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import { CUBE } from '../src/cube.ts';
 import {
-  activatedAbilitiesOf, applyAction, castableFaces, castOptions, createGame, type Ctx, type GameAction, type GameState, getScript, isAutomatable, moveCard, spellAbility,
+  abilitiesOfInstance, activatedAbilitiesOf, applyAction, castableFaces, castOptions, createGame, type Ctx, type GameAction, type GameState, getScript, isAutomatable,
+  moveCard, parseStatic, scriptRef, spellAbility, staticGaps, triggerSupport,
 } from '../src/index.ts';
+import { createTokenInstance } from '../src/engine/resolve.ts';
+import { SCRIPTS } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
 
 const deck = (extra: string[], fill = 'basic_mountain') => [...extra, ...Array(40 - extra.length).fill(fill)];
@@ -124,5 +127,98 @@ describe('2: the back face of a transforming card cannot be cast', () => {
     for (let k = 0; k < 2; k++) put(g, ctx, 'a', 'basic_island');
     const bb = toZone(g, ctx, 'a', 'brazen_borrower', 'hand');
     expect(castOptions(g, bb, 1).some((o) => o.id === 'normal' && !o.unavailable)).toBe(true);
+  });
+});
+
+const tok = (g: GameState, ctx: Ctx, pid: string, key: string) => createTokenInstance(g, ctx, pid, SCRIPTS.tokens[key], false).iid;
+const tokensNamed = (g: GameState, name: string) => g.battlefield.filter((i) => g.cards[i].token?.name === name);
+
+function attackWith(g: GameState, ctx: Ctx, iids: string[]) {
+  act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+  for (const iid of iids) act(g, ctx, 'a', { t: 'declareAttacker', iid, target: 'b' });
+  act(g, ctx, 'a', { t: 'confirmAttackers' });
+}
+
+describe('3: token abilities', () => {
+  it('Fable chapter I Goblin Shaman: attacking creates a Treasure', () => {
+    const { g, ctx } = setup(['fable_of_the_mirror_breaker']);
+    for (let k = 0; k < 3; k++) put(g, ctx, 'a', 'basic_mountain');
+    const fable = toZone(g, ctx, 'a', 'fable_of_the_mirror_breaker', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: fable });
+    drain(g, ctx);
+    const [shaman] = tokensNamed(g, 'Goblin Shaman');
+    expect(shaman, logTail(g)).toBeTruthy();
+    g.cards[shaman].summoningSick = false;
+    attackWith(g, ctx, [shaman]);
+    drain(g, ctx);
+    expect(tokensNamed(g, 'Treasure').length, logTail(g)).toBe(1);
+  });
+
+  it('Moloid: attacking may mill a card', () => {
+    const { g, ctx } = setup();
+    const m = tok(g, ctx, 'a', 'moloid');
+    g.cards[m].summoningSick = false;
+    const top = g.players[0].zones.library[0];
+    attackWith(g, ctx, [m]);
+    drain(g, ctx, (q) => (q.options.find((o) => /yes/i.test(o.label + o.value)) ?? q.options[0]).value);
+    expect(g.cards[top].zone, logTail(g)).toBe('graveyard');
+  });
+
+  it('Pest: dying gains 1 life', () => {
+    const { g, ctx } = setup(['lightning_bolt']);
+    const pest = tok(g, ctx, 'a', 'bg_1_1_pest_lifegain');
+    put(g, ctx, 'a', 'basic_mountain');
+    const bolt = toZone(g, ctx, 'a', 'lightning_bolt', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: card(pest) });
+    drain(g, ctx);
+    expect(g.players[0].life, logTail(g)).toBe(21);
+  });
+
+  it('Map: {1}, {T}, sacrifice: target creature you control explores, only as a sorcery', () => {
+    const { g, ctx } = setup(['giver_of_runes'], [], 'basic_forest');
+    const bears = put(g, ctx, 'a', 'giver_of_runes');
+    put(g, ctx, 'a', 'basic_forest');
+    const map = tok(g, ctx, 'a', 'c_a_map_sac_explore');
+    const ab = abilitiesOfInstance(g.cards[map], g, getCard);
+    expect(ab.length).toBe(1);
+    const [land] = stackLibrary(g, 'a', ['basic_forest']);
+    act(g, ctx, 'a', { t: 'activate', iid: map, text: '', ability: ab[0].index, targets: card(bears) });
+    drain(g, ctx);
+    expect(g.cards[map]).toBeUndefined();
+    expect(g.cards[land].zone, logTail(g)).toBe('hand');
+    // at instant speed: refused
+    const map2 = tok(g, ctx, 'a', 'c_a_map_sac_explore');
+    g.cards[g.battlefield.find((i) => g.cards[i].cardId === 'basic_forest')!].tapped = false;
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'beginCombat' });
+    expect(applyAction(g, 'a', { t: 'activate', iid: map2, text: '', ability: ab[0].index, targets: card(bears) }, ctx)).toMatch(/sorcery/);
+  });
+
+  it('Mutagen: {1}, {T}, sacrifice: +1/+1 counter on target creature, only as a sorcery', () => {
+    const { g, ctx } = setup(['giver_of_runes'], [], 'basic_forest');
+    const bears = put(g, ctx, 'a', 'giver_of_runes');
+    put(g, ctx, 'a', 'basic_forest');
+    const mut = tok(g, ctx, 'a', 'c_a_mutagen_sac');
+    const ab = abilitiesOfInstance(g.cards[mut], g, getCard);
+    expect(ab.length).toBe(1);
+    act(g, ctx, 'a', { t: 'activate', iid: mut, text: '', ability: ab[0].index, targets: card(bears) });
+    drain(g, ctx);
+    expect(g.cards[bears].counters['+1/+1'], logTail(g)).toBe(1);
+  });
+
+  it('every token with rules text beyond keywords has its abilities', () => {
+    const bad: string[] = [];
+    for (const [key, t] of Object.entries(SCRIPTS.tokens)) {
+      const lines = (t.oracle ?? '').replace(/\([^)]*\)/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+      const kws = new Set((t.keywords ?? []).map((k) => k.toLowerCase()));
+      if (lines.every((l) => l.split(/,\s*/).every((w) => kws.has(w.toLowerCase())))) continue;
+      const ref = scriptRef({ transformed: false, token: t });
+      const f = ref ? getScript(ref.cardId)?.[ref.face] : undefined;
+      if (!ref || !f) { bad.push(`${key}: no token script (${t.oracle})`); continue; }
+      for (const e of activatedAbilitiesOf(ref.cardId, ref.face)) for (const u of isAutomatable(e.ability).unsupported) bad.push(`${key}: ${u}`);
+      f.triggers.forEach((_l, i) => { const s = triggerSupport(ref.cardId, ref.face, i); if (!(s.detect && s.chain)) bad.push(`${key}: trigger ${s.reason}`); });
+      for (const line of f.statics) for (const gap of staticGaps(parseStatic(line, f.svars))) bad.push(`${key}: static ${gap}`);
+      if (!f.abilities.length && !f.triggers.length && !f.statics.length) bad.push(`${key}: empty token script`);
+    }
+    expect(bad).toEqual([]);
   });
 });

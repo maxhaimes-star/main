@@ -30,17 +30,47 @@ export function getScript(cardId: string): ForgeFace[] | undefined {
 // ------------------------------------------------------------------ token abilities
 
 /**
- * Token scripts in scripts.json carry no A: lines; the activated abilities of the predefined tokens (Treasure, Food,
- * Clue, Blood, Map, Mutagen, Eldrazi Spawn) live here, keyed by the token's oracle text. A token with one of these uses
- * the virtual script "token#<key>" (scriptRef), so its abilities work like a card's (mana.ts for mana abilities).
+ * Token scripts in scripts.json carry no A:/T:/S: lines; the abilities of the tokens the cube makes (Treasure, Food,
+ * Clue, Blood, Map, Mutagen, Eldrazi Spawn, Goblin Shaman, Moloid, Pest, Construct) live here, keyed by the token's
+ * oracle text. A token with one of these uses the virtual script "token#<key>" (scriptRef), so its activated
+ * abilities, triggers and statics work like a card's (mana.ts for mana abilities).
  */
 export const TOKEN_PREFIX = 'token#';
-const TOKEN_ABILITIES: Record<string, { key: string; name: string; abilities: string[] }> = {
+interface TokenAbilities { key: string; name: string; abilities?: string[]; triggers?: string[]; statics?: string[]; svars?: Record<string, string> }
+const TOKEN_ABILITIES: Record<string, TokenAbilities> = {
   '{T}, Sacrifice this token: Add one mana of any color.': { key: 'treasure', name: 'Treasure', abilities: ['AB$ Mana | Cost$ T Sac<1/CARDNAME> | Produced$ Any | SpellDescription$ Add one mana of any color.'] },
   'Sacrifice this creature: Add {C}.': { key: 'spawn', name: 'Eldrazi Spawn', abilities: ['AB$ Mana | Cost$ Sac<1/CARDNAME> | Produced$ C | SpellDescription$ Add {C}.'] },
   '{2}, {T}, Sacrifice this token: You gain 3 life.': { key: 'food', name: 'Food', abilities: ['AB$ GainLife | Cost$ 2 T Sac<1/CARDNAME> | Defined$ You | LifeAmount$ 3 | SpellDescription$ You gain 3 life.'] },
   '{2}, Sacrifice this token: Draw a card.': { key: 'clue', name: 'Clue', abilities: ['AB$ Draw | Cost$ 2 Sac<1/CARDNAME> | NumCards$ 1 | SpellDescription$ Draw a card.'] },
   '{1}, {T}, Discard a card, Sacrifice this token: Draw a card.': { key: 'blood', name: 'Blood', abilities: ['AB$ Draw | Cost$ 1 T Discard<1/Card> Sac<1/CARDNAME> | NumCards$ 1 | SpellDescription$ Draw a card.'] },
+  "{1}, {T}, Sacrifice this token: Target creature you control explores. Activate only as a sorcery. (Reveal the top card of your library. Put that card into your hand if it's a land. Otherwise, put a +1/+1 counter on that creature, then put the card back or put it into your graveyard.)": {
+    key: 'map', name: 'Map',
+    abilities: ['AB$ Explore | Cost$ 1 T Sac<1/CARDNAME> | ValidTgts$ Creature.YouCtrl | TgtPrompt$ Select target creature you control | Defined$ Targeted | SorcerySpeed$ True | SpellDescription$ Target creature you control explores. Activate only as a sorcery.'],
+  },
+  '{1}, {T}, Sacrifice this token: Put a +1/+1 counter on target creature. Activate only as a sorcery.': {
+    key: 'mutagen', name: 'Mutagen',
+    abilities: ['AB$ PutCounter | Cost$ 1 T Sac<1/CARDNAME> | ValidTgts$ Creature | TgtPrompt$ Select target creature | CounterType$ P1P1 | CounterNum$ 1 | SorcerySpeed$ True | SpellDescription$ Put a +1/+1 counter on target creature. Activate only as a sorcery.'],
+  },
+  'Whenever this creature attacks, create a Treasure token.': {
+    key: 'goblin_shaman', name: 'Goblin Shaman',
+    triggers: ['Mode$ Attacks | ValidCard$ Card.Self | Execute$ TrigToken | TriggerDescription$ Whenever CARDNAME attacks, create a Treasure token.'],
+    svars: { TrigToken: 'DB$ Token | TokenAmount$ 1 | TokenScript$ c_a_treasure_sac | TokenOwner$ You | SpellDescription$ Create a Treasure token.' },
+  },
+  'Whenever this token attacks, you may mill a card.': {
+    key: 'moloid', name: 'Moloid',
+    triggers: ['Mode$ Attacks | ValidCard$ Card.Self | OptionalDecider$ You | Execute$ TrigMill | TriggerDescription$ Whenever CARDNAME attacks, you may mill a card.'],
+    svars: { TrigMill: 'DB$ Mill | Defined$ You | NumCards$ 1 | SpellDescription$ Mill a card.' },
+  },
+  'When this token dies, you gain 1 life.': {
+    key: 'pest', name: 'Pest',
+    triggers: ['Mode$ ChangesZone | Origin$ Battlefield | Destination$ Graveyard | ValidCard$ Card.Self | Execute$ TrigGainLife | TriggerDescription$ When CARDNAME dies, you gain 1 life.'],
+    svars: { TrigGainLife: 'DB$ GainLife | Defined$ You | LifeAmount$ 1 | SpellDescription$ You gain 1 life.' },
+  },
+  'This creature gets +1/+1 for each artifact you control.': {
+    key: 'construct', name: 'Construct',
+    statics: ['Mode$ Continuous | Affected$ Card.Self | AddPower$ X | AddToughness$ X | Description$ This creature gets +1/+1 for each artifact you control.'],
+    svars: { X: 'Count$Valid Artifact.YouCtrl' },
+  },
 };
 const TOKEN_BY_KEY = new Map(Object.values(TOKEN_ABILITIES).map((t) => [t.key, t]));
 const tokenCache = new Map<string, ForgeFace[]>();
@@ -50,7 +80,7 @@ function tokenScript(key: string): ForgeFace[] | undefined {
   if (!t) return undefined;
   let faces = tokenCache.get(key);
   if (!faces) {
-    faces = [{ name: t.name, abilities: t.abilities, triggers: [], statics: [], replacements: [], keywords: [], svars: {} }];
+    faces = [{ name: t.name, abilities: t.abilities ?? [], triggers: t.triggers ?? [], statics: t.statics ?? [], replacements: [], keywords: [], svars: t.svars ?? {} }];
     tokenCache.set(key, faces);
   }
   return faces;
