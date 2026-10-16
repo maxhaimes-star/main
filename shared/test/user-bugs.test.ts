@@ -293,3 +293,85 @@ describe('7: Broadside Bombardiers (boast, sacrifice another creature or artifac
     expect(g.players[1].life, g.log.slice(-8).map((l) => l.text).join("\n")).toBe(15);
   });
 });
+
+describe('8: Nadu, Winged Wisdom', () => {
+  it('a creature becoming a target reveals the top card: land onto the battlefield, else into hand; twice per turn', () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'giver_of_runes', 'lightning_bolt', 'brainstorm', 'ponder']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const giver = put(g, ctx, 'a', 'giver_of_runes');
+    put(g, ctx, 'a', 'basic_mountain');
+    const bolt = toZone(g, ctx, 'a', 'lightning_bolt', 'hand');
+    const [mtn, bs] = stackLibrary(g, 'a', ['basic_mountain', 'brainstorm']);
+    // a spell targets Giver of Runes: Mountain onto the battlefield
+    act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: card(giver) });
+    expect(g.stack.length, g.log.slice(-5).map((l) => l.text).join('\n')).toBe(2); // bolt + Nadu trigger
+    drain(g, ctx);
+    expect(g.cards[mtn].zone).toBe('battlefield');
+    expect(g.cards[giver].zone).toBe('graveyard');
+    // an ability targets Nadu (twice): Brainstorm into hand, then the next card
+    const giver2 = put(g, ctx, 'a', 'giver_of_runes');
+    const prot = (q: GameState['pending'][number]) => (q.options.find((o) => /red/i.test(o.value + o.label)) ?? q.options[0]).value;
+    act(g, ctx, 'a', { t: 'activate', iid: giver2, text: '', ability: 0, targets: card(nadu) });
+    expect(g.stack.length).toBe(2);
+    drain(g, ctx, prot);
+    expect(g.cards[bs].zone).toBe('hand');
+    g.cards[giver2].tapped = false;
+    act(g, ctx, 'a', { t: 'activate', iid: giver2, text: '', ability: 0, targets: card(nadu) });
+    expect(g.stack.length).toBe(2);
+    drain(g, ctx, prot);
+    const top = g.players[0].zones.library[0];
+    g.cards[giver2].tapped = false;
+    act(g, ctx, 'a', { t: 'activate', iid: giver2, text: '', ability: 0, targets: card(nadu) });
+    expect(g.stack.length).toBe(1); // third time this turn for Nadu: no trigger
+    drain(g, ctx, prot);
+    expect(g.players[0].zones.library[0]).toBe(top);
+  });
+
+  it("an opponent's spell targeting my creature triggers it (I control the trigger)", () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'brainstorm', 'ponder', 'basic_island'], ['lightning_bolt']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    put(g, ctx, 'a', 'basic_island');
+    put(g, ctx, 'b', 'basic_mountain');
+    const bs = toZone(g, ctx, 'a', 'brainstorm', 'hand');
+    const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+    const [pd] = stackLibrary(g, 'a', ['ponder']);
+    act(g, ctx, 'a', { t: 'cast', iid: bs });
+    expect(g.priority).toBe('b');
+    act(g, ctx, 'b', { t: 'cast', iid: bolt, targets: card(nadu) });
+    expect(g.stack.length, g.log.slice(-4).map((l) => l.text).join('\n')).toBe(3);
+    expect(g.stack[2].controller).toBe('a');
+    drain(g, ctx);
+    expect(g.cards[pd].zone).toBe('hand');
+  });
+
+  it('a triggered ability targeting it (Bristly Bill landfall) triggers it', () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'bristly_bill_spine_sower', 'brainstorm', 'ponder']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    put(g, ctx, 'a', 'bristly_bill_spine_sower');
+    const [bs] = stackLibrary(g, 'a', ['brainstorm', 'ponder']);
+    const land = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_mountain')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: land });
+    for (let k = 0; k < 5 && g.pending.length; k++) {
+      const q = g.pending[0];
+      if (q.targets) act(g, ctx, q.pid, { t: 'chooseTargets', id: q.id, targets: card(nadu) });
+      else act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value });
+    }
+    expect(g.stack.length, g.log.slice(-4).map((l) => l.text).join('\n')).toBe(2);
+    drain(g, ctx);
+    expect(g.cards[bs].zone).toBe('hand');
+  });
+
+  it('equip triggers it too', () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'skullclamp', 'brainstorm', 'ponder']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const clamp = put(g, ctx, 'a', 'skullclamp');
+    put(g, ctx, 'a', 'basic_mountain');
+    const [bs] = stackLibrary(g, 'a', ['brainstorm', 'ponder']);
+    const equip = activatedAbilitiesOf('skullclamp', 0).find((e) => /Equip/i.test(e.keyword ?? e.ability.api))!;
+    act(g, ctx, 'a', { t: 'activate', iid: clamp, text: '', ability: equip.index, targets: card(nadu) });
+    expect(g.stack.length, g.log.slice(-4).map((l) => l.text).join('\n')).toBe(2);
+    drain(g, ctx);
+    expect(g.cards[bs].zone).toBe('hand');
+    expect(g.cards[clamp].attachedTo).toBe(nadu);
+  });
+});
