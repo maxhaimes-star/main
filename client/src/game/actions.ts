@@ -110,7 +110,9 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
     }
   }
   let x: number | undefined;
-  if (/\{X\}/.test(cost)) {
+  // X in an additional cost (Vicious Rivalry: "pay X life") needs a value too.
+  const xExtra = !manual && c ? (safeCastOptions(base.g, iid, face).find((o) => o.id === (costOption ?? 'normal'))?.extra ?? []).some((e) => /\bX\b/.test(e)) : false;
+  if (/\{X\}/.test(cost) || xExtra) {
     const v = await base.ask('Value of X', 1);
     if (v == null) return;
     x = v;

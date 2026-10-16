@@ -220,7 +220,13 @@ function optionDefs(state: GameState, c: CardInstance, pid: string, face: number
   for (const d of defs) {
     for (const part of d.parts) {
       const need = count(part.n, x);
-      if (part.kind === 'life' || part.kind === 'other' || part.kind === 'discardHand' || part.kind === 'sacSelf') continue;
+      if (part.kind === 'life') {
+        // 119.4: a player can pay life only if their life total is at least that much (Vicious Rivalry's X).
+        const life = state.players.find((p) => p.pid === pid)?.life ?? 0;
+        if (need > life) { d.unpayable = `${part.text.replace(/\bX\b/, String(need))}: you have only ${life} life`; break; }
+        continue;
+      }
+      if (part.kind === 'other' || part.kind === 'discardHand' || part.kind === 'sacSelf') continue;
       const have = candidates(state, pid, c.iid, part, lookup).length;
       if (have < need) { d.unpayable = `${part.text}: not enough (${have}/${need})`; break; }
     }

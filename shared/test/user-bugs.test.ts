@@ -375,3 +375,28 @@ describe('8: Nadu, Winged Wisdom', () => {
     expect(g.cards[clamp].attachedTo).toBe(nadu);
   });
 });
+
+describe('9: Vicious Rivalry (additional cost: pay X life)', () => {
+  it('pays X life and destroys artifacts and creatures with mana value X or less', () => {
+    const { g, ctx } = setup(['vicious_rivalry', 'basic_swamp', 'basic_forest', 'giver_of_runes', 'boros_signet', 'nadu_winged_wisdom']);
+    for (const id of ['basic_swamp', 'basic_forest', 'basic_mountain', 'basic_mountain']) put(g, ctx, 'a', id);
+    const giver = put(g, ctx, 'a', 'giver_of_runes');
+    const signet = put(g, ctx, 'a', 'boros_signet');
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const vr = toZone(g, ctx, 'a', 'vicious_rivalry', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: vr, x: 2 });
+    drain(g, ctx);
+    expect(g.players[0].life).toBe(18);
+    expect(g.cards[giver].zone).toBe('graveyard');
+    expect(g.cards[signet].zone).toBe('graveyard');
+    expect(g.cards[nadu].zone).toBe('battlefield');
+  });
+
+  it("can't pay more life than you have", () => {
+    const { g, ctx } = setup(['vicious_rivalry', 'basic_swamp', 'basic_forest']);
+    for (const id of ['basic_swamp', 'basic_forest', 'basic_mountain', 'basic_mountain']) put(g, ctx, 'a', id);
+    g.players[0].life = 3;
+    const vr = toZone(g, ctx, 'a', 'vicious_rivalry', 'hand');
+    expect(applyAction(g, 'a', { t: 'cast', iid: vr, x: 5 }, ctx)).toMatch(/life/i);
+  });
+});
