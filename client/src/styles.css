@@ -125,6 +125,10 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .seat .packs { color: var(--accent); letter-spacing: -2px; }
 .picks { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 8px; }
 .picks-head { display: flex; align-items: center; gap: 24px; }
+.sort-toggle { display: inline-flex; align-items: center; gap: 4px; }
+.sort-toggle button { padding: 2px 8px; font-size: 12px; }
+.sort-toggle button.active { background: var(--accent); color: #111; border-color: var(--accent); }
+.picks-main, .picks-side { margin-top: 8px; }
 .pool-summary { display: flex; flex-wrap: wrap; gap: 8px; }
 .pool-summary h4 { width: 100%; }
 .pool-group { min-width: 110px; flex: 0 0 110px; }
@@ -156,7 +160,13 @@ h1, h2, h3, h4 { margin: 8px 0; }
 /* ---------- deckbuilder */
 .db-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .db-head .count { font-size: 20px; font-weight: 700; }
-.ready { display: flex; align-items: center; gap: 6px; font-weight: 700; margin-left: auto; }
+.ready { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+.play-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
+.ready-status { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.ready-status li { display: flex; align-items: center; gap: 4px; }
+.ready-status li b { margin-left: auto; font-size: 12px; }
+.ready-status li.is-ready b { color: var(--good, #6c6); }
+.ready-status li.building b { color: var(--muted); font-weight: 600; }
 .db-columns { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 130px; min-height: 200px; }
 .db-col { width: 110px; flex: none; }
 .db-col-title { text-align: center; font-weight: 700; margin-bottom: 4px; }
@@ -473,3 +483,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .hp-img { width: 100%; border-radius: 4.5% / 3.2%; box-shadow: 0 8px 30px #000e, 0 0 0 1px #000; }
 .hp-back { width: 55%; margin-top: 6px; border-radius: 4.5% / 3.2%; }
 .hp-extra { margin-top: 6px; background: #000e; color: var(--accent2); font-size: 12px; padding: 5px 8px; border-radius: 6px; }
+
+/* ---------- leaving mid-draft */
+.away-banner { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 8px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--accent); }
+.leave-seat { margin-left: auto; }
+.away-claim { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; align-items: center; }

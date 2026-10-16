@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { highBid } from '@ojb/shared';
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
-import { Countdown, PoolSummary } from './Draft.tsx';
+import { Countdown, LeaveButton, PoolSummary } from './Draft.tsx';
 
 export function Auction({ view, send, skew }: RoomProps) {
   const a = view.auction!;
@@ -35,6 +35,7 @@ export function Auction({ view, send, skew }: RoomProps) {
       <div className="auction-main">
         <div className="draft-head">
           <h2>Auction · Pack {a.packNumber}/{a.totalPacks}</h2>
+          <LeaveButton view={view} send={send} label="Leave auction" />
           <span className="muted">Min bid {st.auctionMinBid}{st.auctionPoolSize > 0 ? ` · pool cap ${st.auctionPoolSize}` : ''} · {a.open.length} card(s) left in this pack</span>
         </div>
 

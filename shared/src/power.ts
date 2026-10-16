@@ -9,6 +9,23 @@ import type { Rarity } from './carddb-types.ts';
 
 const RARITY_BASE: Record<Rarity, number> = { M: 90, R: 140, U: 280, C: 400, S: 200, L: 9999 };
 
+const powerCache = new WeakMap<CardData, number>();
+
+/**
+ * 0..1 power estimate (1 = best) used by bots. Database cards already carry a power-derived rank
+ * (`powerRanked`); for cube cards `rank` is only the list position (sorted by colour), so the
+ * heuristic is applied to them directly.
+ */
+export function cardPower(card: CardData): number {
+  let v = powerCache.get(card);
+  if (v == null) {
+    const rank = card.powerRanked ? card.rank : heuristicRank(card, 'U');
+    v = Math.max(0, Math.min(1, 1 - rank / 450));
+    powerCache.set(card, v);
+  }
+  return v;
+}
+
 export function heuristicRank(card: CardData, rarity: Rarity = 'C'): number {
   if (card.supertypes.includes('Basic') && card.types.includes('Land')) return 9999;
   let r = RARITY_BASE[rarity] ?? 400;

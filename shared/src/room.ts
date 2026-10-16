@@ -80,6 +80,8 @@ export interface Player {
   seat: number;
   isBot: boolean;
   connected: boolean;
+  /** A human who left mid-event: a bot (isBot is true) is playing their seat until they take it back. */
+  away?: boolean;
 }
 
 export interface Deck {
@@ -100,6 +102,8 @@ export interface DraftState {
   deadlines: (number | null)[];
   /** Picks per seat in order. */
   picks: string[][];
+  /** Per seat: the picks the player has moved into their main deck (the rest are sideboard). Carried into deckbuilding. */
+  main?: string[][];
   /** Packs not yet opened, per round per seat. */
   unopened: string[][][];
   pickNumber: number[];
