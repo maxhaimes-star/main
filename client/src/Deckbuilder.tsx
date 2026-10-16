@@ -90,6 +90,19 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <Curve cards={mainCards} />
           <label className="ready"><input type="checkbox" checked={ready} onChange={(e) => setReady(e.target.checked)} /> Deck ready</label>
         </div>
+        <div className="basics">
+          <b>Basic lands ({basicsCount}):</b>
+          {COLORS.map((c) => (
+            <span key={c} className="basic">
+              <span className={`pip pip-${c}`}>{c}</span> {BASIC_LANDS[c]}
+              <button className="tiny" aria-label={`Remove ${BASIC_LANDS[c]}`} disabled={deck.basics[c] <= 0} onClick={() => setDeck((d) => ({ ...d, basics: { ...d.basics, [c]: Math.max(0, d.basics[c] - 1) } }))}>−</button>
+              <b className="basic-count" aria-label={`${BASIC_LANDS[c]} count`}>{deck.basics[c]}</b>
+              <button className="tiny" aria-label={`Add ${BASIC_LANDS[c]}`} onClick={() => setDeck((d) => ({ ...d, basics: { ...d.basics, [c]: d.basics[c] + 1 } }))}>+</button>
+            </span>
+          ))}
+          <button onClick={() => setDeck((d) => ({ ...d, basics: suggestBasics(d.main) }))}>Suggest lands (to 40)</button>
+          <button onClick={() => setDeck((d) => ({ ...d, basics: { W: 0, U: 0, B: 0, R: 0, G: 0 } }))}>Clear</button>
+        </div>
         <p className="muted"><SortToggle /> <span className="hide-touch">Click cards in your pool to add them; click cards in your deck to take them out.</span><span className="show-touch">Tap a card to zoom, then Add to / Remove from deck.</span></p>
         <div className="db-columns">
           {visibleColumns.map((col) => (
@@ -104,19 +117,6 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
             <div className="db-col-title">Lands <small>({landCol.length + basicsCount})</small></div>
             {landCol.map(({ c, i }) => <CubeCard key={`${c.id}-${i}`} id={c.id} onClick={() => toSide(i)} className="stacked" tapLabel="Remove from deck" />)}
           </div>
-        </div>
-        <div className="basics">
-          <b>Basic lands:</b>
-          {COLORS.map((c) => (
-            <span key={c} className="basic">
-              <span className={`pip pip-${c}`}>{c}</span> {BASIC_LANDS[c]}
-              <button className="tiny" onClick={() => setDeck((d) => ({ ...d, basics: { ...d.basics, [c]: Math.max(0, d.basics[c] - 1) } }))}>−</button>
-              <b>{deck.basics[c]}</b>
-              <button className="tiny" onClick={() => setDeck((d) => ({ ...d, basics: { ...d.basics, [c]: d.basics[c] + 1 } }))}>+</button>
-            </span>
-          ))}
-          <button onClick={() => setDeck((d) => ({ ...d, basics: suggestBasics(d.main) }))}>Suggest lands (to 40)</button>
-          <button onClick={() => setDeck((d) => ({ ...d, basics: { W: 0, U: 0, B: 0, R: 0, G: 0 } }))}>Clear</button>
         </div>
         <PoolSummary ids={side} title="Pool / sideboard" onClick={(id) => toMain(id)} tapLabel="Add to deck" />
       </div>
