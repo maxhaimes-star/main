@@ -3,7 +3,7 @@ import {
   type GameAction, type GameView, isHidden, faceOf, type MatchView, STEP_LABELS, STEPS, type Step, type TargetRef, type TargetSpec, type ViewPlayer, type Zone,
 } from '@ojb/shared';
 import type { RoomProps } from '../Room.tsx';
-import { backFaceOf, CardBack, CardImage, getCard, HoverPreview, setPreview } from '../cards.tsx';
+import { backFaceOf, CardBack, CardImage, getCard, HoverPreview, setHoverZoom, setPreview, useHoverZoom } from '../cards.tsx';
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 import { hideSheet, showSheet } from '../sheet.tsx';
 import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
@@ -653,6 +653,7 @@ function CenterBar({ match, onLeave, auto, setAuto, phone, onLog, children }: { 
 function AutoToggles({ auto, setAuto }: { auto: AutoSettings; setAuto: (p: Partial<AutoSettings>) => void }) {
   const { g, me, act } = useGame();
   const mePlayer = g.players.find((p) => p.pid === me);
+  const zoom = useHoverZoom();
   // Full control: stop at every step; turning it off restores the previous stops.
   const setFullControl = (on: boolean) => {
     setAuto({ fullControl: on });
@@ -676,6 +677,11 @@ function AutoToggles({ auto, setAuto }: { auto: AutoSettings; setAuto: (p: Parti
       <label className={`tgl ${auto.fullControl ? 'on' : ''}`} title="Stop at every step and never auto-pass">
         <input type="checkbox" checked={auto.fullControl} onChange={(e) => setFullControl(e.target.checked)} /> Full control
       </label>
+      {!isTouch() && (
+        <label className={`tgl ${zoom ? 'on' : ''}`} title="Show a large picture of the card under the mouse">
+          <input type="checkbox" checked={zoom} onChange={(e) => setHoverZoom(e.target.checked)} /> Zoom
+        </label>
+      )}
       {auto.yields.length > 0 && (
         <button className="tiny" title={`Auto-yielding to: ${auto.yields.join(', ')} (click to clear)`} onClick={() => setAuto({ yields: [] })}>Yields ({auto.yields.length}) ✕</button>
       )}

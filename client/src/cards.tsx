@@ -57,6 +57,20 @@ export function usePreview() {
   return useSyncExternalStore((l) => { listeners.add(l); return () => listeners.delete(l); }, () => preview);
 }
 
+// ------------------------------------------------------------- auto-zoom on hover (user setting, default on)
+
+const ZOOM_KEY = 'ojb:hoverZoom';
+let hoverZoom = (() => { try { return localStorage.getItem(ZOOM_KEY) !== '0'; } catch { return true; } })();
+const zoomListeners = new Set<() => void>();
+export function setHoverZoom(on: boolean) {
+  hoverZoom = on;
+  try { localStorage.setItem(ZOOM_KEY, on ? '1' : '0'); } catch { /* storage blocked: setting lasts for this page */ }
+  zoomListeners.forEach((l) => l());
+}
+export function useHoverZoom(): boolean {
+  return useSyncExternalStore((l) => { zoomListeners.add(l); return () => zoomListeners.delete(l); }, () => hoverZoom);
+}
+
 // ------------------------------------------------------------- image source preference
 
 const PREF_KEY = 'ojb:imageSource';
@@ -89,11 +103,14 @@ export function backFaceOf(card: CardData): Face | undefined {
   return faceOf({ iid: '', cardId: card.id, owner: '', controller: '', zone: 'library', tapped: false, faceDown: false, transformed: true, counters: {}, damage: 0, tempPT: [0, 0], permPT: [0, 0], summoningSick: false, noUntap: false, revealedTo: [], castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces[1].name : undefined }, getCard);
 }
 
-function sources(face: Face, large: boolean): string[] {
-  const remote = face.image ? (large ? face.image.replace('version=normal', 'version=large') : face.image) : undefined;
+/**
+ * Image URLs to try, best first. The large previews (hover zoom, bottom sheet, preview panel) use exactly the same list
+ * as the card on the table, so a zoom always shows the same printing / crop the player is looking at.
+ */
+function sources(face: Face): string[] {
+  const remote = face.image || undefined;
   const local = face.localImage ? `/${face.localImage}` : undefined;
-  // The big preview always tries the high-res remote image first.
-  const order = imageSource === 'local' && !large ? [local, remote] : [remote, local];
+  const order = imageSource === 'local' ? [local, remote] : [remote, local];
   return order.filter((s): s is string => !!s && !failed.has(s));
 }
 
@@ -101,7 +118,7 @@ function sources(face: Face, large: boolean): string[] {
 export function CardImage({ face, large, className, style }: { face: Face; large?: boolean; className?: string; style?: CSSProperties }) {
   useImageSource();
   const [, bump] = useState(0);
-  const list = sources(face, !!large);
+  const list = sources(face);
   const src = list[0];
   if (!src) return <TextCard face={face} className={className} style={style} />;
   return (
@@ -233,6 +250,7 @@ const PV_TARGETS = '.tcard, .hcard, .stack-item, .zcard, .rv, .pend-card, .zone,
 /** Arena-style large card preview floating next to the cursor (hover any card on the table). */
 export function HoverPreview() {
   const p = usePreview();
+  const zoom = useHoverZoom();
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (isTouch()) return; // phones have no hover: cards open a bottom sheet instead
@@ -246,7 +264,7 @@ export function HoverPreview() {
     window.addEventListener('mousedown', hide);
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('dragstart', hide); window.removeEventListener('mousedown', hide); };
   }, []);
-  if (!p || !pos) return null;
+  if (!p || !pos || !zoom) return null;
   return <HoverBox p={p} pos={pos} />;
 }
 
