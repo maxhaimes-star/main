@@ -10,6 +10,7 @@ export function canSee(state: GameState, viewer: string | null, c: CardInstance)
     case 'stack':
     case 'exile':
       if (!c.faceDown) return true;
+      if (c.unseen) return false;
       return viewer === c.controller || viewer === c.owner;
     case 'graveyard':
     case 'command':

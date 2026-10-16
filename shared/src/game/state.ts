@@ -159,6 +159,7 @@ export function moveCardRaw(state: GameState, ctx: Ctx, iid: string, to: Zone, o
     inst.faceDown = !!opts.faceDown;
   }
   inst.revealedTo = [];
+  inst.unseen = to === 'exile' && opts.faceDown && opts.unseen ? true : undefined;
   inst.zone = to;
   if (to === 'battlefield') {
     if (from !== 'battlefield') {

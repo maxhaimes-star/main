@@ -140,3 +140,97 @@ describe('2: Deathrite Shaman', () => {
     expect(activatedAbilitiesOf('deathrite_shaman', 0).map((e) => e.index)).toEqual([0, 1, 2]);
   });
 });
+
+/** Pass priority until something needs an answer or the stack is empty. */
+function passUntilQuestion(g: GameState, ctx: Ctx) {
+  for (let i = 0; i < 10 && g.stack.length && !g.pending.length && !g.players.some((p) => p.peek); i++) act(g, ctx, g.priority, { t: 'pass' });
+}
+
+/** Put these cards (by card id, from anywhere) on top of `pid`'s library in this order. */
+function stackLibrary(g: GameState, pid: string, ids: string[]): string[] {
+  const p = g.players.find((x) => x.pid === pid)!;
+  const used: string[] = [];
+  const iids = ids.map((id) => {
+    const iid = [...p.zones.library, ...p.zones.hand].find((i) => g.cards[i].cardId === id && !used.includes(i))!;
+    used.push(iid);
+    for (const z of [p.zones.library, p.zones.hand]) { const k = z.indexOf(iid); if (k >= 0) z.splice(k, 1); }
+    g.cards[iid].zone = 'library';
+    return iid;
+  });
+  p.zones.library.unshift(...iids);
+  return iids;
+}
+
+describe('3: Narset, Parter of Veils −2', () => {
+  it('puts the chosen noncreature nonland card into hand, reveals it, rest on the bottom', () => {
+    const { g, ctx } = setup(['narset_parter_of_veils', 'brainstorm', 'ponder', 'giver_of_runes']);
+    const nar = put(g, ctx, 'a', 'narset_parter_of_veils');
+    const top = stackLibrary(g, 'a', ['brainstorm', 'giver_of_runes', 'basic_mountain', 'ponder']);
+    const abil = activatedAbilitiesOf('narset_parter_of_veils', 0)[0];
+    act(g, ctx, 'a', { t: 'activate', iid: nar, text: '', ability: abil.index });
+    passUntilQuestion(g, ctx);
+    const p = g.players[0];
+    expect(g.pending.length, `peek: ${JSON.stringify(p.peek)}`).toBe(1);
+    const q = g.pending[0];
+    expect(q.pid).toBe('a');
+    const opt = q.options.find((o) => o.value === top[3]);
+    expect(opt, JSON.stringify(q.options)).toBeTruthy();
+    expect(q.options.some((o) => o.value === top[1] || o.value === top[2])).toBe(false);
+    act(g, ctx, 'a', { t: 'choose', id: q.id, value: top[3] });
+    drain(g, ctx);
+    expect(g.cards[top[3]].zone).toBe('hand');
+    expect(g.cards[top[3]].revealedTo).toContain('b');
+    const v = viewFor(g, 'b');
+    expect('hidden' in v.cards[top[3]]).toBe(false);
+    for (const i of [top[0], top[1], top[2]]) expect(p.zones.library.slice(-3)).toContain(i);
+    expect(p.peek).toBeNull();
+  });
+});
+
+describe('4: Vampiric Tutor', () => {
+  it('puts the chosen card on top after shuffling', () => {
+    for (const seed of [1, 2, 3]) {
+      const { g, ctx } = setup(['vampiric_tutor', 'basic_swamp', 'brainstorm']);
+      ctx.rng = seeded(seed);
+      put(g, ctx, 'a', 'basic_swamp');
+      const vt = toZone(g, ctx, 'a', 'vampiric_tutor', 'hand');
+      act(g, ctx, 'a', { t: 'cast', iid: vt });
+      passUntilQuestion(g, ctx);
+      const q = g.pending[0];
+      expect(q?.pid).toBe('a');
+      const bs = q.options.find((o) => g.cards[o.value]?.cardId === 'brainstorm')!;
+      expect(bs).toBeTruthy();
+      act(g, ctx, 'a', { t: 'choose', id: q.id, value: bs.value });
+      drain(g, ctx);
+      const top = g.players[0].zones.library[0];
+      expect(g.cards[top].cardId).toBe('brainstorm');
+      expect(g.players[0].life).toBe(18);
+    }
+  });
+});
+
+describe('5: Bomat Courier', () => {
+  it('exiles face down, hidden from everyone; returns them to hand', () => {
+    const { g, ctx } = setup(['bomat_courier']);
+    const bomat = put(g, ctx, 'a', 'bomat_courier');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: bomat, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    drain(g, ctx);
+    const ex = [...g.players[0].zones.exile];
+    expect(ex).toHaveLength(1);
+    expect(g.cards[ex[0]].faceDown).toBe(true);
+    for (const viewer of ['a', 'b', null]) expect('hidden' in viewFor(g, viewer).cards[ex[0]], String(viewer)).toBe(true);
+    // to main 2, activate: discard hand, sacrifice, return the exiled card
+    for (let i = 0; i < 20 && g.step !== 'main2'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    expect(g.step).toBe('main2');
+    const m = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_mountain')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: m });
+    act(g, ctx, 'a', { t: 'activate', iid: bomat, text: '', ability: 0 });
+    drain(g, ctx);
+    expect(g.cards[ex[0]].zone).toBe('hand');
+    expect(g.cards[ex[0]].faceDown).toBe(false);
+    expect(g.players[0].zones.hand).toEqual([ex[0]]);
+    expect(g.cards[bomat].zone).toBe('graveyard');
+  });
+});

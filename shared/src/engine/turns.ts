@@ -272,7 +272,7 @@ export function isUniqueCost(tok: string): boolean {
   return /^tapXType<\d+\/[^>]+>$/.test(tok) || /^(Sac|Discard|Return|ExileFromGrave|ExileFromHand)<\d+\/[^>]+>$/.test(tok);
 }
 
-interface ParsedCost { kind: 'tap' | 'sac' | 'discard' | 'return' | 'exileGrave' | 'exileHand' | 'returnSelf'; n: number; valid: string; text: string }
+interface ParsedCost { kind: 'tap' | 'sac' | 'discard' | 'return' | 'exileGrave' | 'exileHand' | 'returnSelf' | 'discardHand'; n: number; valid: string; text: string }
 
 function parseUniqueCost(tok: string, x: number): ParsedCost | undefined {
   const m = /^(\w+)<(\d+|X)\/([^/>]+)(?:\/([^>]+))?>$/.exec(tok);
@@ -284,7 +284,8 @@ function parseUniqueCost(tok: string, x: number): ParsedCost | undefined {
   switch (m[1]) {
     case 'tapXType': return { kind: 'tap', n, valid, text: `tap ${n} untapped ${desc}${n === 1 ? '' : 's'} you control` };
     case 'Sac': return self ? undefined : { kind: 'sac', n, valid, text: `sacrifice ${n === 1 ? 'a' : n} ${desc}` };
-    case 'Discard': return self ? undefined : { kind: 'discard', n, valid, text: `discard ${n === 1 ? 'a' : n} ${desc}` };
+    case 'Discard': if (valid === 'Hand') return { kind: 'discardHand', n: 0, valid, text: 'discard your hand' }; // Bomat Courier
+      return self ? undefined : { kind: 'discard', n, valid, text: `discard ${n === 1 ? 'a' : n} ${desc}` };
     case 'Return': return self ? { kind: 'returnSelf', n: 1, valid, text: 'return it to its owner\'s hand' } : { kind: 'return', n, valid, text: `return ${n === 1 ? 'a' : n} ${desc} you control to its owner's hand` };
     case 'ExileFromGrave': return self ? undefined : { kind: 'exileGrave', n, valid, text: `exile ${n === 1 ? 'a' : n} ${desc} from your graveyard` };
     case 'ExileFromHand': return self ? undefined : { kind: 'exileHand', n, valid, text: `exile ${n === 1 ? 'a' : n} ${desc} from your hand` };
@@ -312,6 +313,7 @@ export function uniqueCostError(state: GameState, ctx: Ctx, pid: string, src: Ca
     const pc = parseUniqueCost(tok, x);
     if (!pc) return `${name}: can't pay ${tok}`;
     if (pc.kind === 'returnSelf') { if (src.zone !== 'battlefield') return `${name} must be on the battlefield`; continue; }
+    if (pc.kind === 'discardHand') continue;
     const have = costCandidates(state, ctx, pid, src, pc).length;
     if (have < pc.n) return `${name}: you can't ${pc.text} (${have}/${pc.n})`;
   }
@@ -330,6 +332,10 @@ export function payUniqueCosts(state: GameState, ctx: Ctx, pid: string, src: Car
     if (!pc) continue;
     if (pc.kind === 'returnSelf') {
       if (src.zone === 'battlefield') { moveCard(state, ctx, src.iid, 'hand'); log(state, ctx, pid, `${pname(state, pid)} returns ${name} to its owner's hand (cost).`); }
+    } else if (pc.kind === 'discardHand') {
+      const hand = [...player(state, pid).zones.hand];
+      for (const iid of hand) moveCard(state, ctx, iid, 'graveyard', { cause: 'discard' });
+      log(state, ctx, pid, `${pname(state, pid)} discards their hand (${hand.length} card${hand.length === 1 ? '' : 's'}) to pay for ${name}.`);
     } else if (pc.kind === 'tap') taps.push(pc);
     else picks.push({ kind: pc.kind, valid: pc.valid, left: pc.n, optional: false, label: pc.text });
   }

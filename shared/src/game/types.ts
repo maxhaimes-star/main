@@ -29,6 +29,8 @@ export interface CardInstance {
   zone: Zone;
   tapped: boolean;
   faceDown: boolean;
+  /** Face-down in exile and nobody may look at it, not even its owner (Bomat Courier: "You can't look at it."). */
+  unseen?: boolean;
   /** Showing back face (transformed / MDFC back / flipped). */
   transformed: boolean;
   counters: Record<string, number>;
