@@ -234,3 +234,30 @@ describe('5: Bomat Courier', () => {
     expect(g.cards[bomat].zone).toBe('graveyard');
   });
 });
+
+describe('6: Currency Converter', () => {
+  function run(discardId: string) {
+    const { g, ctx } = setup(['currency_converter', 'basic_island', 'basic_island', 'brainstorm']);
+    const cc = put(g, ctx, 'a', 'currency_converter');
+    put(g, ctx, 'a', 'basic_island');
+    put(g, ctx, 'a', 'basic_island', );
+    const target = discardId === 'brainstorm' ? toZone(g, ctx, 'a', 'brainstorm', 'hand') : g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_mountain')!;
+    act(g, ctx, 'a', { t: 'activate', iid: cc, text: '', ability: 0 });
+    drain(g, ctx, (q) => (q.options.some((o) => o.value === target) ? target : q.options.some((o) => /yes|accept|true/i.test(o.value)) ? q.options.find((o) => /yes|accept|true/i.test(o.value))!.value : q.options[0].value));
+    expect(g.cards[target].zone).toBe('exile');
+    g.cards[cc].tapped = false;
+    act(g, ctx, 'a', { t: 'activate', iid: cc, text: '', ability: 1 });
+    drain(g, ctx);
+    expect(g.cards[target].zone).toBe('graveyard');
+    return g;
+  }
+  it('a land card: creates a Treasure', () => {
+    const g = run('basic_mountain');
+    expect(g.battlefield.filter((i) => g.cards[i].token?.name === 'Treasure')).toHaveLength(1);
+  });
+  it('a nonland card: creates a 2/2 black Rogue', () => {
+    const g = run('brainstorm');
+    expect(g.battlefield.filter((i) => g.cards[i].token?.name === 'Rogue')).toHaveLength(1);
+    expect(g.battlefield.filter((i) => g.cards[i].token?.name === 'Treasure')).toHaveLength(0);
+  });
+});

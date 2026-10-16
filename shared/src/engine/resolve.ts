@@ -1981,6 +1981,8 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
           data.cont.remembered = [...data.cont.remembered, value];
           rememberOnCard(state, data.cont.item, data.cont.remembered);
         }
+        // Imprint$ True (Currency Converter: "if it's a land card ..."): later steps refer to the chosen card as Imprinted.
+        if (data.cont && p.Imprint === 'True' && state.cards[value]) data.cont.chosen = { ...(data.cont.chosen ?? {}), imprinted: [...(data.cont.chosen?.imprinted ?? []), value] };
         const hidden = (z: Zone) => (z === 'hand' || z === 'library') && !data.revealChosen;
         const moved = state.cards[value];
         if (data.revealChosen && moved) { moved.revealedTo = state.players.map((q) => q.pid); log(state, ctx, pid, `${who.name} reveals ${nm}.`); }
