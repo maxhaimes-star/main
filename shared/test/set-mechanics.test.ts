@@ -178,3 +178,65 @@ describe('SpellCast triggers with TargetsValid', () => {
     expect(logText(g)).not.toMatch(/Check by hand/);
   });
 });
+
+describe('Fight', () => {
+  const fightDefs: [CardData, Record<string, unknown[]>][] = [
+    [{ ...base, id: 'test_tackle', name: 'Test Tackle', manaCost: '{G}', colors: ['G'], typeLine: 'Sorcery', types: ['Sorcery'], oracle: 'Target creature you control gets +0/+10 until end of turn. Then it fights up to one target creature an opponent controls.' } as unknown as CardData,
+      { test_tackle: [{ name: 'Test Tackle', abilities: ['SP$ Pump | ValidTgts$ Creature.YouCtrl | NumDef$ +10 | SubAbility$ DBFight | SpellDescription$ Pump, then fight.'], triggers: [], statics: [], replacements: [], keywords: [], svars: { DBFight: 'DB$ Fight | Defined$ ParentTarget | ValidTgts$ Creature.OppCtrl | TargetMin$ 0 | TargetMax$ 1' } }] }],
+    [{ ...base, id: 'test_brawl', name: 'Test Brawl', manaCost: '{G}', colors: ['G'], typeLine: 'Sorcery', types: ['Sorcery'], oracle: 'Two target creatures fight each other.' } as unknown as CardData,
+      { test_brawl: [{ name: 'Test Brawl', abilities: ['SP$ Fight | ValidTgts$ Creature | TargetMin$ 2 | TargetMax$ 2 | TargetUnique$ True | SpellDescription$ Two target creatures fight each other.'], triggers: [], statics: [], replacements: [], keywords: [], svars: {} }] }],
+  ];
+  registerCards(fightDefs.map((d) => d[0]));
+  registerScripts(Object.assign({}, ...fightDefs.map((d) => d[1])) as never);
+
+  function board() {
+    const ctx: Ctx = { rng: seeded(4), lookup: getCard, now: 0 };
+    const g = createGame('g', [
+      { pid: 'a', name: 'Alice', deck: deck(['test_tackle', 'test_brawl', 'goblin_guide'], 'basic_forest'), side: [] },
+      { pid: 'b', name: 'Bob', deck: deck(['scythecat_cub']), side: [] },
+    ], 'a', ctx);
+    act(g, ctx, 'a', { t: 'keep' });
+    act(g, ctx, 'b', { t: 'keep' });
+    const putB = (id: string) => {
+      const p = g.players[1];
+      const iid = [...p.zones.hand, ...p.zones.library].find((i) => g.cards[i].cardId === id)!;
+      moveCard(g, ctx, iid, 'battlefield', { controller: 'b' });
+      g.events = []; g.triggerQueue = [];
+      return iid;
+    };
+    return { g, ctx, putB };
+  }
+
+  it('pump, then the creature fights a target creature (each deals damage equal to its power)', () => {
+    const { g, ctx, putB } = board();
+    const gg = put(g, ctx, 'goblin_guide'); // 2/2
+    const cub = putB('scythecat_cub'); // 2/2
+    g.players[0].manaPool.G = 1;
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'test_tackle'), targets: [[{ kind: 'card', iid: gg }], [{ kind: 'card', iid: cub }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[cub].zone).toBe('graveyard');
+    expect(g.cards[gg].zone).toBe('battlefield');
+    expect(g.cards[gg].damage).toBe(2);
+    expect(logText(g)).not.toMatch(/Not automated/);
+  });
+
+  it('with no second target nobody fights', () => {
+    const { g, ctx } = board();
+    const gg = put(g, ctx, 'goblin_guide');
+    g.players[0].manaPool.G = 1;
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'test_tackle'), targets: [[{ kind: 'card', iid: gg }], []] });
+    resolveAll(g, ctx);
+    expect(g.cards[gg].damage).toBe(0);
+  });
+
+  it('two target creatures fight each other', () => {
+    const { g, ctx, putB } = board();
+    const gg = put(g, ctx, 'goblin_guide');
+    const cub = putB('scythecat_cub');
+    g.players[0].manaPool.G = 1;
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'test_brawl'), targets: [[{ kind: 'card', iid: gg }, { kind: 'card', iid: cub }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[cub].zone).toBe('graveyard');
+    expect(g.cards[gg].zone).toBe('graveyard');
+  });
+});

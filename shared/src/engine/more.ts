@@ -4,7 +4,7 @@
  *   Branch / RepeatEach / Repeat / GenericChoice / RollDice   run sub-chains chosen while resolving (resolve.ts "splices")
  *   Charm without chosen modes (activated / triggered)         asks the modes on resolution
  *   ChooseCard / ChooseNumber                                  Defined$ ChosenCard, Count$ChosenNumber
- *   TapOrUntap, Amass, Proliferate, Connive, Recruit, Empower, Explore, MultiplyCounter, ExchangeControl, SetState (transform),
+ *   TapOrUntap, Amass, Proliferate, Connive, Recruit, Empower, Discover, Fight, Explore, MultiplyCounter, ExchangeControl, SetState (transform),
  *   Protection (color choice), PeekAndReveal / Reveal (private looks), DigUntil, CopySpellAbility, Earthbend,
  *   Airbend, Play (cast a card during the resolution: modes + targets asked, cost / free), DamageResolve (no-op).
  *
@@ -13,7 +13,7 @@
  */
 import type { CardData, TokenData } from '../cards.ts';
 import { getCard, registerCards } from '../cube.ts';
-import { cardName, faceOf, isCreature } from '../game/rules.ts';
+import { cardName, effectivePT, faceOf, isCreature } from '../game/rules.ts';
 import { type Ctx, detach, drawCards, emit, log, moveCard, player, randomId, shuffleLibrary, turnStats } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem, Zone } from '../game/types.ts';
 import { addEffect } from './durations.ts';
@@ -214,6 +214,28 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
     }
     case 'Amass': return amass(state, ctx, r);
     case 'Empower': return empower(state, ctx, r);
+    case 'Fight': {
+      // Two creatures fight: each deals damage equal to its power to the other (rule 701.14). The first fighter is
+      // Defined$ (ParentTarget, Enchanted, Self ...), else the first of two targets, else the source; the other is a target.
+      const own = (r.ownTargets() ?? []).filter((t): t is { kind: 'card'; iid: string } => t.kind === 'card').map((t) => t.iid);
+      let a: string | undefined;
+      let b: string | undefined;
+      if (p.Defined) {
+        const d = r.defined(p.Defined)?.cards ?? [];
+        a = d[0];
+        b = own[0] ?? d[1]; // "Defined$ Targeted": the parent's two targets fight each other
+      }
+      else if (own.length >= 2) [a, b] = own;
+      else { a = r.sourceIid; b = own[0]; }
+      const fighter = (x: string | undefined) => !!x && state.cards[x]?.zone === 'battlefield' && isCreature(state.cards[x], ctx.lookup, state);
+      if (!fighter(a) || !fighter(b) || a === b) { log(state, ctx, r.controller, `${r.sourceName}: no fight (a creature is missing).`); return 'ok'; }
+      const pa = Math.max(0, effectivePT(state.cards[a!], ctx.lookup, state)[0]);
+      const pb = Math.max(0, effectivePT(state.cards[b!], ctx.lookup, state)[0]);
+      log(state, ctx, r.controller, `${nm(state, ctx, a!)} fights ${nm(state, ctx, b!)} (${pa} and ${pb} damage).`);
+      r.damage(a, b!, pa);
+      r.damage(b, a!, pb);
+      return 'ok';
+    }
     case 'Discover': {
       // Exile from the top until a nonland card with mana value N or less; cast it free or put it into your hand;
       // the rest go to the bottom in a random order.
