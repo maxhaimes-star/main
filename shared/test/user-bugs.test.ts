@@ -431,3 +431,18 @@ describe('10: attacking planeswalkers', () => {
     expect(g.cards[pw].zone).toBe('graveyard');
   });
 });
+
+describe('11: fix mode draw tool', () => {
+  it('draw is rejected in a rules-enforced game, allowed once fix mode is on', () => {
+    const { g, ctx } = setup();
+    const n = g.players[0].zones.hand.length;
+    expect(applyAction(g, 'a', { t: 'draw', n: 1 }, ctx)).toMatch(/fix mode/);
+    act(g, ctx, 'a', { t: 'requestFixMode' });
+    act(g, ctx, 'b', { t: 'answerFixMode', accept: true });
+    act(g, ctx, 'b', { t: 'draw', n: 1 }); // either player, any time
+    act(g, ctx, 'a', { t: 'draw', n: 2 });
+    expect(g.players[0].zones.hand.length).toBe(n + 2);
+    act(g, ctx, 'a', { t: 'endFixMode' });
+    expect(applyAction(g, 'a', { t: 'draw', n: 1 }, ctx)).toMatch(/fix mode/);
+  });
+});

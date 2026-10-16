@@ -508,6 +508,7 @@ function FixModeBar() {
     return (
       <div className="fix-banner">
         <span>Fix mode: manual tools are on for both players</span>
+        {me && <button className="tiny" title="Draw a card (also: click your library for more tools)" onClick={() => act({ t: 'draw', n: 1 })}>Draw a card</button>}
         {me && <button className="tiny" onClick={() => act({ t: 'endFixMode' } as never)}>Done fixing</button>}
       </div>
     );
