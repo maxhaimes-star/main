@@ -446,3 +446,48 @@ describe('11: fix mode draw tool', () => {
     expect(applyAction(g, 'a', { t: 'draw', n: 1 }, ctx)).toMatch(/fix mode/);
   });
 });
+
+describe('12: free mulligan (both players agree)', () => {
+  function fresh() {
+    const ctx: Ctx = { rng: seeded(3), lookup: getCard, now: 0 };
+    const g = createGame('g', [
+      { pid: 'a', name: 'Alice', deck: deck([]), side: [] },
+      { pid: 'b', name: 'Bob', deck: deck([]), side: [] },
+    ], 'a', ctx);
+    return { g, ctx };
+  }
+
+  it('after both agree, the first mulligan keeps seven cards; the second costs one', () => {
+    const { g, ctx } = fresh();
+    expect(applyAction(g, 'a', { t: 'answerFreeMulligan', accept: true }, ctx)).toBeTruthy();
+    act(g, ctx, 'a', { t: 'requestFreeMulligan' });
+    expect(g.freeMulligan?.on).toBe(false);
+    expect(applyAction(g, 'a', { t: 'answerFreeMulligan', accept: true }, ctx)).toBeTruthy(); // not your own request
+    act(g, ctx, 'b', { t: 'answerFreeMulligan', accept: true });
+    expect(g.freeMulligan?.on).toBe(true);
+    act(g, ctx, 'a', { t: 'mulligan' });
+    act(g, ctx, 'a', { t: 'keep' });
+    expect(g.players[0].needsBottom).toBe(0);
+    act(g, ctx, 'b', { t: 'mulligan' });
+    act(g, ctx, 'b', { t: 'mulligan' });
+    act(g, ctx, 'b', { t: 'keep' });
+    expect(g.players[1].needsBottom).toBe(1);
+    act(g, ctx, 'b', { t: 'bottom', iids: [g.players[1].zones.hand[0]] });
+    expect(g.phase).toBe('playing');
+    expect(g.players[0].zones.hand.length).toBe(7);
+    expect(g.players[1].zones.hand.length).toBe(6);
+  });
+
+  it('declined: mulligans cost a card as usual; no proposals once the game started', () => {
+    const { g, ctx } = fresh();
+    act(g, ctx, 'a', { t: 'requestFreeMulligan' });
+    act(g, ctx, 'b', { t: 'answerFreeMulligan', accept: false });
+    expect(g.freeMulligan).toBeUndefined();
+    act(g, ctx, 'a', { t: 'mulligan' });
+    act(g, ctx, 'a', { t: 'keep' });
+    expect(g.players[0].needsBottom).toBe(1);
+    act(g, ctx, 'a', { t: 'bottom', iids: [g.players[0].zones.hand[0]] });
+    act(g, ctx, 'b', { t: 'keep' });
+    expect(applyAction(g, 'a', { t: 'requestFreeMulligan' }, ctx)).toMatch(/before the game/);
+  });
+});
