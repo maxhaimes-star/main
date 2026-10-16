@@ -4,14 +4,15 @@
  *   Branch / RepeatEach / Repeat / GenericChoice / RollDice   run sub-chains chosen while resolving (resolve.ts "splices")
  *   Charm without chosen modes (activated / triggered)         asks the modes on resolution
  *   ChooseCard / ChooseNumber                                  Defined$ ChosenCard, Count$ChosenNumber
- *   TapOrUntap, Amass, Proliferate, Connive, Explore, MultiplyCounter, ExchangeControl, SetState (transform),
+ *   TapOrUntap, Amass, Proliferate, Connive, Recruit, Empower, Explore, MultiplyCounter, ExchangeControl, SetState (transform),
  *   Protection (color choice), PeekAndReveal / Reveal (private looks), DigUntil, CopySpellAbility, Earthbend,
  *   Airbend, Play (cast a card during the resolution: modes + targets asked, cost / free), DamageResolve (no-op).
  *
  * resolve.ts calls execMoreStep() with a MoreRun (its helpers bound to the running chain); answers come back
  * through answerMorePending() (data.kind 'more') and resume the chain with resumeAuto().
  */
-import type { TokenData } from '../cards.ts';
+import type { CardData, TokenData } from '../cards.ts';
+import { getCard, registerCards } from '../cube.ts';
 import { cardName, faceOf, isCreature } from '../game/rules.ts';
 import { type Ctx, detach, drawCards, emit, log, moveCard, player, randomId, shuffleLibrary, turnStats } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem, Zone } from '../game/types.ts';
@@ -20,7 +21,7 @@ import { addExtraCombat } from './combat-rules.ts';
 import { canPayCost, parseCostTokens, payCostNow } from './paycost.ts';
 import { checkTargets } from './play.ts';
 import { addSplice, createTokenInstance, exiledWithSource, lkiOf, resumeAuto } from './resolve.ts';
-import { flatten, getScript, parseAbility, SCRIPTS, spellAbility, targetSpecs } from './script.ts';
+import { flatten, getScript, parseAbility, registerScripts, SCRIPTS, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard, type MatchEnv } from './targets.ts';
 import type { AutoCont, AutoInfo, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
 import type { UniqueRun } from './unique.ts';
@@ -212,6 +213,50 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       return 'wait';
     }
     case 'Amass': return amass(state, ctx, r);
+    case 'Empower': return empower(state, ctx, r);
+    case 'Discover': {
+      // Exile from the top until a nonland card with mana value N or less; cast it free or put it into your hand;
+      // the rest go to the bottom in a random order.
+      const n = r.amount(p.Num, 0) ?? 0;
+      const me = player(state, r.controller);
+      const exiled: string[] = [];
+      let hit: string | undefined;
+      while (me.zones.library.length) {
+        const top = me.zones.library[0];
+        moveCard(state, ctx, top, 'exile');
+        if (state.cards[top]?.zone !== 'exile') break;
+        exiled.push(top);
+        const card = state.cards[top];
+        const cmc = card.cardId ? ctx.lookup(card.cardId)?.cmc ?? 0 : 0;
+        if (!faceOf(card, ctx.lookup).types.includes('Land') && cmc <= n) { hit = top; break; }
+      }
+      log(state, ctx, r.controller, `Discover ${n}: ${pname(state, r.controller)} exiles ${names(state, ctx, exiled) || 'nothing'}.`);
+      if (hit) {
+        r.remember([hit]);
+        r.splice('_kw', { line: 'DB$ Play | Defined$ Remembered | WithoutManaCost$ True | Optional$ True | ValidSA$ Spell | SpellDescription$ You may cast it without paying its mana cost.' });
+        r.splice('_kw', { line: `DB$ _DiscoverHand | Cards$ ${hit} | SpellDescription$ If you don't cast it, put it into your hand.` });
+      }
+      const rest = exiled.filter((x) => x !== hit);
+      if (rest.length) r.splice('_kw', { line: `DB$ _PutBottom | Cards$ ${rest.join(',')} | SpellDescription$ Put the exiled cards on the bottom in a random order.` });
+      return 'ok';
+    }
+    case '_DiscoverHand': {
+      for (const iid of (p.Cards ?? '').split(',')) {
+        const c = state.cards[iid];
+        if (c?.zone !== 'exile') continue;
+        moveCard(state, ctx, iid, 'hand');
+        log(state, ctx, c.owner, `${pname(state, c.owner)} puts ${cardName(c, ctx.lookup)} into their hand (discover).`);
+      }
+      return 'ok';
+    }
+    case 'Recruit': {
+      // Draw a card, then discard a card. If you discarded a nonland card, create a 1/1 white Human Soldier token.
+      const me = player(state, r.controller);
+      const got = drawCards(state, me, 1);
+      log(state, ctx, r.controller, `${me.name} recruits (draws ${got}).`);
+      askConnive(state, ctx, { kind: 'more', m: 'connive', cont: r.contAt(r.index + 1), pid: r.controller, conniver: '', recruit: true, left: Math.min(1, me.zones.hand.length), nonland: 0, source: r.sourceName });
+      return 'wait';
+    }
     case 'Proliferate': {
       const cands = [
         ...state.battlefield.filter((x) => Object.values(state.cards[x].counters).some((n) => n > 0)),
@@ -537,6 +582,15 @@ function askConnive(state: GameState, ctx: Ctx, d: MData) {
   if ((d.left as number) <= 0 || !me.zones.hand.length) {
     const c = state.cards[d.conniver as string];
     const k = d.nonland as number;
+    if (d.recruit) {
+      if (k > 0) {
+        const soldier: TokenData = SCRIPTS.tokens.w_1_1_human_soldier ?? { name: 'Human Soldier', typeLine: 'Token Creature — Human Soldier', colors: ['W'], power: '1', toughness: '1', oracle: '', keywords: [] };
+        createTokenInstance(state, ctx, d.pid, soldier, false);
+        log(state, ctx, d.pid, `${me.name} creates a 1/1 white Human Soldier creature token (recruit).`);
+      }
+      resumeAuto(state, ctx, d.cont);
+      return;
+    }
     if (c?.zone === 'battlefield' && k > 0) {
       c.counters['+1/+1'] = (c.counters['+1/+1'] ?? 0) + k;
       log(state, ctx, d.pid, `${cardName(c, ctx.lookup)} gets ${k} +1/+1 counter${k === 1 ? '' : 's'} (connive).`);
@@ -544,7 +598,7 @@ function askConnive(state: GameState, ctx: Ctx, d: MData) {
     resumeAuto(state, ctx, d.cont);
     return;
   }
-  ask(state, ctx, d.pid, `${d.source}: connive — discard a card${(d.left as number) > 1 ? ` (${d.left} left)` : ''}`, me.zones.hand.map((x) => ({ value: x, label: nm(state, ctx, x) })), d);
+  ask(state, ctx, d.pid, `${d.source}: ${d.recruit ? 'recruit' : 'connive'} — discard a card${(d.left as number) > 1 ? ` (${d.left} left)` : ''}`, me.zones.hand.map((x) => ({ value: x, label: nm(state, ctx, x) })), d);
 }
 
 /** Explore the next creature in the queue. Returns true when a question was asked. */
@@ -608,6 +662,61 @@ function amass(state: GameState, ctx: Ctx, r: MoreRun): Result {
   if (armies.length === 1) { put(armies[0]); return 'ok'; }
   ask(state, ctx, r.controller, `${r.sourceName}: amass — choose an Army`, armies.map((x) => ({ value: x, label: nm(state, ctx, x) })), { kind: 'more', m: 'amass', cont: r.contAt(r.index + 1), pid: r.controller, n });
   return 'wait';
+}
+
+// ------------------------------------------------------------------ Empower
+
+/**
+ * The Jace token Empower creates: a token with a card id (so its loyalty abilities come from a script like any
+ * planeswalker's). Registered on first use; the server sends its data and script to clients like a database card's.
+ */
+export const EMPOWER_JACE = 'token_empower_jace';
+function ensureEmpowerJace() {
+  if (getCard(EMPOWER_JACE)) return;
+  const card: CardData = {
+    id: EMPOWER_JACE, name: 'Jace', manaCost: '', cmc: 0, colors: ['U'], colorIdentity: ['U'], typeLine: 'Token Planeswalker — Jace',
+    supertypes: [], types: ['Planeswalker'], subtypes: ['Jace'], oracle: '[−1]: Surveil 1.\n[−3]: Draw a card.', keywords: [], producedMana: [],
+    layout: 'normal', tokens: [], image: '', rank: 99999,
+  } as CardData;
+  registerCards([card]);
+  registerScripts({
+    [EMPOWER_JACE]: [{
+      name: 'Jace', triggers: [], statics: [], replacements: [], keywords: [], svars: {},
+      abilities: [
+        'AB$ Surveil | Cost$ SubCounter<1/LOYALTY> | Amount$ 1 | Planeswalker$ True | SpellDescription$ Surveil 1.',
+        'AB$ Draw | Cost$ SubCounter<3/LOYALTY> | NumCards$ 1 | Planeswalker$ True | SpellDescription$ Draw a card.',
+      ],
+    }],
+  });
+}
+
+/** Empower <Type> N: put N loyalty counters on a <Type> token you control, first creating a Jace token if you control none. */
+function empower(state: GameState, ctx: Ctx, r: MoreRun): Result {
+  const p = r.step.params;
+  const n = r.amount(p.Num, 1) ?? 1;
+  const type = p.Type ?? 'Jace';
+  let mine = state.battlefield.filter((x) => {
+    const c = state.cards[x];
+    return c.controller === r.controller && !!c.token && faceOf(c, ctx.lookup).typeLine.split(/[\s—-]+/).includes(type);
+  });
+  if (!mine.length) {
+    ensureEmpowerJace();
+    const token: TokenData = { name: 'Jace', typeLine: 'Token Planeswalker — Jace', colors: ['U'], oracle: '[−1]: Surveil 1.\n[−3]: Draw a card.', keywords: [] };
+    const inst = createTokenInstance(state, ctx, r.controller, token, false, EMPOWER_JACE);
+    log(state, ctx, r.controller, `${pname(state, r.controller)} creates a blue Jace planeswalker token.`);
+    mine = [inst.iid];
+  }
+  if (mine.length === 1) { empowerPut(state, ctx, r.controller, mine[0], n); return 'ok'; }
+  ask(state, ctx, r.controller, `${r.sourceName}: empower ${type} ${n} — choose a ${type} token`, mine.map((x) => ({ value: x, label: nm(state, ctx, x) })), { kind: 'more', m: 'empower', cont: r.contAt(r.index + 1), pid: r.controller, n });
+  return 'wait';
+}
+
+function empowerPut(state: GameState, ctx: Ctx, pid: string, iid: string, n: number) {
+  const c = state.cards[iid];
+  if (!c) return;
+  c.counters.loyalty = (c.counters.loyalty ?? 0) + n;
+  emit(state, { t: 'counterAdded', iid, kind: 'loyalty', n });
+  log(state, ctx, pid, `Empower: ${cardName(c, ctx.lookup)} gets ${n} loyalty counter${n === 1 ? '' : 's'} (now ${c.counters.loyalty}).`);
 }
 
 // ------------------------------------------------------------------ DigUntil
@@ -1101,6 +1210,11 @@ export function answerMorePending(state: GameState, ctx: Ctx, pend: Pending, val
     }
     case 'protection': {
       giveProtection(state, ctx, d.cards as string[], [value], d.source as string);
+      resumeAuto(state, ctx, d.cont);
+      return null;
+    }
+    case 'empower': {
+      empowerPut(state, ctx, pend.pid, value, d.n as number);
       resumeAuto(state, ctx, d.cont);
       return null;
     }

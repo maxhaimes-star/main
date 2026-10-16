@@ -17,7 +17,7 @@
  *  - tokenMultiplier (Event$ CreateToken -> ReplaceToken Type$ Amount)
  *  - counterAmount   (Event$ AddCounter -> ReplaceCounter, "that many plus one")
  */
-import { cardName, type Lookup } from '../game/rules.ts';
+import { cardName, faceOf, type Lookup } from '../game/rules.ts';
 import { type Ctx, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import { moveHooks, type MoveOpts } from '../game/hooks.ts';
 import type { CardInstance, GameState, StackItem, Step, Zone } from '../game/types.ts';
@@ -122,6 +122,13 @@ function countPresent(state: GameState, lookup: Lookup, valid: string, zone: str
   const pool = z === 'battlefield' ? state.battlefield : state.players.flatMap((p) => (p.zones as Record<string, string[]>)[z] ?? []);
   const env: MatchEnv = { controller, sourceIid, lookup };
   return pool.filter((id) => state.cards[id] && matchCard(state.cards[id], valid, env) === true).length;
+}
+
+/** Behold a <type>: a <type> permanent `pid` controls (other than `self`), else a <type> card in their hand. */
+function beholdable(state: GameState, ctx: Ctx, pid: string, self: string, type: string): string | undefined {
+  const is = (iid: string) => { const c = state.cards[iid]; return !!c && !c.faceDown && faceOf(c, ctx.lookup).typeLine.split(/[\s—-]+/).includes(type); };
+  return state.battlefield.find((iid) => iid !== self && state.cards[iid].controller === pid && is(iid))
+    ?? player(state, pid).zones.hand.find((iid) => iid !== self && is(iid));
 }
 
 function pname(state: GameState, pid: string): string {
@@ -265,6 +272,14 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
             data: data as unknown as Record<string, unknown>,
           });
         });
+      } else if (/^Behold<1\/[A-Za-z]+>$/.test(p.UnlessCost ?? '') && beholdable(state, ctx, controller, c.iid, p.UnlessCost!.slice(9, -1))) {
+        // "As this land enters, you may behold a Jace. If you don't, it enters tapped." Beholding has no downside,
+        // so it is done automatically (a permanent you control first, else a card revealed from your hand).
+        const what = beholdable(state, ctx, controller, c.iid, p.UnlessCost!.slice(9, -1))!;
+        afters.push(() => log(state, ctx, controller, `${nm} enters untapped — ${player(state, controller).name} beholds ${cardName(state.cards[what], ctx.lookup)}${state.cards[what].zone === 'hand' ? ' (revealed from hand)' : ''}.`));
+      } else if (/^Behold<1\/[A-Za-z]+>$/.test(p.UnlessCost ?? '')) {
+        tapped = true;
+        afters.push(() => log(state, ctx, controller, `${nm} enters tapped (no ${p.UnlessCost!.slice(9, -1)} to behold).`));
       } else if (p.UnlessCost) {
         tapped = true;
         afters.push(() => log(state, ctx, controller, `${nm} enters tapped — if you pay ${p.UnlessCost}, untap it by hand.`));
