@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NumberField } from '../NumberField.tsx';
 import { effectivePT, type Face, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
-import { isStrict, summoningSickNoHaste } from './engine.ts';
+import { attackProblem, isStrict, manualOk, summoningSickNoHaste } from './engine.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 import { isTouch, useLongPress } from '../touch.ts';
 
@@ -79,7 +79,7 @@ export const useGame = () => useContext(Ctx);
 // ---------------------------------------------------------------- card on the table
 
 export function TableCard({ iid, small, attachments }: { iid: string; small?: boolean; attachments?: string[] }) {
-  const { g, me, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets, payPreview, tapCard } = useGame();
+  const { g, me, opp, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets, payPreview, tapCard } = useGame();
   const c = g.cards[iid];
   const lp = useLongPress((x, y) => { const cc = g.cards[iid]; if (cc) openMenu(x, y, menuFor(iid), isHidden(cc) ? undefined : faceOf(cc, getCard).name); });
   if (!c) return null;
@@ -100,7 +100,10 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
   const chosen = mode?.kind === 'target' && mode.chosen.some((l) => l.some((r) => r.kind === 'card' && r.iid === iid));
   // Strict mode: grey out my creatures that cannot attack right now.
   const noAttack = !hidden && !!me && isStrict(g) && g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && !!isCreature && !c.attacking
-    && (c.tapped || summoningSickNoHaste(g, iid));
+    && (c.tapped || summoningSickNoHaste(g, iid) || !!attackProblem(g, me, iid, opp));
+  // Strict: an opponent's card has nothing to offer outside targeting / blocking (no menu button, no menu).
+  const actionable = !hidden && (manualOk(g) || c.controller === me || c.owner === me);
+  const openFor = (x: number, y: number) => { const items = menuFor(iid); if (items.length) openMenu(x, y, items, face?.name); };
   const kws = !hidden && c.tempKeywords?.length ? c.tempKeywords : [];
 
   return (
@@ -119,7 +122,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
         else if (isTouch() && !mode) tapCard(iid);
         else defaultAction(iid);
       }}
-      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!isTouch()) openMenu(e.clientX, e.clientY, menuFor(iid), face?.name); }}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!isTouch()) openFor(e.clientX, e.clientY); }}
     >
       {attachments?.map((a, i) => (
         <div key={a} className="attachment" style={{ top: `${-14 * (i + 1)}px` }}><TableCard iid={a} small /></div>
@@ -140,7 +143,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
         {kws.length > 0 && <div className="kw-badge" title={`Until end of turn: ${kws.join(', ')}`}>{kws.map((k) => k.slice(0, 3)).join(' ')}</div>}
         {!hidden && c.token && <div className="token-badge">token</div>}
       </div>
-      <button className="dots" onClick={(e) => { e.stopPropagation(); openMenu(e.clientX, e.clientY, menuFor(iid), face?.name); }}>⋯</button>
+      {actionable && <button className="dots" aria-label="Card actions" onClick={(e) => { e.stopPropagation(); openFor(e.clientX, e.clientY); }}>⋯</button>}
     </div>
   );
 }

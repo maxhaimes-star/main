@@ -157,3 +157,32 @@ export function pendingRevealed(p: unknown): string[] {
   if (!Array.isArray(r)) return [];
   return r.map((x) => (typeof x === 'string' ? x : (x as { iid?: string })?.iid)).filter((x): x is string => !!x);
 }
+
+// ------------------------------------------------------------ legality up front (strict): hide / disable what the engine would refuse
+
+/** Can I activate ability `index` (as in safeAbilities / safeActivated) of this card now? undefined = unknown (not strict). */
+export function abilityUsable(g: GameView, pid: string | null, iid: string, index: number): Usable | undefined {
+  const fn = shared.abilityUsability;
+  if (!pid || !fn || !isStrict(g) || fixModeOn(g)) return undefined;
+  return safe(() => (fn as unknown as (...a: unknown[]) => Usable)(g, pid, iid, index, getCard));
+}
+
+/** Why this creature can't attack `target` (a player or planeswalker) now; null = it can (or unknown). */
+export function attackProblem(g: GameView, pid: string | null, iid: string, target: string): string | null {
+  const fn = shared.attackError;
+  if (!pid || !fn || !isStrict(g) || fixModeOn(g)) return null;
+  const e = safe(() => (fn as unknown as (...a: unknown[]) => string | null)(g, pid, iid, target, getCard));
+  if (e) return e;
+  const r = shared.attackRestriction;
+  return (r && safe(() => (r as unknown as (...a: unknown[]) => string | null)(g, iid, getCard))) || null;
+}
+
+/** Why `blocker` can't block `attacker` now; null = it can (or unknown). */
+export function blockProblem(g: GameView, blocker: string, attacker: string): string | null {
+  const fn = shared.blockError;
+  if (!fn || !isStrict(g) || fixModeOn(g)) return null;
+  const e = safe(() => (fn as unknown as (...a: unknown[]) => string | null)(g, blocker, attacker, getCard));
+  if (e) return e;
+  const r = shared.blockRestriction;
+  return (r && safe(() => (r as unknown as (...a: unknown[]) => string | null)(g, blocker, attacker, getCard))) || null;
+}

@@ -3,7 +3,7 @@ import {
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { AUTO_LABEL, autoStatus, isStrict, manualOk, phyrexianChoice, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
+import { abilityUsable, attackProblem, blockProblem, castability, AUTO_LABEL, autoStatus, isStrict, manualOk, phyrexianChoice, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
 type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'pickOption' | 'divide' | 'setMode' | 'opp' | 'target'> & { toast?: (m: string) => void } & { mode: Mode };
@@ -45,7 +45,11 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     return;
   }
   if (mode?.kind === 'block') {
-    if (c.attacking && c.controller !== me) { act({ t: 'declareBlocker', iid: mode.iid, attacker: iid }); setMode(null); return; }
+    if (c.attacking && c.controller !== me) {
+      const why = blockProblem(g, mode.iid, iid);
+      if (why) { base.toast?.(why); return; }
+      act({ t: 'declareBlocker', iid: mode.iid, attacker: iid }); setMode(null); return;
+    }
     if (iid === mode.iid) { setMode(null); return; }
   }
   if (!me) return;
@@ -54,12 +58,19 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     // Combat declarations
     if (g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && vis && faceOf(vis, getCard).types.includes('Creature')) {
       if (isStrict(g) && !c.attacking && (c.tapped || summoningSickNoHaste(g, iid))) { base.toast?.(c.tapped ? 'Tapped creatures cannot attack' : 'Summoning sick: cannot attack'); return; }
+      const why = !c.attacking ? attackProblem(g, me, iid, base.opp) : null;
+      if (why) { base.toast?.(why); return; }
       act({ t: 'declareAttacker', iid, target: c.attacking ? null : base.opp });
       return;
     }
     if (g.step === 'blockers' && g.activePlayer !== me && !g.combat.blockersDeclared && c.controller === me) {
-      if (c.blocking) act({ t: 'declareBlocker', iid, attacker: null });
-      else setMode({ kind: 'block', iid });
+      if (c.blocking) { act({ t: 'declareBlocker', iid, attacker: null }); return; }
+      const attackers = g.battlefield.filter((id) => g.cards[id].attacking);
+      if (isStrict(g) && !manualOk(g) && (c.tapped || attackers.every((a) => blockProblem(g, iid, a)))) {
+        base.toast?.(c.tapped ? 'Tapped creatures cannot block' : (attackers.length ? blockProblem(g, iid, attackers[0]) ?? 'Cannot block' : 'Nothing to block'));
+        return;
+      }
+      setMode({ kind: 'block', iid });
       return;
     }
     if (c.controller !== me) return;
@@ -76,6 +87,9 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     return;
   }
   if (c.zone === 'hand' && c.owner === me && vis) {
+    // Strict: refuse before any cost / target / mode prompt.
+    const u = castability(g, me, iid);
+    if (u && !u.ok) { base.toast?.(u.reason ?? "Can't do that now"); return; }
     const face = faceOf(vis, getCard);
     const card = vis.cardId ? getCard(vis.cardId) : undefined;
     if (face.types.includes('Land') && !(card?.layout === 'modal_dfc')) { act({ t: 'playLand', iid }); return; }
@@ -83,7 +97,8 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     castWithX(base, iid);
     return;
   }
-  open(menu(iid), vis ? faceOf(vis, getCard).name : undefined);
+  const items = menu(iid);
+  if (items.length) open(items, vis ? faceOf(vis, getCard).name : undefined);
 }
 
 export async function castWithX(base: Base, iid: string, face?: number, manual?: boolean) {
@@ -254,7 +269,7 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     if (mana.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: mana.map((m) => ({ label: m.split('').map((x) => `{${x}}`).join(''), onClick: () => act({ t: 'tapForMana', iid, mana: m }) })) });
     }
-    const scripted = safeAbilities(g, c).filter((e) => !e.zone);
+    const scripted = c.controller === me || manual ? safeAbilities(g, c).filter((e) => !e.zone) : [];
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({
       label: `[${l.cost > 0 ? '+' : ''}${l.cost}] ${l.text.slice(0, 70)}${l.text.length > 70 ? '…' : ''}`,
       onClick: async () => {
@@ -271,6 +286,8 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
           ...scripted.map((e) => {
             const desc = e.ability.description || e.ability.api;
             const label = e.loyalty != null ? `[${e.loyalty > 0 ? '+' : ''}${e.loyalty}] ${short(desc, 70)}` : `${e.cost ? e.cost + ': ' : ''}${short(desc, 70)}`;
+            const u = abilityUsable(g, me, iid, e.index);
+            if (u && !u.ok) return { label, disabled: true, hint: u.reason ?? "Can't activate now" } as MenuItem;
             return { label, hint: autoStatus(e.ability) === 'auto' ? '⚡' : undefined, onClick: () => activateScripted(base, iid, c, e, desc) } as MenuItem;
           }),
           ...(manual ? [otherManual] : []),
@@ -290,13 +307,25 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     });
     // Combat
     if (g.step === 'attackers' && g.activePlayer === me && c.controller === me && !g.combat.attackersDeclared) {
-      items.push(c.attacking ? { label: 'Remove from attack', onClick: () => act({ t: 'declareAttacker', iid, target: null }) } : { label: 'Attack opponent', onClick: () => act({ t: 'declareAttacker', iid, target: opp }) });
-      const pws = g.battlefield.filter((id) => { const x = visible(g, id); return x && x.controller !== me && faceOf(x, getCard).types.includes('Planeswalker'); });
-      for (const pw of pws) items.push({ label: `Attack ${faceOf(visible(g, pw)!, getCard).name}`, onClick: () => act({ t: 'declareAttacker', iid, target: pw }) });
+      if (c.attacking) items.push({ label: 'Remove from attack', onClick: () => act({ t: 'declareAttacker', iid, target: null }) });
+      else {
+        const why = attackProblem(g, me, iid, opp);
+        items.push(why ? { label: 'Attack opponent', disabled: true, hint: why } : { label: 'Attack opponent', onClick: () => act({ t: 'declareAttacker', iid, target: opp }) });
+        const pws = g.battlefield.filter((id) => { const x = visible(g, id); return x && x.controller !== me && faceOf(x, getCard).types.includes('Planeswalker'); });
+        for (const pw of pws) {
+          const w = attackProblem(g, me, iid, pw);
+          const label = `Attack ${faceOf(visible(g, pw)!, getCard).name}`;
+          items.push(w ? { label, disabled: true, hint: w } : { label, onClick: () => act({ t: 'declareAttacker', iid, target: pw }) });
+        }
+      }
     }
     if (g.step === 'blockers' && g.activePlayer !== me && c.controller === me && !g.combat.blockersDeclared) {
       const attackers = g.battlefield.filter((id) => g.cards[id].attacking);
-      items.push({ label: 'Block', sub: attackers.map((a) => ({ label: visible(g, a) ? faceOf(visible(g, a)!, getCard).name : 'face-down', onClick: () => act({ t: 'declareBlocker', iid, attacker: a }) })) });
+      if (!c.blocking) items.push({ label: 'Block', sub: attackers.map((a) => {
+        const label = visible(g, a) ? faceOf(visible(g, a)!, getCard).name : 'face-down';
+        const why = blockProblem(g, iid, a);
+        return why ? { label, disabled: true, hint: why } : { label, onClick: () => act({ t: 'declareBlocker', iid, attacker: a }) };
+      }) });
       if (c.blocking) items.push({ label: 'Stop blocking', onClick: () => act({ t: 'declareBlocker', iid, attacker: null }) });
     }
     if (!manual) return items;
@@ -346,15 +375,20 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
 
   if (c.zone === 'hand' || c.zone === 'graveyard' || c.zone === 'exile' || c.zone === 'library' || c.zone === 'command' || c.zone === 'sideboard') {
     const isLand = face.types.includes('Land');
-    if (isLand && c.owner === me) items.push({ label: 'Play land', onClick: () => act({ t: 'playLand', iid }) });
-    if (!isLand || card?.layout === 'modal_dfc') {
+    // Strict: castability up front. Cards I don't own (opponent's graveyard ...) only offer a cast that is legal.
+    const u = castability(g, me, iid);
+    const blocked = u && !u.ok ? (u.reason ?? "Can't do that now") : null;
+    const offerCast = !blocked || c.owner === me;
+    if (isLand && c.owner === me) items.push(blocked ? { label: 'Play land', disabled: true, hint: blocked } : { label: 'Play land', onClick: () => act({ t: 'playLand', iid }) });
+    const castItem = (it: MenuItem): MenuItem => (blocked ? { label: it.label, disabled: true, hint: blocked } : it);
+    if (offerCast && (!isLand || card?.layout === 'modal_dfc')) {
       if (card?.faces && card.layout !== 'normal') {
         for (const fi of [0, 1]) {
-          items.push({ label: `Cast ${card.faces[fi].name}`, hint: hintOf(card.faces[fi].manaCost, c.cardId, fi, effCost(g, iid, fi, me)), onClick: () => castWithX(base, iid, fi) });
+          items.push(castItem({ label: `Cast ${card.faces[fi].name}`, hint: hintOf(card.faces[fi].manaCost, c.cardId, fi, effCost(g, iid, fi, me)), onClick: () => castWithX(base, iid, fi) }));
           if (manual && safeSpell(c.cardId, fi)) items.push({ label: `Cast ${card.faces[fi].name} (resolve by hand)`, onClick: () => castWithX(base, iid, fi, true) });
         }
       } else {
-        items.push({ label: c.zone === 'hand' ? 'Cast' : `Cast from ${c.zone}`, hint: hintOf(face.manaCost, c.cardId, 0, effCost(g, iid, 0, me)), onClick: () => castWithX(base, iid) });
+        items.push(castItem({ label: c.zone === 'hand' ? 'Cast' : `Cast from ${c.zone}`, hint: hintOf(face.manaCost, c.cardId, 0, effCost(g, iid, 0, me)), onClick: () => castWithX(base, iid) }));
         if (manual && safeSpell(c.cardId, 0)) items.push({ label: 'Cast (resolve by hand)', onClick: () => castWithX(base, iid, undefined, true) });
       }
     }
@@ -362,7 +396,9 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     const fromZone = c.owner === me ? safeActivated(c.cardId, 0).filter((e) => e.zone === c.zone) : [];
     for (const e of fromZone) {
       const desc = e.ability.description || e.ability.api;
-      items.push({ label: short(desc, 70), hint: autoStatus(e.ability) === 'auto' ? '⚡' : undefined, onClick: () => activateScripted(base, iid, c, e, desc) });
+      const au = abilityUsable(g, me, iid, e.index);
+      items.push(au && !au.ok ? { label: short(desc, 70), disabled: true, hint: au.reason ?? "Can't activate now" }
+        : { label: short(desc, 70), hint: autoStatus(e.ability) === 'auto' ? '⚡' : undefined, onClick: () => activateScripted(base, iid, c, e, desc) });
     }
     if (c.zone === 'hand' && mine && manual) {
       items.push({ label: 'Cast face down (morph/disguise)', onClick: () => act({ t: 'cast', iid, faceDown: true }) });
