@@ -47,8 +47,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   button.primary:hover:not(:disabled) { background: var(--accent); }
   .tcard, .hcard, .zcard, .cube-card, .stack-item, .zone, .phase { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   .tcard .dots, .hover-preview { display: none; }
-  .tcard:not(.tapped):not(.attacking):hover { transform: none; }
-  .tcard.tapped:hover { transform: rotate(90deg) translateX(-8px); }
+  .tcard:not(.tapped):not(.attacking):not(.blocking):hover { transform: none; }
+  .tcard.tapped:hover { transform: translateY(var(--sy)) rotate(90deg) translateX(-8px); }
   .cube-card:hover, .zone:hover { transform: none; }
   .preview-panel { display: none; }
   input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }

@@ -19,6 +19,9 @@ type PromptState = { label: string; initial: string; numeric: boolean; resolve: 
 
 /** Phase pips shown in the slim bar (Arena groups them). */
 const PHASE_STEPS: Step[] = ['upkeep', 'draw', 'main1', 'beginCombat', 'attackers', 'blockers', 'damage', 'endCombat', 'main2', 'end'];
+const COMBAT_STEPS: Step[] = ['beginCombat', 'attackers', 'blockers', 'damage', 'endCombat'];
+/** Begin combat through end of combat: both battlefields and the combat steps of the phase bar show it. */
+const inCombat = (g: GameView) => g.phase === 'playing' && COMBAT_STEPS.includes(g.step);
 
 export function GameScreen({ view, send, match, onLeave }: RoomProps & { match: MatchView; onLeave?: () => void }) {
   const g = match.game;
@@ -405,7 +408,7 @@ function PlayerArea({ pid, top }: { pid: string; top?: boolean }) {
     <div key="back" className="bf-back">{row(other, 'others')}{row(lands, 'lands')}</div>,
   ];
   return (
-    <div className={`player-area ${top ? 'top' : 'bottom'} ${g.activePlayer === pid ? 'active' : ''}`}>
+    <div className={`player-area ${top ? 'top' : 'bottom'} ${g.activePlayer === pid ? 'active' : ''} ${inCombat(g) ? `in-combat ${g.activePlayer === pid ? 'attacking-side' : 'defending-side'}` : ''}`}>
       <PlayerPanel p={p} />
       <div className={`battlefield ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
         {top ? rows.slice().reverse() : rows}
@@ -686,7 +689,7 @@ function CenterBar({ match, onLeave, auto, setAuto, phone, onLog, children }: { 
         <span className="muted small"> · Game {match.gameNumber} · {match.wins[match.players[0]]}–{match.wins[match.players[1]]}</span>
         {onLeave && <button className="tiny" onClick={onLeave}>Stop watching</button>}
       </div>
-      <div className="phases" ref={phasesRef}>
+      <div className={`phases ${inCombat(g) ? 'in-combat' : ''}`} ref={phasesRef}>
         {PHASE_STEPS.map((s) => {
           const own = myTurn;
           const ownStop = !!mePlayer?.stops.own.includes(s);
@@ -694,7 +697,7 @@ function CenterBar({ match, onLeave, auto, setAuto, phone, onLog, children }: { 
           const tip = `${myTurn ? 'Click to skip ahead to this step. ' : ''}Right-click: toggle your stop for ${myTurn ? 'your' : "your opponent's"} turns.`
             + ` Stops: ${ownStop ? 'your turn' : ''}${ownStop && oppStop ? ' + ' : ''}${oppStop ? "opponent's turn" : ''}${!ownStop && !oppStop ? 'none' : ''}.`;
           return (
-            <div key={s} className={`phase ${g.step === s ? 'current' : ''} ${STEPS.indexOf(s) < STEPS.indexOf(g.step) ? 'past' : ''} ${myTurn ? 'mine' : 'theirs'}`}
+            <div key={s} className={`phase ${g.step === s ? 'current' : ''} ${STEPS.indexOf(s) < STEPS.indexOf(g.step) ? 'past' : ''} ${myTurn ? 'mine' : 'theirs'} ${COMBAT_STEPS.includes(s) ? 'combat-step' : ''}`}
               title={tip} data-step={s}
               onClick={() => myTurn && STEPS.indexOf(s) > STEPS.indexOf(g.step) && act({ t: 'gotoStep', step: s })}
               onContextMenu={(e) => { e.preventDefault(); toggleStop(s, own); }}>

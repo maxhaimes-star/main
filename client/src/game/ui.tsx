@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NumberField } from '../NumberField.tsx';
 import { effectivePT, type Face, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec, type RevealEntry, type RevealedCard } from '@ojb/shared';
-import { attackProblem, isStrict, manualOk, summoningSickNoHaste } from './engine.ts';
+import { attackProblem, blockProblem, isStrict, manualOk, summoningSickNoHaste } from './engine.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 
@@ -101,6 +101,12 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
   // Strict mode: grey out my creatures that cannot attack right now.
   const noAttack = !hidden && !!me && isStrict(g) && g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && !!isCreature && !c.attacking
     && (c.tapped || summoningSickNoHaste(g, iid) || !!attackProblem(g, me, iid, opp));
+  // Declare attackers / blockers: softly highlight my creatures that can still be declared.
+  const declaringAttack = !hidden && !!me && g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && !!isCreature;
+  const canAttack = declaringAttack && !c.attacking && !c.tapped && !noAttack && !summoningSickNoHaste(g, iid) && !attackProblem(g, me, iid, opp);
+  const canBlock = !hidden && !!me && g.step === 'blockers' && g.activePlayer !== me && !g.combat.blockersDeclared && c.controller === me && !!isCreature && !c.blocking && !c.tapped
+    && g.battlefield.some((a) => { const ac = g.cards[a]; return !!ac?.attacking && ac.controller !== me && !blockProblem(g, iid, a); });
+  const combatLabel = combatLabelOf(g, c);
   // Strict: an opponent's card has nothing to offer outside targeting / blocking (no menu button, no menu).
   const actionable = !hidden && (manualOk(g) || c.controller === me || c.owner === me);
   const openFor = (x: number, y: number) => { const items = menuFor(iid); if (items.length) openMenu(x, y, items, face?.name); };
@@ -108,7 +114,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
 
   return (
     <div
-      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || hoverTargets.includes(iid) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''} ${payPreview.includes(iid) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''}`}
+      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || hoverTargets.includes(iid) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''} ${payPreview.includes(iid) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''} ${canAttack ? 'can-attack' : ''} ${canBlock ? 'can-block' : ''}`}
       data-iid={iid}
       draggable={!isTouch() && (!hidden || c.faceDown)}
       {...lp.props}
@@ -136,8 +142,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
         )}
         {pt && <div className={`pt ${ptChanged ? 'changed' : ''} ${lethal ? 'lethal' : ''}`}>{pt[0]}/{pt[1]}{damage > 0 && <span className="dmg"> ✹{damage}</span>}</div>}
         {!pt && damage > 0 && <div className="pt lethal">✹{damage}</div>}
-        {c.attacking && <div className="combat-badge" title={g.cards[c.attacking] ? `Attacking ${(() => { const t = g.cards[c.attacking!]; return t && !isHidden(t) ? faceOf(t, getCard).name : 'a planeswalker'; })()}` : 'Attacking'}>⚔{g.cards[c.attacking] ? ' PW' : ''}</div>}
-        {c.blocking && <div className="combat-badge">🛡</div>}
+        {combatLabel && <div className={`combat-badge ${combatLabel.kind}`} data-target={combatLabel.target} title={combatLabel.title}>{combatLabel.kind === 'attack' ? '⚔' : '🛡'} {combatLabel.target}</div>}
         {!hidden && c.note && <div className="note" title={c.note}>{c.note}</div>}
         {!hidden && c.noUntap && <div className="nountap" title="Doesn't untap">⛓</div>}
         {kws.length > 0 && <div className="kw-badge" title={`Until end of turn: ${kws.join(', ')}`}>{kws.map((k) => k.slice(0, 3)).join(' ')}</div>}
@@ -146,6 +151,21 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
       {actionable && <button className="dots" aria-label="Card actions" onClick={(e) => { e.stopPropagation(); openFor(e.clientX, e.clientY); }}>⋯</button>}
     </div>
   );
+}
+
+/** What an attacker attacks (player or planeswalker) / what a blocker blocks, for the badge on the card. */
+export function combatLabelOf(g: GameView, c: ViewCard): { kind: 'attack' | 'block'; target: string; title: string } | null {
+  const nameOf = (iid: string, fallback: string) => { const t = g.cards[iid]; return t && !isHidden(t) && !t.faceDown ? faceOf(t, getCard).name : fallback; };
+  if (c.attacking) {
+    const pw = g.cards[c.attacking];
+    const target = pw ? nameOf(c.attacking, 'a planeswalker') : g.players.find((p) => p.pid === c.attacking)?.name ?? 'a player';
+    return { kind: 'attack', target, title: `Attacking ${target}` };
+  }
+  if (c.blocking) {
+    const target = nameOf(c.blocking, 'an attacker');
+    return { kind: 'block', target, title: `Blocking ${target}` };
+  }
+  return null;
 }
 
 export function describe(c: ViewCard): string {

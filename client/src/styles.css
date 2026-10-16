@@ -387,15 +387,21 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .drop-over { outline: 2px dashed var(--gold); background: #d9b45a14; }
 
 .tcard { position: relative; width: var(--cw); flex: none; cursor: pointer; margin-top: 2px; }
-.tcard:not(.tapped):not(.attacking):hover { transform: translateY(-3px); z-index: 6; }
+.tcard:not(.tapped):not(.attacking):not(.blocking):hover { transform: translateY(-3px); z-index: 6; }
 .tcard .card-img { box-shadow: 0 2px 6px #000a; }
 .tcard.small { --cw: calc(var(--cw0) * 0.6); }
-.tcard.tapped { transform: rotate(90deg) translateX(-8px); margin: 0 calc(var(--cw) * 0.2); }
-.tcard.attacking { transform: translateY(-12%); }
-.tcard.attacking.tapped { transform: rotate(90deg) translateX(-8px) translateX(14px); }
-.player-area.top .tcard.attacking { transform: translateY(12%); }
+/* Combat (static, no transitions): attackers and blockers step toward the opponent's side by --sy (screen space, so tapped
+   attackers move the same way); the battlefield rows reserve that room so a shifted card never leaves its board. */
+.tcard { --sy: 0px; }
+.tcard.attacking, .tcard.blocking { --sy: calc(var(--cw) * -0.17); transform: translateY(var(--sy)); z-index: 3; }
+.player-area.top .tcard.attacking, .player-area.top .tcard.blocking { --sy: calc(var(--cw) * 0.17); }
+.tcard.tapped { transform: translateY(var(--sy)) rotate(90deg) translateX(-8px); margin: 0 calc(var(--cw) * 0.2); }
 .tcard.attacking .card-img { box-shadow: 0 0 0 3px var(--bad), 0 0 16px #e5534b99; }
 .tcard.blocking .card-img { box-shadow: 0 0 0 3px var(--blue), 0 0 16px #4c8dff99; }
+.tcard.can-attack .card-img { box-shadow: 0 0 0 2px #e5534b99, 0 0 10px #e5534b66; }
+.tcard.can-block .card-img { box-shadow: 0 0 0 2px #4c8dff99, 0 0 10px #4c8dff66; }
+.player-area.in-combat .battlefield { background: linear-gradient(var(--combat-dir, 180deg), #e5534b16, transparent 70%); box-shadow: inset 0 0 0 1px #e5534b40; }
+.player-area.top.in-combat .battlefield { --combat-dir: 0deg; }
 .counters { position: absolute; top: 16%; left: 3px; display: flex; flex-direction: column; gap: 2px; }
 .ctr { background: #000d; color: #fff; font-size: clamp(10px, calc(var(--cw) * 0.14), 15px); font-weight: 700; padding: 0 5px; border-radius: 9px; white-space: nowrap; border: 1px solid #fff3; }
 .pt {
@@ -404,7 +410,14 @@ h1, h2, h3, h4 { margin: 8px 0; }
 }
 .pt.changed { background: #ffe08a; }
 .pt.lethal { background: var(--bad); color: #fff; }
-.combat-badge { position: absolute; top: -8px; left: -6px; font-size: clamp(16px, calc(var(--cw) * 0.22), 24px); filter: drop-shadow(0 1px 2px #000); }
+/* "⚔ Sam" / "🛡 Grizzly Bears": centred on the card, upright even when the card is tapped. */
+.combat-badge {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: calc(var(--cw) - 4px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: clamp(9px, calc(var(--cw) * 0.13), 13px); font-weight: 800; line-height: 1.3; padding: 1px 5px; border-radius: 8px; color: #fff; border: 1px solid #fff6; box-shadow: 0 1px 4px #000c;
+}
+.combat-badge.attack { background: #b3302aee; }
+.combat-badge.block { background: #2c5fc4ee; }
+.tcard.tapped .combat-badge { transform: translate(-50%, -50%) rotate(-90deg); max-width: calc(var(--cw) * 1.35); }
 
 /* player panels: circular avatar-style life badge */
 .player-panel { background: #0d1117cc; border: 1px solid #2c3544; border-radius: 12px; padding: 6px; display: flex; flex-direction: column; align-items: center; gap: 3px; overflow: auto; scrollbar-width: thin; align-self: stretch; text-align: center; }
@@ -443,6 +456,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .phase.past { color: #5d6678; }
 .phase.current { background: var(--gold); color: #111; font-weight: 800; }
 .phase.current.theirs { background: #c25d5d; color: #fff; }
+.phases.in-combat .phase.combat-step:not(.current) { background: #3b1e20; color: #f0aaa5; border-color: #e5534b66; }
+.phases.in-combat .phase.combat-step.current { box-shadow: 0 0 0 2px #e5534b; }
 .stop-dot { position: absolute; width: 7px; height: 7px; border-radius: 50%; border: 1px solid #000; }
 .stop-dot.own { bottom: -2px; right: -1px; background: var(--gold); }
 .stop-dot.opp { top: -2px; right: -1px; background: var(--bad); }
