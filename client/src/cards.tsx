@@ -114,11 +114,77 @@ function sources(face: Face): string[] {
   return order.filter((s): s is string => !!s && !failed.has(s));
 }
 
-/** A card picture with graceful fallbacks: remote → PDF crop → text frame. */
+// ------------------------------------------------------------- token art (Scryfall token search, cached)
+
+type TokenArt = string | null; // URL, or null = no matching token / lookup failed
+const TOKEN_KEY = 'ojb:tokenArt:';
+const tokenArt = new Map<string, TokenArt>();
+const tokenListeners = new Set<() => void>();
+const tokenQueue: { key: string; face: Face }[] = [];
+let tokenBusy = false;
+
+const tokenKey = (f: Face) => `${f.name}|${f.power ?? ''}/${f.toughness ?? ''}|${(f.colors ?? []).slice().sort().join('')}`;
+
+interface ScryCard { name: string; type_line?: string; power?: string; toughness?: string; colors?: string[]; image_uris?: { normal?: string }; card_faces?: { name?: string; image_uris?: { normal?: string } }[] }
+
+/** Best Scryfall token for this face: same name, then same P/T and colors score higher. */
+function pickToken(face: Face, list: ScryCard[]): string | null {
+  const want = (face.colors ?? []).slice().sort().join('');
+  let best: { url: string; score: number } | null = null;
+  for (const c of list) {
+    const url = c.image_uris?.normal ?? c.card_faces?.find((x) => x.name?.toLowerCase() === face.name.toLowerCase())?.image_uris?.normal ?? c.card_faces?.[0]?.image_uris?.normal;
+    if (!url) continue;
+    let score = 0;
+    if (c.name.toLowerCase() === face.name.toLowerCase()) score += 4;
+    if ((c.power ?? '') === (face.power ?? '') && (c.toughness ?? '') === (face.toughness ?? '')) score += 3;
+    if ((c.colors ?? []).slice().sort().join('') === want) score += 2;
+    const sub = face.typeLine.split(/\s+[—-]\s+/)[1];
+    if (sub && c.type_line?.includes(sub)) score += 1;
+    if (!best || score > best.score) best = { url, score };
+  }
+  return best?.url ?? null;
+}
+
+async function pumpTokens() {
+  if (tokenBusy) return;
+  tokenBusy = true;
+  while (tokenQueue.length) {
+    const { key, face } = tokenQueue.shift()!;
+    let url: TokenArt = null;
+    try {
+      const q = `!"${face.name.replace(/"/g, '')}" t:token`;
+      const res = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(q)}&unique=art&include_extras=true&order=released&dir=desc`);
+      if (res.ok) url = pickToken(face, ((await res.json()) as { data?: ScryCard[] }).data ?? []);
+    } catch { url = null; }
+    tokenArt.set(key, url);
+    try { localStorage.setItem(TOKEN_KEY + key, url ?? ''); } catch { /* storage blocked */ }
+    tokenListeners.forEach((l) => l());
+    await new Promise((r) => setTimeout(r, 120)); // Scryfall asks for <10 requests per second
+  }
+  tokenBusy = false;
+}
+
+/** Token art URL for a token face without its own image: undefined while unknown, null when there is none. */
+function useTokenArt(face: Face): TokenArt | undefined {
+  const need = face.isToken && !face.image && !face.localImage;
+  const key = need ? tokenKey(face) : '';
+  useSyncExternalStore((l) => { tokenListeners.add(l); return () => tokenListeners.delete(l); }, () => (key ? tokenArt.get(key) : undefined));
+  if (!need) return undefined;
+  if (!tokenArt.has(key)) {
+    let stored: string | null = null;
+    try { stored = localStorage.getItem(TOKEN_KEY + key); } catch { stored = null; }
+    if (stored != null) tokenArt.set(key, stored || null);
+    else if (!tokenQueue.some((t) => t.key === key)) { tokenQueue.push({ key, face }); void pumpTokens(); }
+  }
+  return tokenArt.get(key);
+}
+
+/** A card picture with graceful fallbacks: remote → PDF crop → text frame. Tokens use Scryfall token art when found. */
 export function CardImage({ face, large, className, style }: { face: Face; large?: boolean; className?: string; style?: CSSProperties }) {
   useImageSource();
   const [, bump] = useState(0);
-  const list = sources(face);
+  const art = useTokenArt(face);
+  const list = art ? [art].filter((u) => !failed.has(u)) : sources(face);
   const src = list[0];
   if (!src) return <TextCard face={face} className={className} style={style} />;
   return (
@@ -139,6 +205,7 @@ const COLOR_BG: Record<string, string> = {
 };
 
 export function TextCard({ face, className, style }: { face: Face; className?: string; style?: CSSProperties }) {
+  if (face.isToken) return <TokenFrame face={face} className={className} style={style} />;
   const colors = (face.manaCost.match(/[WUBRG]/g) ?? []) as string[];
   const tokenColors = face.typeLine.toLowerCase();
   const basic = { plains: 'W', island: 'U', swamp: 'B', mountain: 'R', forest: 'G' }[face.name.toLowerCase()];
@@ -159,6 +226,24 @@ export function TextCard({ face, className, style }: { face: Face; className?: s
       <div className="tc-text">{face.oracle}</div>
       {face.power != null && <div className="tc-pt">{face.power}/{face.toughness}</div>}
       {face.loyalty != null && <div className="tc-pt">◆{face.loyalty}</div>}
+    </div>
+  );
+}
+
+/** Styled frame for a token without art: name, type line, rules text and P/T, tinted by its colors. */
+function TokenFrame({ face, className, style }: { face: Face; className?: string; style?: CSSProperties }) {
+  const cols = (face.colors ?? []).filter((c) => COLOR_BG[c]);
+  const bg = cols.length === 0 ? 'linear-gradient(160deg, #d8d8d8, #9a9a9a)'
+    : cols.length === 1 ? `linear-gradient(160deg, ${COLOR_BG[cols[0]]}, #00000033), ${COLOR_BG[cols[0]]}`
+      : `linear-gradient(135deg, ${cols.map((c) => COLOR_BG[c]).join(', ')})`;
+  return (
+    <div className={`card-img text-card token-frame ${className ?? ''}`} style={{ background: bg, ...style }}>
+      <div className="tf-tag">Token</div>
+      <div className="tc-name">{face.name}</div>
+      <div className="tf-art">{face.types.includes('Creature') ? '◆' : '✦'}</div>
+      <div className="tc-type">{face.typeLine.replace(/^Token\s+/, '')}</div>
+      {face.oracle && <div className="tc-text">{face.oracle}</div>}
+      {face.power != null && <div className="tc-pt">{face.power}/{face.toughness}</div>}
     </div>
   );
 }

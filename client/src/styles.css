@@ -90,6 +90,12 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .text-card .tc-type { font-style: italic; border-bottom: 1px solid #0003; margin: 2px 0; }
 .text-card .tc-text { flex: 1; white-space: pre-wrap; overflow: hidden; }
 .text-card .tc-pt { align-self: flex-end; font-weight: 700; background: #fff8; padding: 0 4px; border-radius: 3px; }
+.token-frame { border-color: #2a2a2a; gap: 1px; }
+.token-frame .tf-tag { align-self: center; font-size: 8px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; background: #0008; color: #fff; padding: 0 6px; border-radius: 6px; }
+.token-frame .tc-name { justify-content: center; text-align: center; }
+.token-frame .tf-art { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #0005; background: #fff4; border-radius: 4px; margin: 2px 0; }
+.token-frame .tc-text { flex: none; max-height: 30%; }
+.token-frame .tc-pt { font-size: 12px; }
 .card-back { background: linear-gradient(135deg, #5a3510, #c26a14 50%, #5a3510); border: 3px solid #1a1a1a; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px #000; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 .card-grid.small { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
