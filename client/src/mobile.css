@@ -48,7 +48,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .tcard, .hcard, .zcard, .cube-card, .stack-item, .zone, .phase { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
   .tcard .dots, .hover-preview { display: none; }
   .tcard:not(.tapped):not(.attacking):not(.blocking):hover { transform: none; }
-  .tcard.tapped:hover { transform: translateY(var(--sy)) rotate(90deg) translateX(-8px); }
+  .tcard.tapped:hover { transform: translateY(var(--sy)) rotate(90deg); }
   .cube-card:hover, .zone:hover { transform: none; }
   .preview-panel { display: none; }
   input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }
@@ -202,20 +202,9 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .lay-portrait .game-log input, .lay-landscape .game-log input { font-size: 16px; min-height: 44px; flex: none; }
 
 /* shared compact pieces */
-.lay-portrait .tcard, .lay-landscape .tcard { margin-top: 0; }
 .lay-portrait .note, .lay-landscape .note, .lay-portrait .token-badge, .lay-landscape .token-badge, .lay-portrait .facedown-peek, .lay-landscape .facedown-peek { display: none; }
 .lay-portrait .battlefield, .lay-landscape .battlefield { padding: 2px 4px; gap: 2px; border-radius: 8px; }
-.lay-portrait .bf-front, .lay-portrait .bf-back, .lay-landscape .bf-front, .lay-landscape .bf-back {
-  overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; touch-action: pan-x; overscroll-behavior-x: contain; scrollbar-width: none;
-}
-.lay-portrait .bf-front::-webkit-scrollbar, .lay-portrait .bf-back::-webkit-scrollbar, .lay-landscape .bf-front::-webkit-scrollbar, .lay-landscape .bf-back::-webkit-scrollbar { display: none; }
-.lay-portrait .bf-back, .lay-landscape .bf-back { gap: 12px; }
-.lay-portrait .bf-row, .lay-landscape .bf-row { flex-wrap: nowrap; flex: none; min-height: 0; gap: 4px 6px; padding: 0 4px; }
-.lay-portrait .bf-row.creatures, .lay-landscape .bf-row.creatures { width: auto; justify-content: flex-start; min-width: 100%; }
-.lay-portrait .bf-row.others, .lay-portrait .bf-row.lands, .lay-landscape .bf-row.others, .lay-landscape .bf-row.lands { flex: none; justify-content: flex-start; }
-.lay-portrait .bf-row.lands, .lay-landscape .bf-row.lands { --cw: calc(var(--cw0) * 0.82); }
-.lay-portrait .tcard.small, .lay-landscape .tcard.small { --cw: calc(var(--cw0) * 0.6); }
-.lay-portrait .tcard.tapped, .lay-landscape .tcard.tapped { margin: 0 calc(var(--cw) * 0.22); }
+/* battlefield rows: sized in JS like on desktop (smaller bounds), see boardLayout.ts */
 
 .lay-portrait .player-panel, .lay-landscape .player-panel { gap: 2px; padding: 3px 6px; border-radius: 10px; scrollbar-width: none; }
 .lay-portrait .pp-name, .lay-landscape .pp-name { font-size: 12px; max-width: 100%; }

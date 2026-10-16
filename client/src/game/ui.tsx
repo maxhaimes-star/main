@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState
 import { NumberField } from '../NumberField.tsx';
 import { effectivePT, type Face, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec, type RevealEntry, type RevealedCard } from '@ojb/shared';
 import { attackProblem, blockProblem, isStrict, manualOk, summoningSickNoHaste } from './engine.ts';
+import { ATTACH_PEEK } from './boardLayout.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 
@@ -78,7 +79,8 @@ export const useGame = () => useContext(Ctx);
 
 // ---------------------------------------------------------------- card on the table
 
-export function TableCard({ iid, small, attachments }: { iid: string; small?: boolean; attachments?: string[] }) {
+/** `stack`: identical basic lands shown as one card with a count (iid is the one acted on). */
+export function TableCard({ iid, small, attachments, stack }: { iid: string; small?: boolean; attachments?: string[]; stack?: string[] }) {
   const { g, me, opp, openMenu, menuFor, defaultAction, mode, pickTarget, isLegal, hoverTargets, payPreview, tapCard } = useGame();
   const c = g.cards[iid];
   const lp = useLongPress((x, y) => { const cc = g.cards[iid]; if (cc) openMenu(x, y, menuFor(iid), isHidden(cc) ? undefined : faceOf(cc, getCard).name); });
@@ -114,7 +116,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
 
   return (
     <div
-      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || hoverTargets.includes(iid) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''} ${payPreview.includes(iid) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''} ${canAttack ? 'can-attack' : ''} ${canBlock ? 'can-block' : ''}`}
+      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || (stack ?? [iid]).some((x) => hoverTargets.includes(x)) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''} ${(stack ?? [iid]).some((x) => payPreview.includes(x)) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''} ${canAttack ? 'can-attack' : ''} ${canBlock ? 'can-block' : ''} ${stack ? 'stacked' : ''}`}
       data-iid={iid}
       draggable={!isTouch() && (!hidden || c.faceDown)}
       {...lp.props}
@@ -131,7 +133,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); if (!isTouch()) openFor(e.clientX, e.clientY); }}
     >
       {attachments?.map((a, i) => (
-        <div key={a} className="attachment" style={{ top: `${-14 * (i + 1)}px` }}><TableCard iid={a} small /></div>
+        <div key={a} className="attachment" style={{ top: `calc(var(--rcw, 84px) * ${-ATTACH_PEEK * (i + 1)})` }}><TableCard iid={a} small /></div>
       ))}
       {hidden || c.faceDown ? <CardBack label={c.faceDown && !hidden ? '↓' : undefined} /> : <CardImage face={face!} />}
       {c.faceDown && !hidden && <div className="facedown-peek">{face!.name}</div>}
@@ -147,6 +149,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
         {!hidden && c.noUntap && <div className="nountap" title="Doesn't untap">⛓</div>}
         {kws.length > 0 && <div className="kw-badge" title={`Until end of turn: ${kws.join(', ')}`}>{kws.map((k) => k.slice(0, 3)).join(' ')}</div>}
         {!hidden && c.token && <div className="token-badge">token</div>}
+        {stack && <div className="stack-count" title={`${stack.length} identical lands`}>×{stack.length}</div>}
       </div>
       {actionable && <button className="dots" aria-label="Card actions" onClick={(e) => { e.stopPropagation(); openFor(e.clientX, e.clientY); }}>⋯</button>}
     </div>

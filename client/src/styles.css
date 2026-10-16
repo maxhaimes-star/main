@@ -374,28 +374,42 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .side-toggle { flex: none; padding: 2px 8px; font-size: 12px; background: #000a; white-space: nowrap; }
 .table-side .active-effects { flex: none; }
 
-.player-area { position: relative; flex: 1 1 0; grid-template-rows: minmax(0, 1fr); display: grid; grid-template-columns: 158px 1fr calc(var(--cw0) * 0.95 + 20px); gap: 6px; padding: 4px 8px; min-height: 0; overflow: hidden; overflow: clip; }
+.player-area { position: relative; flex: 1 1 0; grid-template-rows: minmax(0, 1fr); display: grid; grid-template-columns: 158px minmax(0, 1fr) calc(var(--cw0) * 0.95 + 20px); gap: 6px; padding: 4px 8px; min-height: 0; overflow: hidden; overflow: clip; }
 .player-area.active { background: linear-gradient(90deg, #d9b45a1c, transparent 35%); }
 .player-area.bottom { padding-bottom: 0; }
-.battlefield { display: flex; flex-direction: column; justify-content: space-evenly; gap: 4px; min-height: 0; overflow: hidden; border-radius: 10px; padding: 4px 8px; overflow: clip; }
-.bf-front, .bf-back { flex: 1; min-height: 0; display: flex; align-items: center; overflow: hidden auto; scrollbar-width: none; }
-.bf-back { gap: 18px; }
-.bf-row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; min-height: calc(var(--cw) * 0.4); }
-.bf-row.creatures { width: 100%; justify-content: center; }
-.bf-row.others { justify-content: flex-start; flex: 1 1 40%; }
-.bf-row.lands { --cw: calc(var(--cw0) * 0.8); justify-content: flex-end; flex: 1 1 60%; }
+/* Battlefield: sized in JS (boardLayout.ts, measured with a ResizeObserver) so every card is whole and inside its board:
+   explicit band heights, row widths, card width (--cw), lines and overlap. Nothing here scrolls or wraps on its own. */
+.battlefield { display: flex; flex-direction: column; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; border-radius: 10px; padding: 4px 8px; overflow: clip; }
+.bf-front, .bf-back { flex: none; min-height: 0; display: flex; }
+.bf-back { justify-content: space-between; }
+.bf-row { display: flex; flex-direction: column; justify-content: center; gap: var(--bf-gy, 6px); flex: none; height: 100%; min-width: 0; }
+.lay-portrait .bf-row, .lay-landscape .bf-row { --bf-gy: 3px; }
+.bf-row.creatures { width: 100%; }
+.bf-line { display: flex; flex-wrap: nowrap; align-items: flex-end; }
+.bf-row.creatures .bf-line { justify-content: center; }
+.bf-row.others .bf-line { justify-content: flex-start; }
+.bf-row.lands .bf-line { justify-content: flex-end; }
+/* each slot is its own stacking context: overlapped cards paint in order, attachments stay behind their permanent */
+.bf-slot { position: relative; z-index: 0; flex: none; display: flex; justify-content: center; align-items: flex-end; }
+.bf-slot.bf-stack { justify-content: flex-start; }
+.bf-slot > .tcard, .bf-slot > .tcard.tapped { margin: 0; }
+/* a stack of identical basic lands: two card edges behind it and a count */
+.tcard.stacked::before, .tcard.stacked::after { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 4.5% / 3.3%; background: #4a5161; border: 1px solid #000; box-shadow: 0 1px 3px #0008; }
+.tcard.stacked::before { transform: translateX(calc(var(--cw) * 0.05)); }
+.tcard.stacked::after { transform: translateX(calc(var(--cw) * 0.1)); }
+.stack-count { position: absolute; top: 38%; left: 3%; background: #000d; color: #fff; border: 1px solid var(--gold); font-weight: 800; font-size: clamp(10px, calc(var(--cw) * 0.2), 16px); line-height: 1.25; padding: 0 5px; border-radius: 8px; }
 .drop-over { outline: 2px dashed var(--gold); background: #d9b45a14; }
 
-.tcard { position: relative; width: var(--cw); flex: none; cursor: pointer; margin-top: 2px; }
+.tcard { position: relative; width: var(--cw); flex: none; cursor: pointer; }
 .tcard:not(.tapped):not(.attacking):not(.blocking):hover { transform: translateY(-3px); z-index: 6; }
 .tcard .card-img { box-shadow: 0 2px 6px #000a; }
-.tcard.small { --cw: calc(var(--cw0) * 0.6); }
+.tcard.small { --cw: calc(var(--rcw, var(--cw0)) * 0.6); }
 /* Combat (static, no transitions): attackers and blockers step toward the opponent's side by --sy (screen space, so tapped
    attackers move the same way); the battlefield rows reserve that room so a shifted card never leaves its board. */
 .tcard { --sy: 0px; }
 .tcard.attacking, .tcard.blocking { --sy: calc(var(--cw) * -0.17); transform: translateY(var(--sy)); z-index: 3; }
 .player-area.top .tcard.attacking, .player-area.top .tcard.blocking { --sy: calc(var(--cw) * 0.17); }
-.tcard.tapped { transform: translateY(var(--sy)) rotate(90deg) translateX(-8px); margin: 0 calc(var(--cw) * 0.2); }
+.tcard.tapped { transform: translateY(var(--sy)) rotate(90deg); margin: 0 calc(var(--cw) * 0.2); }
 .tcard.attacking .card-img { box-shadow: 0 0 0 3px var(--bad), 0 0 16px #e5534b99; }
 .tcard.blocking .card-img { box-shadow: 0 0 0 3px var(--blue), 0 0 16px #4c8dff99; }
 .tcard.can-attack .card-img { box-shadow: 0 0 0 2px #e5534b99, 0 0 10px #e5534b66; }

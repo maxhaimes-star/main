@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import {
   type GameAction, type GameView, isHidden, faceOf, type MatchView, STEP_LABELS, STEPS, type Step, type TargetRef, type TargetSpec, type ViewPlayer, type Zone,
 } from '@ojb/shared';
@@ -11,6 +11,7 @@ import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
+import { ATTACH_PEEK, COMBAT_SHIFT, fitBoard, STACK_UNITS, TAPPED_UNITS, type BoardSpec, type RowFit } from './boardLayout.ts';
 
 /** Actions never performed on behalf of a controlled player (see engine/turns.ts NEVER_ROUTED); also allowed while controlled. */
 const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan']);
@@ -383,37 +384,134 @@ function dropTo(ctx: GameCtx, iid: string, to: Zone, position?: 'top' | 'bottom'
 
 // ---------------------------------------------------------------- player area
 
+/** Card width bounds per layout (creatures; other permanents and lands) and the spacing of the battlefield rows. */
+const BOARD_SIZES = {
+  desktop: { front: [56, 150], back: [44, 120], gaps: { x: 8, y: 6 }, bandGap: 4, groupGap: 18 },
+  portrait: { front: [40, 74], back: [32, 62], gaps: { x: 5, y: 3 }, bandGap: 2, groupGap: 10 },
+  landscape: { front: [28, 58], back: [24, 48], gaps: { x: 4, y: 3 }, bandGap: 2, groupGap: 10 },
+} as const;
+
+/** One place on a battlefield row: a permanent with what is attached to it, or a stack of identical basic lands. */
+interface BfSlot { ids: string[]; units: number; attachments: string[] }
+
+/** Content-box size of an element, kept up to date with a ResizeObserver (measured before paint). */
+function useBoxSize(ref: RefObject<HTMLElement>) {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const cs = getComputedStyle(el);
+      const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const h = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      setSize((s) => (Math.abs(s.w - w) < 0.5 && Math.abs(s.h - h) < 0.5 ? s : { w, h }));
+    };
+    measure();
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', measure);
+    return () => { ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, [ref]);
+  return size;
+}
+
 function PlayerArea({ pid, top }: { pid: string; top?: boolean }) {
   const ctx = useGame();
   const { g } = ctx;
+  const layout = useLayout();
   const p = g.players.find((x) => x.pid === pid)!;
   const mine = g.battlefield.filter((id) => g.cards[id]?.controller === pid);
   const attachedTo = (id: string) => mine.filter((x) => g.cards[x].attachedTo === id).concat(g.battlefield.filter((x) => g.cards[x].attachedTo === id && g.cards[x].controller !== pid));
   const roots = mine.filter((id) => { const a = g.cards[id].attachedTo; return !a || !g.cards[a] || g.cards[a].zone !== 'battlefield'; });
   const isLand = (id: string) => { const c = g.cards[id]; return !isHidden(c) && !c.faceDown && faceOf(c, getCard).types.includes('Land') && !faceOf(c, getCard).types.includes('Creature'); };
   const isCreature = (id: string) => { const c = g.cards[id]; return isHidden(c) || c.faceDown || faceOf(c, getCard).types.includes('Creature') || (c.counters.animated ?? 0) > 0; };
-  const lands = roots.filter(isLand);
-  const creatures = roots.filter((id) => !isLand(id) && isCreature(id));
-  const other = roots.filter((id) => !isLand(id) && !isCreature(id));
+  const slot = (id: string): BfSlot => ({ ids: [id], units: g.cards[id].tapped ? TAPPED_UNITS : 1, attachments: attachedTo(id) });
+  // Identical basic lands in the same state (nothing on them) share one stack with a count.
+  const basicKey = (id: string) => {
+    const c = g.cards[id];
+    if (isHidden(c) || c.faceDown || c.token || !c.cardId || c.damage || c.note || c.noUntap || c.attacking || c.blocking || c.tempKeywords?.length) return null;
+    if (Object.values(c.counters).some((v) => v) || attachedTo(id).length) return null;
+    const f = faceOf(c, getCard);
+    return /\bBasic\b/.test(f.typeLine ?? '') ? `${f.name}|${c.tapped ? 1 : 0}` : null;
+  };
+  const landSlots: BfSlot[] = [];
+  const stacks = new Map<string, BfSlot>();
+  for (const id of roots.filter(isLand)) {
+    const k = basicKey(id);
+    const st = k ? stacks.get(k) : undefined;
+    if (st) { st.ids.push(id); continue; }
+    const s = slot(id);
+    if (k) stacks.set(k, s);
+    landSlots.push(s);
+  }
+  for (const s of landSlots) if (s.ids.length > 1) s.units = g.cards[s.ids[0]].tapped ? TAPPED_UNITS : STACK_UNITS;
+  const creatureSlots = roots.filter((id) => !isLand(id) && isCreature(id)).map(slot);
+  const otherSlots = roots.filter((id) => !isLand(id) && !isCreature(id)).map(slot);
+  const fighting = (ss: BfSlot[]) => ss.some((s) => g.cards[s.ids[0]].attacking || g.cards[s.ids[0]].blocking);
+
+  const bfRef = useRef<HTMLDivElement>(null);
+  const size = useBoxSize(bfRef);
+  const sz = BOARD_SIZES[layout];
+  const rowSpec = (ss: BfSlot[], [min, max]: readonly [number, number], reserve: number) => ({ slots: ss.map((s) => ({ units: s.units, attachments: s.attachments.length })), min, max, reserve });
+  const spec: BoardSpec = {
+    front: rowSpec(creatureSlots, sz.front, COMBAT_SHIFT),
+    others: rowSpec(otherSlots, sz.back, fighting(otherSlots) ? COMBAT_SHIFT : 0),
+    lands: rowSpec(landSlots, sz.back, fighting(landSlots) ? COMBAT_SHIFT : 0),
+    gaps: sz.gaps, bandGap: sz.bandGap, groupGap: sz.groupGap,
+  };
+  const specKey = JSON.stringify(spec);
+  const fit = useMemo(() => fitBoard(size.w, size.h, JSON.parse(specKey) as BoardSpec), [size.w, size.h, specKey]);
+
   const drop = useDrop((iid) => {
     const c = g.cards[iid];
     if (c?.zone === 'battlefield' && c.controller !== pid && ctx.me && manualOk(g)) ctx.act({ t: 'control', iid, pid });
     else dropTo(ctx, iid, 'battlefield');
   });
-  const row = (ids: string[], cls: string) => (
-    <div className={`bf-row ${cls}`}>{ids.map((id) => <TableCard key={id} iid={id} attachments={attachedTo(id)} />)}</div>
+  const row = (ss: BfSlot[], f: RowFit, cls: string, reserve: number, width?: number) => ss.length > 0 && (
+    <BfRow key={cls} cls={cls} slots={ss} fit={f} width={width} reserve={reserve} top={!!top} gap={sz.gaps.x} />
   );
-  const rows = [
-    <div key="front" className="bf-front">{row(creatures, 'creatures')}</div>,
-    <div key="back" className="bf-back">{row(other, 'others')}{row(lands, 'lands')}</div>,
+  const bands = [
+    creatureSlots.length > 0 && <div key="front" className="bf-front" style={{ height: fit.frontHeight }}>{row(creatureSlots, fit.front, 'creatures', spec.front.reserve)}</div>,
+    landSlots.length + otherSlots.length > 0 && (
+      <div key="back" className="bf-back" style={{ height: fit.backHeight }}>
+        {row(otherSlots, fit.others, 'others', spec.others.reserve, fit.othersWidth)}
+        {row(landSlots, fit.lands, 'lands', spec.lands.reserve, fit.landsWidth)}
+      </div>
+    ),
   ];
   return (
     <div className={`player-area ${top ? 'top' : 'bottom'} ${g.activePlayer === pid ? 'active' : ''} ${inCombat(g) ? `in-combat ${g.activePlayer === pid ? 'attacking-side' : 'defending-side'}` : ''}`}>
       <PlayerPanel p={p} />
-      <div className={`battlefield ${drop.over ? 'drop-over' : ''}`} {...drop.props}>
-        {top ? rows.slice().reverse() : rows}
+      <div ref={bfRef} className={`battlefield ${drop.over ? 'drop-over' : ''}`} style={{ gap: sz.bandGap }} {...drop.props}>
+        {top ? bands.slice().reverse() : bands}
       </div>
       <Zones p={p} />
+    </div>
+  );
+}
+
+/**
+ * One battlefield row, laid out by fitBoard: explicit lines (so an overlapped line never starts left of the row),
+ * fixed-width slots, and room on the opponent's side of each line for the combat shift.
+ */
+function BfRow({ cls, slots, fit, width, reserve, top, gap }: { cls: string; slots: BfSlot[]; fit: RowFit; width?: number; reserve: number; top: boolean; gap: number }) {
+  const style = { '--cw': `${fit.cw}px`, '--rcw': `${fit.cw}px`, width } as CSSProperties;
+  const pad = reserve * fit.cw;
+  return (
+    <div className={`bf-row ${cls}`} style={style} data-cw={fit.cw} data-lines={fit.lines.length} data-overlap={fit.overlap}>
+      {fit.lines.map((line, li) => (
+        <div key={li} className="bf-line" style={{ gap: fit.overlap ? 0 : gap, paddingTop: top ? 0 : pad, paddingBottom: top ? pad : 0 }}>
+          {line.map((i, k) => {
+            const s = slots[i];
+            return (
+              <div key={s.ids[0]} className={`bf-slot ${s.ids.length > 1 ? 'bf-stack' : ''}`}
+                style={{ width: s.units * fit.cw, marginLeft: k > 0 && fit.overlap ? -fit.overlap : undefined, paddingTop: s.attachments.length * ATTACH_PEEK * fit.cw }}>
+                <TableCard iid={s.ids[0]} attachments={s.attachments} stack={s.ids.length > 1 ? s.ids : undefined} />
+              </div>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
