@@ -80,4 +80,72 @@ describe('rooms', () => {
     expect(rec.state.pools[host.pid]).toHaveLength(45);
     for (const p of rec.state.players.filter((x) => x.isBot)) expect(rec.state.decks[p.id].ready).toBe(true);
   });
+
+  describe('leaving mid-draft', () => {
+    function startDraft4() {
+      const rooms = new Rooms();
+      const host = rooms.create('Test', 'Max');
+      const friend = rooms.join(host.roomId, 'Sam')!;
+      const rec = rooms.rooms.get(host.roomId)!;
+      rooms.handle(rec, host.pid, { t: 'updateSettings', settings: { mode: 'draft', seats: 4, fillWithBots: true, pickTimer: 0, packs: 1, packSize: 8 } });
+      expect(rooms.handle(rec, host.pid, { t: 'start' })).toBeNull();
+      const player = (pid: string) => rec.state.players.find((p) => p.id === pid)!;
+      const picks = (pid: string) => rec.state.draft!.picks[player(pid).seat];
+      /** Friend picks whenever they have a pack, then the clock ticks (bots and the away seat pick). */
+      const step = () => {
+        const v = rooms.view(rec, friend.pid);
+        if (v.draft?.pack) rooms.handle(rec, friend.pid, { t: 'pick', cardId: v.draft.pack[0] });
+        rooms.tick(Date.now());
+      };
+      return { rooms, host, friend, rec, player, picks, step };
+    }
+
+    it('a bot takes over the seat so the draft continues, and the player can take it back', () => {
+      const { rooms, host, friend, rec, player, picks, step } = startDraft4();
+      expect(rooms.handle(rec, friend.pid, { t: 'takeSeat' })).toMatch(/not waiting/);
+      expect(rooms.handle(rec, host.pid, { t: 'leaveSeat' })).toBeNull();
+      expect(player(host.pid)).toMatchObject({ isBot: true, away: true, connected: false });
+      expect(rooms.handle(rec, host.pid, { t: 'leaveSeat' })).toMatch(/already/);
+      // Manual picks are refused while the bot has the seat.
+      const v = rooms.view(rec, host.pid);
+      if (v.draft?.pack) expect(rooms.handle(rec, host.pid, { t: 'pick', cardId: v.draft.pack[0] })).toMatch(/bot is playing/);
+      for (let i = 0; i < 40 && picks(host.pid).length < 4; i++) step();
+      expect(picks(host.pid).length).toBeGreaterThanOrEqual(4); // the bot drafted for them
+      expect(rec.state.phase).toBe('drafting');
+      const botPicks = picks(host.pid).slice();
+
+      // Take the seat back and carry on by hand.
+      expect(rooms.handle(rec, host.pid, { t: 'takeSeat' })).toBeNull();
+      expect(player(host.pid)).toMatchObject({ isBot: false, connected: true });
+      expect(player(host.pid).away).toBeUndefined();
+      expect(picks(host.pid)).toEqual(botPicks);
+      for (let i = 0; i < 400 && rec.state.phase === 'drafting'; i++) {
+        step();
+        const hv = rooms.view(rec, host.pid);
+        if (hv.draft?.pack) expect(rooms.handle(rec, host.pid, { t: 'pick', cardId: hv.draft.pack[0] })).toBeNull();
+      }
+      expect(rec.state.phase).toBe('deckbuilding');
+      expect(rec.state.pools[host.pid]).toHaveLength(8);
+      expect(rec.state.pools[host.pid].slice(0, botPicks.length)).toEqual(botPicks);
+    });
+
+    it('a spectator can claim an away seat from a fresh browser', () => {
+      const { rooms, host, rec, player } = startDraft4();
+      const stranger = rooms.join(host.roomId, 'Max again')!;
+      expect(stranger.spectator).toBe(true);
+      expect(rooms.handle(rec, stranger.pid, { t: 'takeSeat', pid: host.pid })).toMatch(/not available/);
+      rooms.handle(rec, host.pid, { t: 'leaveSeat' });
+      expect(rooms.handle(rec, stranger.pid, { t: 'takeSeat', pid: host.pid })).toBeNull();
+      expect(player(host.pid).isBot).toBe(false);
+      expect(rec.tokens[stranger.token]).toBe(host.pid);
+      expect(rec.spectators[stranger.pid]).toBeUndefined();
+    });
+
+    it('cannot leave outside a draft or auction', () => {
+      const rooms = new Rooms();
+      const host = rooms.create('Test', 'Max');
+      const rec = rooms.rooms.get(host.roomId)!;
+      expect(rooms.handle(rec, host.pid, { t: 'leaveSeat' })).toMatch(/while drafting/);
+    });
+  });
 });

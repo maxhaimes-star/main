@@ -483,3 +483,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .hp-img { width: 100%; border-radius: 4.5% / 3.2%; box-shadow: 0 8px 30px #000e, 0 0 0 1px #000; }
 .hp-back { width: 55%; margin-top: 6px; border-radius: 4.5% / 3.2%; }
 .hp-extra { margin-top: 6px; background: #000e; color: var(--accent2); font-size: 12px; padding: 5px 8px; border-radius: 6px; }
+
+/* ---------- leaving mid-draft */
+.away-banner { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 8px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--accent); }
+.leave-seat { margin-left: auto; }
+.away-claim { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; align-items: center; }

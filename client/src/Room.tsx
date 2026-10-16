@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { RoomView } from '@ojb/shared';
 import { api, forgetSeat, loadSeat, saveSeat, type Send, useRoom } from './net.ts';
 import { Lobby } from './Lobby.tsx';
-import { Draft } from './Draft.tsx';
+import { AwayBanner, Draft } from './Draft.tsx';
 import { Auction } from './Auction.tsx';
 import { Deckbuilder } from './Deckbuilder.tsx';
 import { GameScreen } from './game/GameScreen.tsx';
@@ -67,7 +67,7 @@ export function Room({ roomId }: { roomId: string }) {
   const leave = myMatch ? (myMatch.winner ? () => setDismissed([...dismissed, myMatch.id]) : undefined) : () => setWatching(null);
   if (shownMatch) body = <GameScreen {...props} match={shownMatch} onLeave={leave} />;
   else if (view.phase === 'lobby') body = <Lobby {...props} />;
-  else if (view.phase === 'drafting') body = isPlayer ? <Draft {...props} /> : <Spectating view={view} />;
+  else if (view.phase === 'drafting') body = isPlayer ? <Draft {...props} /> : <Spectating view={view} send={send} />;
   else if (view.phase === 'auction') body = <Auction {...props} />;
   else body = <Deckbuilder {...props} onWatch={setWatching} />;
 
@@ -75,14 +75,26 @@ export function Room({ roomId }: { roomId: string }) {
     <div className="room">
       {!connected && <div className="banner warn">Reconnecting…</div>}
       {toast && <div className="toast">{toast}</div>}
+      {!shownMatch && <AwayBanner view={view} send={send} />}
       {body}
       {!shownMatch && <Chat view={view} send={send} />}
     </div>
   );
 }
 
-function Spectating({ view }: { view: RoomView }) {
-  return <div className="center-msg">You're watching. {view.players.length} players are drafting — you'll see their matches when they start playing.</div>;
+function Spectating({ view, send }: { view: RoomView; send: Send }) {
+  const away = view.players.filter((p) => p.away);
+  return (
+    <div className="center-msg">
+      You're watching. {view.players.length} players are drafting — you'll see their matches when they start playing.
+      {away.length > 0 && (
+        <div className="away-claim">
+          <p>Someone left and a bot is playing their seat. Were you one of them?</p>
+          {away.map((p) => <button key={p.id} onClick={() => send({ t: 'takeSeat', pid: p.id })}>Take over {p.name}'s seat</button>)}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export { saveSeat };

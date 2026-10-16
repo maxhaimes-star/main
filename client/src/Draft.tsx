@@ -3,6 +3,7 @@ import { BUCKET_ORDER, type CardData, colorBucket, multisetDiff } from '@ojb/sha
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
 import { useTick } from './net.ts';
+import { navigate } from './App.tsx';
 import { type SortMode, SortToggle, useSortMode } from './sort.tsx';
 
 export function Countdown({ deadline, skew, total }: { deadline: number | null; skew: number; total?: number }) {
@@ -75,12 +76,35 @@ export function Curve({ cards }: { cards: CardData[] }) {
   );
 }
 
+/** Leave mid-event: a bot takes the seat and the player can take it back from the banner (or the room link). */
+export function LeaveButton({ view, send, label = 'Leave draft' }: Pick<RoomProps, 'view' | 'send'> & { label?: string }) {
+  const me = view.players.find((p) => p.id === view.me);
+  if (!me || me.away || me.isBot) return null;
+  return (
+    <button className="link leave-seat" onClick={() => { if (confirm('Leave? A bot takes over your seat and the event carries on. You can rejoin from this page and take your seat back.')) send({ t: 'leaveSeat' }); }}>{label}</button>
+  );
+}
+
+/** Shown to a player whose seat a bot is playing, in any phase. */
+export function AwayBanner({ view, send }: Pick<RoomProps, 'view' | 'send'>) {
+  const me = view.players.find((p) => p.id === view.me);
+  if (!me?.away) return null;
+  return (
+    <div className="away-banner">
+      <span>You left — a bot is playing your seat{view.phase === 'drafting' ? ' and drafting for you' : ''}.</span>
+      <button className="primary" onClick={() => send({ t: 'takeSeat' })}>Take my seat back</button>
+      <button onClick={() => navigate('/')}>Home</button>
+    </div>
+  );
+}
+
 export function Draft({ view, send, skew }: RoomProps) {
   const d = view.draft!;
   const [sel, setSel] = useState<string | null>(null);
   const pick = (id: string) => { send({ t: 'pick', cardId: id }); setSel(null); };
   const setMain = (main: string[]) => send({ t: 'draftMain', main });
   const sideboard = multisetDiff(d.picks, d.main);
+  const away = !!view.players.find((p) => p.id === view.me)?.away;
   const players = view.players;
   const mySeat = players.find((p) => p.id === view.me)?.seat ?? 0;
   const packTotal = view.settings.pickTimer && d.pack ? Math.max(8, Math.round(view.settings.pickTimer * d.pack.length / view.settings.packSize)) * 1000 : undefined;
@@ -91,17 +115,20 @@ export function Draft({ view, send, skew }: RoomProps) {
         <div className="draft-head">
           <h2>Pack {d.round + 1}/{d.rounds} · Pick {d.pickNumber + 1}</h2>
           <span className="muted">Passing {d.direction === 1 ? 'left →' : '← right'}</span>
+          <LeaveButton view={view} send={send} />
           <Countdown deadline={d.deadline} skew={skew} total={packTotal} />
         </div>
         <div className="table-ring">
           {players.map((p) => (
             <div key={p.id} className={`seat ${p.seat === mySeat ? 'me' : ''} ${d.waiting[p.seat] ? 'busy' : ''}`} title={`${d.waiting[p.seat]} pack(s) waiting`}>
-              <span className={`dot ${p.connected ? 'on' : ''}`} />{p.name}
+              <span className={`dot ${p.connected ? 'on' : ''}`} />{p.name}{p.away ? ' (away · bot)' : ''}
               <span className="packs">{'▮'.repeat(Math.min(5, d.waiting[p.seat]))}</span>
             </div>
           ))}
         </div>
-        {d.pack ? (
+        {away ? (
+          <div className="center-msg">A bot is drafting for you. Take your seat back to keep picking yourself — your picks so far are below.</div>
+        ) : d.pack ? (
           <>
             <p className="muted"><span className="hide-touch">Click a card to select it, then click again (or double-click) to pick.</span><span className="show-touch">Tap a card to zoom in, then tap Pick.</span> {d.queued > 0 && <b>{d.queued} more pack(s) waiting for you.</b>}</p>
             <div className="card-grid">

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import {
   type ClientMsg, type DraftView, type Match, type MatchView, type Player, type RoomState, type RoomView,
-  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, setDraftMain, emptyDeck,
+  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, leaveSeat, reclaimSeat, setDraftMain, emptyDeck,
   finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, placeBid, skipCard, seatedPlayers, startAuction, startDraft,
   startSealed, viewFor, type Color, type RoomSettings, type Deck, startDraftWithPacks, startSealedWithPools,
   CONSTRUCTED_FORMATS, type CardPayload,
@@ -120,7 +120,8 @@ export class Rooms {
       }
       case 'backToLobby': {
         if (!isHost) return 'Only the host can do that';
-        s.players = s.players.filter((p) => !p.isBot).map((p, i) => ({ ...p, seat: i }));
+        // Humans who left mid-event come back as themselves; only real bots are dropped.
+        s.players = s.players.filter((p) => !p.isBot || p.away).map((p, i) => ({ ...p, isBot: false, away: undefined, seat: i }));
         s.phase = 'lobby';
         s.draft = null;
         s.auction = null;
@@ -132,9 +133,23 @@ export class Rooms {
       }
       case 'pick': {
         if (!me || s.phase !== 'drafting') return 'Not drafting';
+        if (me.away) return 'A bot is playing your seat — take it back first';
         const err = draftPick(s, me.seat, msg.cardId, now);
         if (!err) this.afterPools(s);
         return err;
+      }
+      case 'leaveSeat': {
+        if (!me) return 'You are not seated';
+        return leaveSeat(s, pid);
+      }
+      case 'takeSeat': {
+        if (me) return reclaimSeat(s, pid, now);
+        const target = s.players.find((p) => p.id === msg.pid);
+        if (!rec.spectators[pid] || !target?.away) return 'That seat is not available';
+        // The spectator's connection now speaks for the away player.
+        for (const [tok, owner] of Object.entries(rec.tokens)) if (owner === pid) rec.tokens[tok] = target.id;
+        delete rec.spectators[pid];
+        return reclaimSeat(s, target.id, now);
       }
       case 'draftMain': {
         if (!me || s.phase !== 'drafting') return 'Not drafting';
@@ -142,18 +157,22 @@ export class Rooms {
       }
       case 'nominate': {
         if (!me || s.phase !== 'auction') return 'No auction';
+        if (me.away) return 'A bot is playing your seat — take it back first';
         return nominate(s, pid, msg.cardId, now, msg.amount == null ? undefined : Math.floor(Number(msg.amount)));
       }
       case 'skipLot': {
         if (!me || s.phase !== 'auction') return 'No auction';
+        if (me.away) return 'A bot is playing your seat — take it back first';
         return skipCard(s, pid, msg.cardId, now);
       }
       case 'passLot': {
         if (!me || s.phase !== 'auction') return 'No auction';
+        if (me.away) return 'A bot is playing your seat — take it back first';
         return passLot(s, pid, now);
       }
       case 'bid': {
         if (!me || s.phase !== 'auction') return 'No auction';
+        if (me.away) return 'A bot is playing your seat — take it back first';
         return placeBid(s, pid, Math.floor(Number(msg.amount)), now);
       }
       case 'saveDeck': {

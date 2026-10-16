@@ -33,6 +33,10 @@ export type ClientMsg =
   | { t: 'game'; matchId: string; action: GameAction }
   | { t: 'sideboard'; matchId: string; main: string[]; side: string[] }
   | { t: 'readyNext'; matchId: string }
+  /** Leave mid-draft/auction: a bot takes over the seat until the player takes it back. */
+  | { t: 'leaveSeat' }
+  /** Take a seat back from the bot that is playing it. A spectator names the away player's seat (`pid`). */
+  | { t: 'takeSeat'; pid?: string }
   | { t: 'kick'; pid: string }
   | { t: 'chat'; text: string }
   | { t: 'backToLobby' };

@@ -22,7 +22,7 @@ function load() {
   try {
     const raw = JSON.parse(fs.readFileSync(storeFile, 'utf8')) as RoomRecord[];
     for (const rec of raw) {
-      for (const p of rec.state.players) p.connected = p.isBot;
+      for (const p of rec.state.players) p.connected = p.isBot && !p.away;
       rooms.rooms.set(rec.state.id, rec);
     }
     console.log(`Loaded ${raw.length} rooms`);
@@ -119,7 +119,12 @@ io.on('connection', (socket) => {
   socket.on('msg', (msg: ClientMsg, ack?: (r: { error: string | null }) => void) => {
     let error: string | null;
     try {
-      error = rooms.handle(auth.rec, auth.pid, msg);
+      // A spectator who takes over an away seat changes who this token speaks for.
+      const entry = sockets.get(socket.id);
+      const pid = auth.rec.tokens[token!] ?? auth.pid;
+      if (entry) entry.pid = pid;
+      error = rooms.handle(auth.rec, pid, msg);
+      if (entry) entry.pid = auth.rec.tokens[token!] ?? pid;
     } catch (e) {
       console.error(e);
       error = 'Server error: ' + (e as Error).message;

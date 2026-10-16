@@ -142,6 +142,37 @@ export function draftPick(room: RoomState, seat: number, cardId: string, now: nu
   return null;
 }
 
+/**
+ * A human leaves mid-draft (or mid-auction): a bot takes over their seat so the event carries on.
+ * The seat keeps the player's id, picks and pool, so they can take it back later with `reclaimSeat`.
+ */
+export function leaveSeat(room: RoomState, pid: string): string | null {
+  if (room.phase !== 'drafting' && room.phase !== 'auction') return 'You can only leave while drafting or in an auction';
+  const p = room.players.find((x) => x.id === pid);
+  if (!p) return 'You are not seated';
+  if (p.isBot) return 'A bot is already playing your seat';
+  p.isBot = true;
+  p.away = true;
+  p.connected = false;
+  return null;
+}
+
+/** An away player takes their seat back from the bot that was playing it. */
+export function reclaimSeat(room: RoomState, pid: string, now: number): string | null {
+  const p = room.players.find((x) => x.id === pid);
+  if (!p?.away) return 'That seat is not waiting for you';
+  p.isBot = false;
+  delete p.away;
+  p.connected = true;
+  const d = room.draft;
+  if (room.phase === 'drafting' && d && !d.done) {
+    // The bot may have left a pack in front of the seat; give the human a fresh timer for it.
+    d.deadlines[p.seat] = null;
+    armDeadline(room, p.seat, now);
+  }
+  return null;
+}
+
 /** The player in `seat` chooses which of their picks form the main deck; the rest is sideboard. */
 export function setDraftMain(room: RoomState, seat: number, main: string[]): string | null {
   const d = room.draft;

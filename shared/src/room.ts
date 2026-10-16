@@ -80,6 +80,8 @@ export interface Player {
   seat: number;
   isBot: boolean;
   connected: boolean;
+  /** A human who left mid-event: a bot (isBot is true) is playing their seat until they take it back. */
+  away?: boolean;
 }
 
 export interface Deck {
