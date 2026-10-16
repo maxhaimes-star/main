@@ -61,9 +61,11 @@ export function randomDeck(rng: Rng, pool: CardData[] = CUBE.cards, force: CardD
   const fits = (c: CardData) => c.colors.every((x) => colors.includes(x));
   const forced = force.filter((c) => !c.types.includes('Land') && fits(c));
   const spells = [...forced, ...shuffled(rng, pool.filter((c) => !c.types.includes('Land') && fits(c) && !forced.includes(c))).slice(0, 23 - forced.length)];
-  const lands = shuffled(rng, pool.filter((c) => c.types.includes('Land')
-    && (c.producedMana.length ? c.producedMana.some((m) => colors.includes(m as Color)) && c.producedMana.every((m) => colors.includes(m as Color) || m === 'C') : rng() < 0.3)))
-    .slice(0, 7);
+  // Forced lands (Triomes ...) always go in, whatever their colors.
+  const forcedLands = force.filter((c) => c.types.includes('Land'));
+  const lands = [...forcedLands, ...shuffled(rng, pool.filter((c) => c.types.includes('Land') && !forcedLands.includes(c)
+    && (c.producedMana.length ? c.producedMana.some((m) => colors.includes(m as Color)) && c.producedMana.every((m) => colors.includes(m as Color) || m === 'C') : rng() < 0.3)))]
+    .slice(0, Math.max(7, forcedLands.length));
   const deck = [...spells, ...lands].map((c) => c.id);
   while (deck.length < 40) deck.push(BASIC_ID[colors[deck.length % 2]]);
   return { deck, colors };
