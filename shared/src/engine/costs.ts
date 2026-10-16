@@ -8,7 +8,7 @@
  * (exile a blue card, return an Island, sacrifice two Mountains, delve) become Pending questions for the
  * caster while the spell waits on the stack.
  */
-import { parseManaSymbols } from '../cards.ts';
+import { type CardData, parseManaSymbols } from '../cards.ts';
 import { getCard } from '../cube.ts';
 import { cardName, faceOf, type Lookup, payFromPool } from '../game/rules.ts';
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
@@ -170,7 +170,23 @@ const KEYWORD_OPTIONS: Record<string, { id: string; label: string; zone?: string
   Bestow: { id: 'bestow', label: 'Bestow', flags: { bestowed: true }, note: 'Cast as an Aura (enchant creature); becomes a creature again if it becomes unattached' },
 };
 
+/**
+ * The faces of a card that can be cast (rule 711.2: a transforming double-faced card is cast front face up; a flip
+ * card likewise). Modal DFCs, adventurers and split cards: either face.
+ */
+export function castableFaces(data: Pick<CardData, 'layout' | 'faces'> | undefined): number[] {
+  if (!data?.faces || data.faces.length < 2) return [0];
+  return ['modal_dfc', 'adventure', 'split'].includes(data.layout) ? data.faces.map((_f, i) => i) : [0];
+}
+
+/** Can this face of the card be cast (face undefined = the card as a whole)? */
+export function faceCastable(c: CardInstance, face: number | undefined, lookup: Lookup): boolean {
+  if (face == null || face === 0 || !c.cardId) return true;
+  return castableFaces(lookup(c.cardId)).includes(face);
+}
+
 function optionDefs(state: GameState, c: CardInstance, pid: string, face: number | undefined, lookup: Lookup, x: number): OptionDef[] {
+  if (!faceCastable(c, face, lookup)) return [];
   const name = cardName(c, lookup);
   const base = printedCost(c, face, lookup);
   const script = c.cardId ? getScript(c.cardId)?.[face ?? 0] : undefined;
@@ -273,6 +289,7 @@ export function planCast(state: GameState, c: CardInstance, pid: string, a: Cast
     const restricted = castRestriction(state, c.iid, pid, ctx.lookup);
     if (restricted) return { error: `${restricted} (cast with force to override)` };
   }
+  if (!a.faceDown && !faceCastable(c, a.face, ctx.lookup)) return { error: `The back face of ${cardName(c, ctx.lookup)} can't be cast` };
   const x = a.x ?? 0;
   if (a.faceDown) return { plan: { def: { id: 'faceDown', label: 'Face down', mana: '{3}', parts: [], flags: {}, delve: false }, mana: '{3}', parts: [], kicked: false, x } };
   const defs = optionDefs(state, c, pid, a.face, ctx.lookup, x);

@@ -1,5 +1,5 @@
 import {
-  activatedAbilities, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
+  activatedAbilities, castableFaces, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
@@ -107,7 +107,7 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     const face = faceOf(vis, getCard);
     const card = vis.cardId ? getCard(vis.cardId) : undefined;
     if (face.types.includes('Land') && !(card?.layout === 'modal_dfc')) { act({ t: 'playLand', iid }); return; }
-    if (card?.faces || /\{X\}/.test(face.manaCost)) { open(menu(iid), face.name); return; }
+    if ((card?.faces && castableFaces(card).length > 1) || /\{X\}/.test(face.manaCost)) { open(menu(iid), face.name); return; }
     castWithX(base, iid);
     return;
   }
@@ -398,8 +398,9 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     if (isLand && c.owner === me) items.push(blocked ? { label: 'Play land', disabled: true, hint: blocked } : { label: 'Play land', onClick: () => act({ t: 'playLand', iid }) });
     const castItem = (it: MenuItem): MenuItem => (blocked ? { label: it.label, disabled: true, hint: blocked } : it);
     if (offerCast && (!isLand || card?.layout === 'modal_dfc')) {
-      if (card?.faces && card.layout !== 'normal') {
-        for (const fi of [0, 1]) {
+      // Transforming / flip cards are cast front face up (rule 711.2): only the faces that can be cast.
+      if (card?.faces && castableFaces(card).length > 1) {
+        for (const fi of castableFaces(card)) {
           items.push(castItem({ label: `Cast ${card.faces[fi].name}`, hint: hintOf(card.faces[fi].manaCost, c.cardId, fi, effCost(g, iid, fi, me)), onClick: () => castWithX(base, iid, fi) }));
           if (manual && safeSpell(c.cardId, fi)) items.push({ label: `Cast ${card.faces[fi].name} (resolve by hand)`, onClick: () => castWithX(base, iid, fi, true) });
         }
