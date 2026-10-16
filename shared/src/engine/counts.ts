@@ -2,7 +2,8 @@
  * Forge counting variables and named conditions that need game state:
  * Count$Revolt / Kicked / Delirium / Threshold / Metalcraft / Hellbent (".A.B" = A if true else B),
  * Count$Converge, Count$TimesKicked, Count$Valid <expr> (and ValidGraveyard / ValidHand / ValidLibrary / ValidExile),
- * Count$Domain, Count$YourStartingLife, Count$CardCounters.<type>, with /Plus.N /Minus.N /Times.N /Twice /HalfUp /HalfDown.
+ * Count$Domain, Count$YourStartingLife, Count$CardCounters.<type>, Count$ThisTurnEntered_<To>[_from_<From>]_<Valid>,
+ * Count$LeftGraveyardThisTurn <Valid>, with /Plus.N /Minus.N /Times.N /Twice /HalfUp /HalfDown.
  * And Condition$ Kicked / PlayerTurn / NotPlayerTurn / Delirium / Threshold / Metalcraft / Revolt / Hellbent.
  */
 import { faceOf, type Lookup } from '../game/rules.ts';
@@ -11,7 +12,7 @@ import { isHidden, type ViewCard } from '../game/types.ts';
 import { matchCard } from './targets.ts';
 
 /** Enough state to count things (works on GameState; on a GameView hidden cards are skipped). */
-export type CountState = Pick<GameState, 'players' | 'battlefield' | 'turn' | 'activePlayer'> & { cards: Record<string, CardInstance | ViewCard>; turnInfo?: GameState['turnInfo'] };
+export type CountState = Pick<GameState, 'players' | 'battlefield' | 'turn' | 'activePlayer'> & { cards: Record<string, CardInstance | ViewCard>; turnInfo?: GameState['turnInfo']; turnStats?: GameState['turnStats'] };
 
 export interface CountEnv {
   state: CountState;
@@ -47,6 +48,7 @@ export function supportedCount(v: string): boolean {
   if (new RegExp(`^(${FLAGS.join('|')})\\.-?\\d+\\.-?\\d+$`).test(body)) return true;
   if (/^(Converge|TimesKicked|Domain|YourStartingLife)$/.test(body)) return true;
   if (/^CardCounters\.\w+$/.test(body)) return true;
+  if (/^ThisTurnEntered_[A-Za-z]+(_from_[A-Za-z]+)?_\S+$/.test(body) || /^LeftGraveyardThisTurn \S+$/.test(body)) return true;
   if (/^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) \S+$/.test(body)) return true;
   if (/^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) [^\s$]+\$CardTypes$/.test(body)) return true;
   return false;
@@ -119,6 +121,23 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     const types = new Set<string>();
     for (const c of mine(s, env.controller)) { const tl = faceOf(c, env.lookup).typeLine; for (const b of BASIC) if (tl.includes(b)) types.add(b); }
     n = types.size;
+  } else if ((m = /^ThisTurnEntered_([A-Za-z]+)(?:_from_([A-Za-z]+))?_(\S+)$/.exec(body)) || (m = /^LeftGraveyardThisTurn (\S+)$/.exec(body))) {
+    // Zone changes this turn (GameState.turnStats.moves; unknown on a client view, which doesn't have them).
+    if (!('history' in s)) return undefined; // a GameView: no move history
+    const moves = s.turnStats?.moves;
+    const left = body.startsWith('Left');
+    const to = left ? undefined : m[1].toLowerCase();
+    const from = left ? 'graveyard' : m[2]?.toLowerCase();
+    const valid = left ? m[1] : m[3];
+    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
+    let count = 0;
+    for (const mv of moves ?? []) {
+      if ((to && mv.to !== to) || (from && mv.from !== from) || (left && mv.to === 'graveyard')) continue;
+      const r = matchCard(mv.snap, valid, menv);
+      if (r === 'unknown') return undefined;
+      if (r) count++;
+    }
+    n = count;
   } else if ((m = /^CardCounters\.(\w+)$/.exec(body))) {
     const src = env.sourceIid ? s.cards[env.sourceIid] : undefined;
     const kind = m[1].toUpperCase() === 'P1P1' ? '+1/+1' : m[1].toUpperCase() === 'M1M1' ? '-1/-1' : m[1].toLowerCase();

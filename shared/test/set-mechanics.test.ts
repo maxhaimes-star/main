@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard, registerCards } from '../src/cube.ts';
 import {
-  abilitiesOfInstance, applyAction, createGame, type CardData, type Ctx, type GameAction, type GameState, moveCard,
+  abilitiesOfInstance, applyAction, createGame, type CardData, type Ctx, evalCount, type GameAction, type GameState, moveCard, viewFor,
 } from '../src/index.ts';
 import { registerScripts } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
@@ -175,6 +175,55 @@ describe('SpellCast triggers with TargetsValid', () => {
     resolveAll(g, ctx);
     expect(g.cards[h].counters['+1/+1']).toBe(1);
     expect(g.cards[h].damage).toBe(3);
+    expect(logText(g)).not.toMatch(/Check by hand/);
+  });
+});
+
+describe('this-turn zone changes (Count$ThisTurnEntered_..., Count$LeftGraveyardThisTurn)', () => {
+  const wake: CardData = {
+    ...base, id: 'test_wake', name: 'Test Wake', manaCost: '{2}', colors: [], typeLine: 'Artifact', types: ['Artifact'],
+    oracle: 'At the beginning of your end step, if two or more creatures died this turn, draw a card.',
+  } as unknown as CardData;
+  registerCards([wake]);
+  registerScripts({
+    test_wake: [{
+      name: 'Test Wake', abilities: [], statics: [], replacements: [], keywords: [],
+      triggers: ['Mode$ Phase | Phase$ End of Turn | ValidPlayer$ You | TriggerZones$ Battlefield | CheckSVar$ X | SVarCompare$ GE2 | Execute$ TrigDraw | TriggerDescription$ At the beginning of your end step, if two or more creatures died this turn, draw a card.'],
+      svars: { TrigDraw: 'DB$ Draw | NumCards$ 1', X: 'Count$ThisTurnEntered_Graveyard_from_Battlefield_Creature' },
+    }],
+  } as never);
+
+  it('counts creatures that died this turn and cards that left a graveyard', () => {
+    const { g, ctx } = setup(['test_wake', 'goblin_guide', 'monastery_swiftspear', 'lightning_bolt']);
+    const c1 = put(g, ctx, 'goblin_guide');
+    const c2 = put(g, ctx, 'monastery_swiftspear');
+    const env = { state: g, lookup: getCard, controller: 'a' };
+    expect(evalCount('Count$ThisTurnEntered_Graveyard_from_Battlefield_Creature', env)).toBe(0);
+    moveCard(g, ctx, c1, 'graveyard');
+    expect(evalCount('Count$ThisTurnEntered_Graveyard_from_Battlefield_Creature', env)).toBe(1);
+    const bolt = toHand(g, ctx, 'lightning_bolt');
+    moveCard(g, ctx, bolt, 'graveyard'); // not from the battlefield
+    expect(evalCount('Count$ThisTurnEntered_Graveyard_from_Battlefield_Creature', env)).toBe(1);
+    expect(evalCount('Count$ThisTurnEntered_Graveyard_Card', env)).toBe(2);
+    expect(evalCount('Count$LeftGraveyardThisTurn Card.YouOwn', env)).toBe(0);
+    moveCard(g, ctx, bolt, 'exile');
+    expect(evalCount('Count$LeftGraveyardThisTurn Card.YouOwn', env)).toBe(1);
+    // a client view has no move history: unknown
+    expect(evalCount('Count$LeftGraveyardThisTurn Card.YouOwn', { ...env, state: viewFor(g, 'a') as never })).toBeUndefined();
+    void c2;
+  });
+
+  it('end step trigger: "if two or more creatures died this turn"', () => {
+    const { g, ctx } = setup(['test_wake', 'goblin_guide', 'monastery_swiftspear']);
+    put(g, ctx, 'test_wake');
+    const c1 = put(g, ctx, 'goblin_guide');
+    const c2 = put(g, ctx, 'monastery_swiftspear');
+    moveCard(g, ctx, c1, 'graveyard');
+    moveCard(g, ctx, c2, 'graveyard');
+    const hand = me(g).zones.hand.length;
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'end' });
+    resolveAll(g, ctx);
+    expect(me(g).zones.hand.length).toBe(hand + 1);
     expect(logText(g)).not.toMatch(/Check by hand/);
   });
 });

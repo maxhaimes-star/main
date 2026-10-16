@@ -34,6 +34,11 @@ export function addEffect(state: GameState, ctx: Ctx, e: NewEffect) {
 
 /** Called by moveCard before anything moves. Returns the (possibly replaced) destination. */
 export function beforeMove(state: GameState, inst: CardInstance, to: Zone): Zone {
+  // This turn's public zone changes ("if two or more creatures died this turn", "if a card left your graveyard").
+  const hidden = (z: Zone) => z === 'hand' || z === 'library' || z === 'sideboard';
+  if (state.phase === 'playing' && inst.zone !== to && !(hidden(inst.zone) && hidden(to)) && !inst.faceDown) {
+    ((state.turnStats ??= { cast: {}, drawn: {} }).moves ??= []).push({ from: inst.zone, to, snap: JSON.parse(JSON.stringify(inst)) as CardInstance });
+  }
   if (inst.zone === 'battlefield' && to !== 'battlefield') {
     const ti = turnInfo(state);
     if (!ti.leftBattlefield.includes(inst.controller)) ti.leftBattlefield.push(inst.controller);

@@ -171,7 +171,11 @@ export interface GameState {
   /** Stage 2, engine-internal: objects a permanent's abilities remembered (source iid -> iids). */
   remembered?: Record<string, string[]>;
   /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
-  turnStats?: { cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number> };
+  turnStats?: {
+    cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number>;
+    /** Public zone changes this turn, with the card as it was (Count$ThisTurnEntered_..., Count$LeftGraveyardThisTurn). */
+    moves?: { from: Zone; to: Zone; snap: CardInstance }[];
+  };
   /** Whole-game counters: spells each player cast this game (Count$YouCastThisGame: Once Upon a Time). */
   gameStats?: { cast: Record<string, number> };
   /** Extra turns (engine/turns.ts): player ids, the LAST one is taken next ("after this one" stacks LIFO). */
