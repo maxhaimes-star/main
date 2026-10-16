@@ -400,3 +400,34 @@ describe('9: Vicious Rivalry (additional cost: pay X life)', () => {
     expect(applyAction(g, 'a', { t: 'cast', iid: vr, x: 5 }, ctx)).toMatch(/life/i);
   });
 });
+
+describe('10: attacking planeswalkers', () => {
+  it("an attacker attacks the opponent's planeswalker; combat damage removes loyalty", () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'narset_parter_of_veils'], ['narset_parter_of_veils']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const mine = put(g, ctx, 'a', 'narset_parter_of_veils');
+    const pw = put(g, ctx, 'b', 'narset_parter_of_veils');
+    expect(g.cards[pw].counters.loyalty).toBe(5);
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    expect(applyAction(g, 'a', { t: 'declareAttacker', iid: nadu, target: mine }, ctx)).toMatch(/own planeswalker/);
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: nadu, target: pw });
+    expect(viewFor(g, 'b').cards[nadu].attacking).toBe(pw);
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 20 && g.step !== 'main2'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    expect(g.cards[pw].counters.loyalty).toBe(2); // Nadu is a 3/4
+    expect(g.players[1].life).toBe(20);
+  });
+
+  it('lethal damage to the planeswalker puts it into the graveyard', () => {
+    const { g, ctx } = setup(['broadside_bombardiers', 'nadu_winged_wisdom'], ['narset_parter_of_veils']);
+    const a1 = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const a2 = put(g, ctx, 'a', 'broadside_bombardiers');
+    const pw = put(g, ctx, 'b', 'narset_parter_of_veils');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: a1, target: pw });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: a2, target: pw });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 20 && g.step !== 'main2'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    expect(g.cards[pw].zone).toBe('graveyard');
+  });
+});

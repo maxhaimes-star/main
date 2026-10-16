@@ -54,7 +54,15 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     // Combat declarations
     if (g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && vis && faceOf(vis, getCard).types.includes('Creature')) {
       if (isStrict(g) && !c.attacking && (c.tapped || summoningSickNoHaste(g, iid))) { base.toast?.(c.tapped ? 'Tapped creatures cannot attack' : 'Summoning sick: cannot attack'); return; }
-      act({ t: 'declareAttacker', iid, target: c.attacking ? null : base.opp });
+      if (c.attacking) { act({ t: 'declareAttacker', iid, target: null }); return; }
+      // The opponent's planeswalkers can be attacked too: ask which.
+      const pws = g.battlefield.filter((id) => { const x = visible(g, id); return !!x && x.controller !== me && faceOf(x, getCard).types.includes('Planeswalker'); });
+      if (!pws.length || !base.opp) { act({ t: 'declareAttacker', iid, target: base.opp }); return; }
+      const oppName = g.players.find((p) => p.pid === base.opp)?.name ?? 'Opponent';
+      void base.pickOption('Attack whom?', [
+        { value: base.opp, label: oppName, detail: 'Attack the player' },
+        ...pws.map((pw) => { const x = visible(g, pw)!; return { value: pw, label: faceOf(x, getCard).name, detail: `Planeswalker — loyalty ${x.counters.loyalty ?? 0}` }; }),
+      ]).then((target) => { if (target) act({ t: 'declareAttacker', iid, target }); });
       return;
     }
     if (g.step === 'blockers' && g.activePlayer !== me && !g.combat.blockersDeclared && c.controller === me) {
