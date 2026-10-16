@@ -343,3 +343,6 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 .lay-portrait .pool-pip, .lay-landscape .pool-pip { min-width: 20px; height: 20px; font-size: 11px; }
 .lay-portrait .pool-chip .mp-label, .lay-landscape .pool-chip .mp-label { display: none; }
+
+.lay-portrait .table-side .stops-editor, .lay-landscape .table-side .stops-editor { flex: 1 1 100%; font-size: 14px; }
+.lay-portrait .se-row, .lay-landscape .se-row { min-height: 36px; }

@@ -433,7 +433,9 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .phase.past { color: #5d6678; }
 .phase.current { background: var(--gold); color: #111; font-weight: 800; }
 .phase.current.theirs { background: #c25d5d; color: #fff; }
-.stop-dot { position: absolute; top: -1px; right: -1px; width: 7px; height: 7px; border-radius: 50%; background: var(--bad); border: 1px solid #000; }
+.stop-dot { position: absolute; width: 7px; height: 7px; border-radius: 50%; border: 1px solid #000; }
+.stop-dot.own { bottom: -2px; right: -1px; background: var(--gold); }
+.stop-dot.opp { top: -2px; right: -1px; background: var(--bad); }
 .auto-toggles { display: flex; align-items: center; gap: 10px; font-size: 12px; justify-content: flex-end; }
 .auto-toggles + .side-toggle, .center-bar > .side-toggle { margin-left: 0; }
 .auto-toggles .tgl { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; margin: 0; cursor: pointer; color: var(--muted); user-select: none; }
@@ -503,3 +505,15 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .pool-chip { display: inline-flex; align-items: center; gap: 4px; background: #0d1117ee; border: 1px solid var(--gold); border-radius: 999px; padding: 2px 8px; }
 .pool-chip.theirs { border-color: #c25d5d; }
 .pool-chip.theirs .mp-label { color: #e29a9a; }
+
+/* stops / settings popover */
+.stops-pop { position: fixed; z-index: 205; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; box-shadow: 0 8px 30px #000a; display: flex; flex-direction: column; gap: 6px; font-size: 13px; max-height: calc(100vh - 12px); overflow: auto; width: max-content; max-width: calc(100vw - 12px); }
+.stops-pop .tgl { display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
+.stops-editor { display: flex; flex-direction: column; gap: 1px; }
+.se-head, .se-row { display: grid; grid-template-columns: 1fr 70px 70px; align-items: center; gap: 4px; }
+.se-head { font-size: 11px; font-weight: 700; color: var(--gold); text-transform: uppercase; padding-bottom: 2px; border-bottom: 1px solid var(--line); }
+.se-head span + span, .se-cell { text-align: center; justify-self: center; }
+.se-cell { margin: 0; cursor: pointer; }
+.se-row:hover { background: var(--bg3); }
+.se-foot { display: flex; gap: 6px; margin-top: 4px; }
+.se-note { margin: 2px 0 0; max-width: 240px; }

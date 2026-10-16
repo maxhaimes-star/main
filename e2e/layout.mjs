@@ -110,11 +110,12 @@ for (const [w, h] of VIEWPORTS) {
     ['land', async () => { const c = A.locator('.player-area.bottom .bf-row.lands .tcard').last(); await c.locator('.dots').click({ force: true }); }],
     ['more', async () => { const b = A.locator('.priority .more-btn, .my-tools button:has-text("More")').first(); await b.click(); }],
     ['help', async () => { const b = A.locator('.sub-actions button:has-text("?")'); if (await b.count()) await b.click(); }],
+    ['stops', async () => { const b = A.locator('.settings-btn'); if (await b.count()) await b.click(); }],
   ];
   for (const [label, open] of openers) {
     try { await open(); } catch { continue; }
     await A.waitForTimeout(150);
-    if (!(await A.locator('.ctx-menu').count())) continue;
+    if (!(await A.locator('.ctx-menu, .stops-pop').count())) continue;
     for (const p of await A.evaluate(menuProblems)) fail(`${w}x${h} ${label} menu: ${p}`);
     const subs = A.locator('.ctx-menu .ctx-item.has-sub');
     if (await subs.count()) {
@@ -123,7 +124,7 @@ for (const [w, h] of VIEWPORTS) {
       if (!(await A.locator('.ctx-sub').count())) fail(`${w}x${h} ${label}: submenu did not open on click`);
       for (const p of await A.evaluate(menuProblems)) fail(`${w}x${h} ${label} submenu: ${p}`);
     }
-    if (label === 'land' && !phone) await shot(A, `layout-menu-${w}x${h}`);
+    if ((label === 'land' || label === 'stops') && !phone) await shot(A, `layout-${label}-${w}x${h}`);
     await A.keyboard.press('Escape');
     await A.waitForTimeout(100);
   }

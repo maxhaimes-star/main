@@ -76,6 +76,32 @@ export function topYieldName(g: GameView): string | undefined {
 
 const QUIET_STEPS: Step[] = ['upkeep', 'draw', 'beginCombat', 'endCombat', 'end'];
 
+/** My stop list for the current turn type (my turn → stops.own, opponent's turn → stops.opp). */
+export function stopsNow(g: GameView, me: string): Step[] {
+  const p = g.players.find((x) => x.pid === me);
+  if (!p) return [];
+  return g.activePlayer === me ? p.stops.own : p.stops.opp;
+}
+
+/**
+ * Why the client would pass priority for me right now ('' = it must not). A stop on the current step always holds the
+ * priority with an empty stack, whatever Auto-pass says; yields only skip triggers/abilities whose source I named.
+ */
+export function autoPassReason(g: GameView, me: string, settings: AutoSettings, respond: () => boolean): string {
+  if (settings.fullControl) return '';
+  if (g.phase !== 'playing' || g.priority !== me || g.pending?.length) return '';
+  const top = g.stack[g.stack.length - 1];
+  if (top) {
+    const yn = topYieldName(g);
+    if (yn && settings.yields.includes(yn)) return 'yield';
+    if (settings.autoPass && top.controller !== me && !respond()) return 'nothing to respond with';
+    return '';
+  }
+  if (stopsNow(g, me).includes(g.step)) return ''; // the player asked to stop here
+  if (settings.autoPass && QUIET_STEPS.includes(g.step) && !respond()) return 'quiet step';
+  return '';
+}
+
 /** Sends 'pass' for me when Arena would skip the stop. At most once per (seq, priority). */
 export function useAutoPass(opts: {
   g: GameView; me: string | null; act: (a: GameAction) => Promise<string | null>; settings: AutoSettings; busy: boolean; controlled: boolean;
@@ -83,19 +109,10 @@ export function useAutoPass(opts: {
   const { g, me, act, settings, busy, controlled } = opts;
   const last = useRef('');
   useEffect(() => {
-    if (!me || busy || controlled || settings.fullControl) return;
-    if (g.phase !== 'playing' || g.priority !== me) return;
-    if (g.pending?.length) return;
+    if (!me || busy || controlled) return;
     const key = `${g.seq}:${g.priority}`;
     if (last.current === key) return;
-    let why = '';
-    const top = g.stack[g.stack.length - 1];
-    if (top) {
-      const yn = topYieldName(g);
-      if (yn && settings.yields.includes(yn)) why = 'yield';
-      else if (settings.autoPass && top.controller !== me && !canRespond(g, me)) why = 'nothing to respond with';
-    } else if (settings.autoPass && QUIET_STEPS.includes(g.step) && !canRespond(g, me)) why = 'quiet step';
-    if (!why) return;
+    if (!autoPassReason(g, me, settings, () => canRespond(g, me))) return;
     const t = setTimeout(() => { last.current = key; void act({ t: 'pass' }); }, 200);
     return () => clearTimeout(t);
   }, [g, me, act, settings, busy, controlled]);

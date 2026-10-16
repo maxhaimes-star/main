@@ -7,7 +7,7 @@ import { backFaceOf, CardBack, CardImage, cardFace, getCard, HoverPreview, setHo
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 import { hideSheet, showSheet } from '../sheet.tsx';
 import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
-import { Ctx, ContextMenu, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, type PickOption } from './ui.tsx';
+import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
@@ -267,7 +267,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
               <button className="side-close" onClick={() => setLogOpen(false)}>Close ✕</button>
             </div>
           )}
-          {phone && me && g.phase === 'playing' && <AutoToggles auto={auto} setAuto={setAuto} />}
+          {phone && me && g.phase === 'playing' && <AutoToggles auto={auto} setAuto={setAuto} inline />}
           {phone && mePlayer && <MyTools p={mePlayer} />}
           <ActiveEffects />
           <GameLog />
@@ -667,13 +667,18 @@ function CenterBar({ match, onLeave, auto, setAuto, phone, onLog, children }: { 
       <div className="phases" ref={phasesRef}>
         {PHASE_STEPS.map((s) => {
           const own = myTurn;
-          const stopped = mePlayer ? (own ? mePlayer.stops.own : mePlayer.stops.opp).includes(s) : false;
+          const ownStop = !!mePlayer?.stops.own.includes(s);
+          const oppStop = !!mePlayer?.stops.opp.includes(s);
+          const tip = `${myTurn ? 'Click to skip ahead to this step. ' : ''}Right-click: toggle your stop for ${myTurn ? 'your' : "your opponent's"} turns.`
+            + ` Stops: ${ownStop ? 'your turn' : ''}${ownStop && oppStop ? ' + ' : ''}${oppStop ? "opponent's turn" : ''}${!ownStop && !oppStop ? 'none' : ''}.`;
           return (
             <div key={s} className={`phase ${g.step === s ? 'current' : ''} ${STEPS.indexOf(s) < STEPS.indexOf(g.step) ? 'past' : ''} ${myTurn ? 'mine' : 'theirs'}`}
-              title={myTurn ? 'Click to skip ahead to this step. Right-click: toggle your stop.' : 'Right-click: toggle your stop on opponent turns.'}
+              title={tip} data-step={s}
               onClick={() => myTurn && STEPS.indexOf(s) > STEPS.indexOf(g.step) && act({ t: 'gotoStep', step: s })}
               onContextMenu={(e) => { e.preventDefault(); toggleStop(s, own); }}>
-              {STEP_LABELS[s]}{stopped && <span className="stop-dot" />}
+              {STEP_LABELS[s]}
+              {ownStop && <span className="stop-dot own" />}
+              {oppStop && <span className="stop-dot opp" />}
             </div>
           );
         })}
@@ -686,11 +691,78 @@ function CenterBar({ match, onLeave, auto, setAuto, phone, onLog, children }: { 
   );
 }
 
-/** Auto-pass / full control switches (in the phase bar on desktop, in the game menu on phones). */
-function AutoToggles({ auto, setAuto }: { auto: AutoSettings; setAuto: (p: Partial<AutoSettings>) => void }) {
+/** Toggle one stop: `own` = on my turns, otherwise on the opponent's turns. */
+function useStops() {
   const { g, me, act } = useGame();
   const mePlayer = g.players.find((p) => p.pid === me);
+  const toggle = (s: Step, own: boolean) => {
+    if (!mePlayer) return;
+    const list = own ? mePlayer.stops.own : mePlayer.stops.opp;
+    const next = list.includes(s) ? list.filter((x) => x !== s) : [...list, s];
+    act({ t: 'setStops', own: own ? next : mePlayer.stops.own, opp: own ? mePlayer.stops.opp : next });
+  };
+  return { stops: mePlayer?.stops, toggle, set: (own: Step[], opp: Step[]) => act({ t: 'setStops', own, opp }) };
+}
+
+/** Arena-style stops: one row per step, a column for my turns and one for the opponent's. */
+function StopsEditor() {
+  const { stops, toggle, set } = useStops();
+  if (!stops) return null;
+  return (
+    <div className="stops-editor">
+      <div className="se-head"><span>Stop at</span><span>My turn</span><span>Their turn</span></div>
+      {PHASE_STEPS.map((s) => (
+        <div key={s} className="se-row">
+          <span>{STEP_LABELS[s]}</span>
+          <label className="se-cell"><input type="checkbox" aria-label={`Stop at ${STEP_LABELS[s]} on my turn`} checked={stops.own.includes(s)} onChange={() => toggle(s, true)} /></label>
+          <label className="se-cell"><input type="checkbox" aria-label={`Stop at ${STEP_LABELS[s]} on the opponent's turn`} checked={stops.opp.includes(s)} onChange={() => toggle(s, false)} /></label>
+        </div>
+      ))}
+      <div className="se-foot">
+        <button className="tiny" onClick={() => set(['main1', 'main2'], ['end'])}>Defaults</button>
+        <button className="tiny" onClick={() => set([], [])}>Clear</button>
+      </div>
+      <p className="muted small se-note">Your main phase 1 and combat decisions always stop. A stop holds even with Auto-pass on.</p>
+    </div>
+  );
+}
+
+/** Settings popover from the phase bar: full control, hover zoom, stops, yields. Clamped to the viewport. */
+function SettingsPopover({ anchor, onClose, auto, setAuto, setFullControl }: {
+  anchor: DOMRect; onClose: () => void; auto: AutoSettings; setAuto: (p: Partial<AutoSettings>) => void; setFullControl: (on: boolean) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const pos = useClamped(ref, (w, h) => placeBeside(anchor, w, h, true), anchor);
   const zoom = useHoverZoom();
+  useEffect(() => {
+    const close = (e: Event) => { const t = e.target as HTMLElement; if (!ref.current?.contains(t) && !t.closest?.('.settings-btn')) onClose(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('mousedown', close);
+    window.addEventListener('keydown', esc);
+    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('keydown', esc); };
+  }, [onClose]);
+  return (
+    <div ref={ref} className="stops-pop" style={clampedStyle(pos)}>
+      <label className={`tgl ${auto.fullControl ? 'on' : ''}`} title="Stop at every step and never auto-pass">
+        <input type="checkbox" checked={auto.fullControl} onChange={(e) => setFullControl(e.target.checked)} /> Full control
+      </label>
+      <label className={`tgl ${zoom ? 'on' : ''}`} title="Show a large picture of the card under the mouse">
+        <input type="checkbox" checked={zoom} onChange={(e) => setHoverZoom(e.target.checked)} /> Zoom cards on hover
+      </label>
+      {auto.yields.length > 0 && (
+        <button className="tiny" title={`Auto-yielding to: ${auto.yields.join(', ')}`} onClick={() => setAuto({ yields: [] })}>Clear yields ({auto.yields.length})</button>
+      )}
+      <StopsEditor />
+    </div>
+  );
+}
+
+/** Auto-pass / full control switches (in the phase bar on desktop, in the game menu on phones). */
+function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (p: Partial<AutoSettings>) => void; inline?: boolean }) {
+  const { g, me, act } = useGame();
+  const mePlayer = g.players.find((p) => p.pid === me);
+  const [pop, setPop] = useState<DOMRect | null>(null);
+  const closePop = useCallback(() => setPop(null), []);
   // Full control: stop at every step; turning it off restores the previous stops.
   const setFullControl = (on: boolean) => {
     setAuto({ fullControl: on });
@@ -706,22 +778,30 @@ function AutoToggles({ auto, setAuto }: { auto: AutoSettings; setAuto: (p: Parti
       }
     } catch { /* ignore */ }
   };
+  const autoPass = (
+    <label className={`tgl ${auto.autoPass && !auto.fullControl ? 'on' : ''}`} title="Pass priority automatically when you have nothing to respond with (never skips your stops, main phases or combat decisions)">
+      <input type="checkbox" checked={auto.autoPass} onChange={(e) => setAuto({ autoPass: e.target.checked })} /> Auto-pass
+    </label>
+  );
+  if (inline) {
+    return (
+      <div className="auto-toggles">
+        {autoPass}
+        <label className={`tgl ${auto.fullControl ? 'on' : ''}`} title="Stop at every step and never auto-pass">
+          <input type="checkbox" checked={auto.fullControl} onChange={(e) => setFullControl(e.target.checked)} /> Full control
+        </label>
+        {auto.yields.length > 0 && <button className="tiny" onClick={() => setAuto({ yields: [] })}>Clear yields ({auto.yields.length})</button>}
+        <StopsEditor />
+      </div>
+    );
+  }
   return (
     <div className="auto-toggles">
-      <label className={`tgl ${auto.autoPass && !auto.fullControl ? 'on' : ''}`} title="Pass priority automatically when you have nothing to respond with (never skips your main phases or combat decisions)">
-        <input type="checkbox" checked={auto.autoPass} onChange={(e) => setAuto({ autoPass: e.target.checked })} /> Auto-pass
-      </label>
-      <label className={`tgl ${auto.fullControl ? 'on' : ''}`} title="Stop at every step and never auto-pass">
-        <input type="checkbox" checked={auto.fullControl} onChange={(e) => setFullControl(e.target.checked)} /> Full control
-      </label>
-      {!isTouch() && (
-        <label className={`tgl ${zoom ? 'on' : ''}`} title="Show a large picture of the card under the mouse">
-          <input type="checkbox" checked={zoom} onChange={(e) => setHoverZoom(e.target.checked)} /> Zoom
-        </label>
-      )}
-      {auto.yields.length > 0 && (
-        <button className="tiny" title={`Auto-yielding to: ${auto.yields.join(', ')} (click to clear)`} onClick={() => setAuto({ yields: [] })}>Yields ({auto.yields.length}) ✕</button>
-      )}
+      {autoPass}
+      {auto.fullControl && <span className="tgl on" title="Full control is on">Full control</span>}
+      <button className={`tiny settings-btn ${pop ? 'sel' : ''}`} title="Stops (my turn / opponent's turn), full control, hover zoom"
+        onClick={(e) => setPop(pop ? null : e.currentTarget.getBoundingClientRect())}>Stops ▾</button>
+      {pop && <SettingsPopover anchor={pop} onClose={closePop} auto={auto} setAuto={setAuto} setFullControl={setFullControl} />}
     </div>
   );
 }
@@ -779,7 +859,7 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
           {!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) && <button className="tiny" title="Ask your opponent to let you fix the board by hand" onClick={() => act({ t: 'requestFixMode' } as never)}>Fix board</button>}
           <button className="tiny" disabled={!g.canUndo} onClick={() => act({ t: 'requestUndo' })} title="Ctrl+Z">Undo</button>
           <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
-            { label: 'Stops are shown as dots on the phase bar.', disabled: true },
+            { label: 'Stops: gold dot = your turn, red dot = opponent\'s turn. Edit both under "Stops".', disabled: true },
             { label: 'Right-click a phase to toggle a stop for the current turn type.', disabled: true },
             { label: 'Right-click a trigger on the stack to always yield to it.', disabled: true },
           ], 'Help')}>?</button>
