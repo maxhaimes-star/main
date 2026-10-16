@@ -369,7 +369,7 @@ function doPick(state: GameState, ctx: Ctx, d: CostData, pk: CostPick, iid: stri
   const who = player(state, d.pid).name;
   if (pk.kind === 'return') moveCard(state, ctx, iid, 'hand');
   else if (pk.kind === 'exileHand' || pk.kind === 'exileGrave') moveCard(state, ctx, iid, 'exile');
-  else moveCard(state, ctx, iid, 'graveyard');
+  else moveCard(state, ctx, iid, 'graveyard', pk.kind === 'sac' ? { cause: 'sacrifice' } : pk.kind === 'discard' ? { cause: 'discard' } : {});
   if (pk.delve) d.delved++;
   log(state, ctx, d.pid, `${who} ${VERB[pk.kind] ?? 'uses'} ${nm} to pay for ${d.spellName}${pk.delve ? ' (delve)' : ''}.`);
 }

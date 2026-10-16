@@ -261,3 +261,35 @@ describe('6: Currency Converter', () => {
     expect(g.battlefield.filter((i) => g.cards[i].token?.name === 'Treasure')).toHaveLength(0);
   });
 });
+
+describe('7: Broadside Bombardiers (boast, sacrifice another creature or artifact)', () => {
+  it('after attacking, sacrifices an artifact and deals 2 + its mana value', () => {
+    const { g, ctx } = setup(['broadside_bombardiers', 'boros_signet']);
+    const bb = put(g, ctx, 'a', 'broadside_bombardiers', true); // haste
+    const signet = put(g, ctx, 'a', 'boros_signet');
+    expect(applyAction(g, 'a', { t: 'activate', iid: bb, text: '', ability: 0, targets: [[{ kind: 'player', pid: 'b' }]] }, ctx)).toMatch(/attack/i);
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: bb, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    drain(g, ctx);
+    act(g, ctx, 'a', { t: 'activate', iid: bb, text: '', ability: 0, targets: [[{ kind: 'player', pid: 'b' }]] });
+    drain(g, ctx, (q) => (q.options.some((o) => o.value === signet) ? signet : q.options[0].value));
+    expect(g.cards[signet].zone).toBe('graveyard');
+    expect(g.players[1].life).toBe(14); // 2 combat + 2 + 2
+    expect(applyAction(g, 'a', { t: 'activate', iid: bb, text: '', ability: 0, targets: [[{ kind: 'player', pid: 'b' }]] }, ctx)).toMatch(/once/);
+  });
+
+  it('can sacrifice another creature (Artifact.Other;Creature.Other)', () => {
+    const { g, ctx } = setup(['broadside_bombardiers', 'giver_of_runes']);
+    const bb = put(g, ctx, 'a', 'broadside_bombardiers', true);
+    const giver = put(g, ctx, 'a', 'giver_of_runes');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: bb, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    drain(g, ctx);
+    act(g, ctx, 'a', { t: 'activate', iid: bb, text: '', ability: 0, targets: [[{ kind: 'player', pid: 'b' }]] });
+    drain(g, ctx, (q) => (q.options.some((o) => o.value === giver) ? giver : q.options[0].value));
+    expect(g.cards[giver].zone).toBe('graveyard');
+    expect(g.players[1].life, g.log.slice(-8).map((l) => l.text).join("\n")).toBe(15);
+  });
+});

@@ -82,6 +82,12 @@ export function activationError(state: GameState, c: CardInstance, pid: string, 
   if (loyalty) return loyaltyError(state, c, pid, name);
   if (p.SorcerySpeed === 'True' && !sorceryTiming(state, pid)) return `${name}: activate only as a sorcery — ${SORCERY_SPEED} (use force to override)`;
   if (p.PlayerTurn === 'True' && state.activePlayer !== pid) return `${name}: activate only during your turn (use force to override)`;
+  if (p.Boast === 'True') {
+    // Boast: only if this creature attacked this turn, and only once each turn (rule 702.142).
+    const ti = turnInfo(state);
+    if (!c.attacking && !(ti.activations[`attacked|${c.iid}`] ?? 0)) return `${name}: boast — activate only if this creature attacked this turn (use force to override)`;
+    if ((ti.activations[`${c.iid}|${index}`] ?? 0) >= 1) return `${name}: boast — only once each turn (use force to override)`;
+  }
   const limit = p.ActivationLimit ? parseInt(p.ActivationLimit, 10) : NaN;
   if (!Number.isNaN(limit) && (turnInfo(state).activations[`${c.iid}|${index}`] ?? 0) >= limit) return `${name}: this ability can be activated only ${limit === 1 ? 'once' : `${limit} times`} each turn (use force to override)`;
   return null;

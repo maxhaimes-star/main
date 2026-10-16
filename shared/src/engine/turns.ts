@@ -278,12 +278,12 @@ function parseUniqueCost(tok: string, x: number): ParsedCost | undefined {
   const m = /^(\w+)<(\d+|X)\/([^/>]+)(?:\/([^>]+))?>$/.exec(tok);
   if (!m) return undefined;
   const n = m[2] === 'X' ? x : parseInt(m[2], 10);
-  const valid = m[3];
+  const valid = m[3].replace(/;/g, ','); // "Artifact.Other;Creature.Other": either (Broadside Bombardiers)
   const desc = m[4] ?? valid.split('.')[0].toLowerCase();
   const self = /^(CARDNAME|Self|NICKNAME)$/.test(valid);
   switch (m[1]) {
     case 'tapXType': return { kind: 'tap', n, valid, text: `tap ${n} untapped ${desc}${n === 1 ? '' : 's'} you control` };
-    case 'Sac': return self ? undefined : { kind: 'sac', n, valid, text: `sacrifice ${n === 1 ? 'a' : n} ${desc}` };
+    case 'Sac': return self ? undefined : { kind: 'sac', n, valid, text: `sacrifice ${n === 1 ? (/^[aeiou]/i.test(desc) ? 'an' : 'a') : n} ${desc.replace(/^(an?|another) (?=another )/, '')}` };
     case 'Discard': if (valid === 'Hand') return { kind: 'discardHand', n: 0, valid, text: 'discard your hand' }; // Bomat Courier
       return self ? undefined : { kind: 'discard', n, valid, text: `discard ${n === 1 ? 'a' : n} ${desc}` };
     case 'Return': return self ? { kind: 'returnSelf', n: 1, valid, text: 'return it to its owner\'s hand' } : { kind: 'return', n, valid, text: `return ${n === 1 ? 'a' : n} ${desc} you control to its owner's hand` };
