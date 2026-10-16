@@ -11,6 +11,8 @@ function safe<T>(f: () => T): T | undefined {
   try { return f(); } catch { return undefined; }
 }
 
+/** What a click on a card in my hand does (engine/strict.ts handClick); 'menu' when the engine can't tell. */
+export const safeHandClick = (g: GameView, me: string, iid: string) => safe(() => Shared.handClick(g, me, iid, getCard)) ?? 'menu';
 export const safeSpell = (cardId: string | undefined, face: number) => cardId ? safe(() => spellAbility(cardId, face)) : undefined;
 export const safeActivated = (cardId: string | undefined, face: number) => (cardId ? safe(() => activatedAbilitiesOf(cardId, face)) : undefined) ?? [];
 /** Activated abilities of a permanent now: script + animate grants + abilities other cards grant it (indexes >= GRANT_BASE / FOREIGN_BASE). */

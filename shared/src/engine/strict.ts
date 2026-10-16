@@ -21,10 +21,10 @@ import { type PayResult, type PaySource, poolSources, solveMana } from '../game/
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, GameView, ViewCard } from '../game/types.ts';
 import { isHidden } from '../game/types.ts';
-import { castOptions } from './costs.ts';
+import { castableFaces, castOptions } from './costs.ts';
 import { activateMana, manaPlansFor } from './mana.ts';
 import { stateBasedActions } from './resolve.ts';
-import { abilityAt, abilityLine, getScript, scriptRef } from './script.ts';
+import { abilityAt, abilityLine, activatedAbilitiesOf, getScript, scriptRef } from './script.ts';
 import { noteTapped } from './manatriggers.ts';
 import { activateRestriction, adjustCost, manaConvertApplies, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
 import { activationError, castTimingError } from './timing.ts';
@@ -331,6 +331,21 @@ export function castZoneError(state: AnyState, pid: string, c: CardInstance, cos
   if (c.zone === 'exile' && c.castAs && c.owner === pid) return null; // on an adventure
   if (mayPlayPermission(state as StaticsState, c.iid, pid, lookup, asGame(state).remembered)) return null;
   return `You can't cast ${name} from ${c.owner === pid ? 'your' : "another player's"} ${c.zone}`;
+}
+
+/**
+ * What a click on a card in your hand does: play the land / cast the spell at once, or open the card's menu (a
+ * land with abilities usable from hand — cycling Triomes —, a card with several castable faces, an {X} cost).
+ */
+export function handClick(state: AnyState, pid: string, iid: string, lookup: Lookup = getCard): 'playLand' | 'cast' | 'menu' {
+  const c = visibleCard(state, iid);
+  if (!c?.cardId) return 'menu';
+  const data = lookup(c.cardId);
+  const face = faceOf(c, lookup);
+  const fromHand = c.owner === pid && activatedAbilitiesOf(c.cardId, 0).some((e) => e.zone === 'hand');
+  if (face.types.includes('Land') && data?.layout !== 'modal_dfc') return fromHand ? 'menu' : 'playLand';
+  if ((data?.faces && castableFaces(data).length > 1) || /\{X\}/.test(face.manaCost)) return 'menu';
+  return 'cast';
 }
 
 /**

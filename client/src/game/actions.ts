@@ -3,7 +3,7 @@ import {
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { abilityUsable, attackProblem, blockProblem, castability, AUTO_LABEL, autoStatus, isStrict, manualOk, phyrexianChoice, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
+import { abilityUsable, attackProblem, blockProblem, castability, safeHandClick, AUTO_LABEL, autoStatus, isStrict, manualOk, phyrexianChoice, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
 type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'pickOption' | 'divide' | 'setMode' | 'opp' | 'target'> & { toast?: (m: string) => void } & { mode: Mode };
@@ -101,13 +101,15 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     return;
   }
   if (c.zone === 'hand' && c.owner === me && vis) {
+    const face = faceOf(vis, getCard);
+    // A land with abilities usable from hand (cycling Triomes ...), several castable faces, {X}: the card's menu,
+    // which shows each option (disabled with the reason when it can't be used now).
+    const click = safeHandClick(g, me, iid);
+    if (click === 'menu') { open(menu(iid), face.name); return; }
     // Strict: refuse before any cost / target / mode prompt.
     const u = castability(g, me, iid);
     if (u && !u.ok) { base.toast?.(u.reason ?? "Can't do that now"); return; }
-    const face = faceOf(vis, getCard);
-    const card = vis.cardId ? getCard(vis.cardId) : undefined;
-    if (face.types.includes('Land') && !(card?.layout === 'modal_dfc')) { act({ t: 'playLand', iid }); return; }
-    if ((card?.faces && castableFaces(card).length > 1) || /\{X\}/.test(face.manaCost)) { open(menu(iid), face.name); return; }
+    if (click === 'playLand') { act({ t: 'playLand', iid }); return; }
     castWithX(base, iid);
     return;
   }

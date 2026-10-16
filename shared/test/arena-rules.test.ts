@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import { CUBE } from '../src/cube.ts';
 import {
-  abilitiesOfInstance, activatedAbilitiesOf, applyAction, castableFaces, castOptions, createGame, type Ctx, type GameAction, type GameState, getScript, isAutomatable,
+  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, handClick, castableFaces, castOptions, createGame, type Ctx, type GameAction, type GameState, getScript, isAutomatable,
   moveCard, parseStatic, scriptRef, spellAbility, staticGaps, triggerSupport,
 } from '../src/index.ts';
 import { createTokenInstance } from '../src/engine/resolve.ts';
@@ -138,6 +138,53 @@ function attackWith(g: GameState, ctx: Ctx, iids: string[]) {
   for (const iid of iids) act(g, ctx, 'a', { t: 'declareAttacker', iid, target: 'b' });
   act(g, ctx, 'a', { t: 'confirmAttackers' });
 }
+
+describe('4: cycling lands from hand', () => {
+  const lands = CUBE.cards.filter((c) => c.types.includes('Land') && (getScript(c.id)?.[0]?.keywords ?? []).some((k) => /^Cycling:/.test(k))).map((c) => c.id);
+  it('the cube has cycling lands (Triomes ...)', () => {
+    expect(lands).toEqual(expect.arrayContaining(['savai_triome', 'ketria_triome', 'indatha_triome', 'raugrin_triome', 'zagoth_triome']));
+  });
+  for (const id of lands) {
+    it(`${id}: cycling from hand pays {3}, discards it and draws, even after the land drop`, () => {
+      const { g, ctx } = setup([id, 'basic_mountain']);
+      for (let k = 0; k < 3; k++) put(g, ctx, 'a', 'basic_mountain');
+      act(g, ctx, 'a', { t: 'playLand', iid: g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_mountain')! });
+      const land = toZone(g, ctx, 'a', id, 'hand');
+      const cyc = activatedAbilitiesOf(id, 0).find((e) => e.zone === 'hand' && e.keyword === 'Cycling');
+      expect(cyc, JSON.stringify(activatedAbilitiesOf(id, 0))).toBeTruthy();
+      expect(abilityUsability(g, 'a', land, cyc!.index)).toEqual({ ok: true });
+      const hand = g.players[0].zones.hand.length;
+      const top = g.players[0].zones.library[0];
+      act(g, ctx, 'a', { t: 'activate', iid: land, text: '', ability: cyc!.index });
+      drain(g, ctx);
+      expect(g.cards[land].zone).toBe('graveyard');
+      expect(g.cards[top].zone, logTail(g)).toBe('hand');
+      expect(g.players[0].zones.hand.length).toBe(hand); // -1 cycled, +1 drawn
+      expect(g.battlefield.filter((i) => g.cards[i].controller === 'a' && g.cards[i].tapped).length).toBe(3);
+    });
+  }
+  it('clicking a cycling land in hand opens the menu (play land + cycling), even after the land drop', () => {
+    const { g, ctx } = setup(['savai_triome', 'fable_of_the_mirror_breaker', 'brazen_borrower']);
+    const tri = toZone(g, ctx, 'a', 'savai_triome', 'hand');
+    const mtn = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_mountain')!;
+    expect(handClick(g, 'a', tri)).toBe('menu');
+    expect(handClick(g, 'a', mtn)).toBe('playLand');
+    expect(handClick(g, 'a', toZone(g, ctx, 'a', 'fable_of_the_mirror_breaker', 'hand'))).toBe('cast');
+    expect(handClick(g, 'a', toZone(g, ctx, 'a', 'brazen_borrower', 'hand'))).toBe('menu');
+    act(g, ctx, 'a', { t: 'playLand', iid: mtn });
+    expect(handClick(g, 'a', tri)).toBe('menu');
+  });
+
+  it('not enough mana: refused', () => {
+    const { g, ctx } = setup(['savai_triome']);
+    put(g, ctx, 'a', 'basic_mountain');
+    const land = toZone(g, ctx, 'a', 'savai_triome', 'hand');
+    const cyc = activatedAbilitiesOf('savai_triome', 0).find((e) => e.zone === 'hand')!;
+    expect(abilityUsability(g, 'a', land, cyc.index).ok).toBe(false);
+    expect(applyAction(g, 'a', { t: 'activate', iid: land, text: '', ability: cyc.index }, ctx)).toBeTruthy();
+    expect(g.cards[land].zone).toBe('hand');
+  });
+});
 
 describe('3: token abilities', () => {
   it('Fable chapter I Goblin Shaman: attacking creates a Treasure', () => {
