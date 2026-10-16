@@ -125,6 +125,22 @@ export interface GamePlayer {
 
 export interface LogEntry { at: number; pid: string | null; text: string }
 
+/** One card in a reveal record: a snapshot, so it can be shown after the card has moved to a hidden zone. */
+export interface RevealedCard { iid: string; name: string; cardId?: string; token?: TokenData }
+
+/** A reveal (manual action or engine effect). Shown in the "Revealed" zone; `to` lists who may see it. */
+export interface RevealEntry {
+  id: number;
+  turn: number;
+  /** Player whose cards were revealed. */
+  by: string;
+  /** What revealed them ("Narset, Parter of Veils", "Reveal hand", ...). */
+  source: string;
+  cards: RevealedCard[];
+  /** Players who saw the cards (the owner included). A reveal to every player is public. */
+  to: string[];
+}
+
 export interface CombatProposal {
   lifeChange: Record<string, number>;
   /** Damage to each creature/planeswalker by iid. */
@@ -154,6 +170,8 @@ export interface GameState {
   winner: string | null;
   combat: { proposal: CombatProposal | null; attackersDeclared: boolean; blockersDeclared: boolean };
   log: LogEntry[];
+  /** Reveal records (not part of the undo snapshot, like the log). Filtered per viewer in the view. */
+  reveals?: RevealEntry[];
   /** Undo history (previous states, without logs). */
   history: string[];
   undoRequest: string | null;

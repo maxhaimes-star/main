@@ -346,3 +346,16 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 .lay-portrait .table-side .stops-editor, .lay-landscape .table-side .stops-editor { flex: 1 1 100%; font-size: 14px; }
 .lay-portrait .se-row, .lay-landscape .se-row { min-height: 36px; }
+
+.lay-portrait .rz-card, .lay-landscape .rz-card { width: 26px; }
+.lay-portrait .rz-entry.compact .rz-card, .lay-landscape .rz-entry.compact .rz-card { width: 22px; }
+.lay-portrait .rz, .lay-landscape .rz { padding: 2px 6px; }
+.lay-portrait .rz-list, .lay-landscape .rz-list { max-height: 24vh; }
+.lay-landscape .rz-chip { position: static; }
+/* Short landscape phones: the collapsed strip is a single thin row so the board keeps its height. */
+.lay-landscape .rz:not(.open) { flex-direction: row; align-items: center; gap: 8px; padding: 1px 6px; }
+.lay-landscape .rz:not(.open) .rz-head { order: 2; flex: none; }
+.lay-landscape .rz:not(.open) .rz-title { display: none; }
+.lay-landscape .rz:not(.open) .rz-entry { order: 1; flex: 1; }
+.lay-landscape .rz:not(.open) .rz-card { width: 18px; }
+.lay-landscape .rz:not(.open) .rz-meta { flex-direction: row; gap: 6px; align-items: baseline; }

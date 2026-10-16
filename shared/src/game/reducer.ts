@@ -28,7 +28,7 @@ import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
 } from './state.ts';
 import {
-  type CardInstance, type GameAction, type GamePlayer, type GameState, type PlayerZone, type StackItem, type Step,
+  type CardInstance, type GameAction, type GamePlayer, type GameState, type LogEntry, type RevealedCard, type PlayerZone, type StackItem, type Step,
   type Zone, PLAYER_ZONES, STEPS,
 } from './types.ts';
 
@@ -132,7 +132,7 @@ const ZONE_LABEL: Record<Zone, string> = {
 };
 
 function snapshot(state: GameState): string {
-  const { history: _h, log: _l, ...rest } = state;
+  const { history: _h, log: _l, reveals: _rv, ...rest } = state;
   return JSON.stringify(rest);
 }
 
@@ -446,6 +446,8 @@ export function applyAction(state: GameState, pid: string, action: GameAction, c
   if (strictErr) return strictErr;
   beginAction(state);
   const before = NOT_UNDOABLE.has(action.t) ? null : snapshot(state);
+  const seen = revealMarks(state);
+  const lastLog = state.log[state.log.length - 1];
   const err = reduce(state, me, action, ctx);
   if (err) return err;
   if (before) {
@@ -453,8 +455,46 @@ export function applyAction(state: GameState, pid: string, action: GameAction, c
     if (state.history.length > HISTORY_LIMIT) state.history.shift();
   }
   if (state.phase === 'playing' && !['chat', 'requestUndo', 'answerUndo'].includes(action.t)) settle(state, ctx);
+  recordReveals(state, ctx, action, seen, lastLog);
   state.seq++;
   return null;
+}
+
+/** Per card: who may see it now (reveal bookkeeping). */
+function revealMarks(state: GameState): Record<string, string[]> {
+  const m: Record<string, string[]> = {};
+  for (const c of Object.values(state.cards)) if (c.revealedTo.length) m[c.iid] = c.revealedTo.slice();
+  return m;
+}
+
+const REVEAL_LABEL: Partial<Record<GameAction['t'], string>> = { reveal: 'Reveal a card', revealHand: 'Reveal hand', revealTop: 'Reveal top cards' };
+
+/**
+ * Reveals are recorded by diffing `revealedTo` around an action, so the manual actions and every engine effect
+ * (tutors, Narset, Duress...) show up in the "Revealed" zone without each having to report. Looking at your own cards
+ * (a viewer who owns the card) is not a reveal.
+ */
+function recordReveals(state: GameState, ctx: Ctx, action: GameAction, before: Record<string, string[]>, lastLog: LogEntry | undefined) {
+  const groups = new Map<string, { owner: string; viewers: string[]; cards: RevealedCard[] }>();
+  for (const c of Object.values(state.cards)) {
+    const was = before[c.iid] ?? [];
+    const gained = c.revealedTo.filter((x) => !was.includes(x) && x !== c.owner);
+    if (!gained.length || c.zone === 'battlefield' || c.zone === 'stack') continue;
+    const key = `${c.owner}|${gained.slice().sort().join(',')}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, g = { owner: c.owner, viewers: gained, cards: [] });
+    g.cards.push({ iid: c.iid, name: cardName(c, ctx.lookup), ...(c.cardId ? { cardId: c.cardId } : {}), ...(c.token ? { token: c.token } : {}) });
+  }
+  if (!groups.size) return;
+  const from = lastLog ? state.log.indexOf(lastLog) + 1 : 0;
+  const line = state.log.slice(from).find((l) => /reveal/i.test(l.text))?.text;
+  const paren = line?.match(/\(([^()]+)\)\.?$/)?.[1];
+  const source = paren ?? REVEAL_LABEL[action.t] ?? (line ? line.replace(/^.*? reveals?\s*/i, 'Reveals ').slice(0, 80) : 'Effect');
+  const list = (state.reveals ??= []);
+  for (const g of groups.values()) {
+    list.push({ id: (list[list.length - 1]?.id ?? 0) + 1, turn: state.turn, by: g.owner, source, cards: g.cards, to: [...new Set([g.owner, ...g.viewers])] });
+  }
+  if (list.length > 60) list.splice(0, list.length - 60);
 }
 
 function freeMulliganOn(state: GameState): boolean {
@@ -1198,9 +1238,9 @@ function confirmBlockers(state: GameState, ctx: Ctx, pid: string) {
 function undo(state: GameState, ctx: Ctx, pid: string) {
   const prev = state.history.pop();
   if (!prev) return;
-  const restored = JSON.parse(prev) as Omit<GameState, 'history' | 'log'>;
-  const { log: logs, history } = state;
-  Object.assign(state, restored, { log: logs, history, undoRequest: null, seq: state.seq, fixMode: state.fixMode });
+  const restored = JSON.parse(prev) as Omit<GameState, 'history' | 'log' | 'reveals'>;
+  const { log: logs, history, reveals } = state;
+  Object.assign(state, restored, { log: logs, history, reveals, undoRequest: null, seq: state.seq, fixMode: state.fixMode });
   log(state, ctx, pid, `${player(state, pid).name} undid the last action.`);
 }
 

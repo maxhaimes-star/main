@@ -1,9 +1,9 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NumberField } from '../NumberField.tsx';
-import { effectivePT, type Face, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
+import { effectivePT, type Face, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec, type RevealEntry, type RevealedCard } from '@ojb/shared';
 import { attackProblem, isStrict, manualOk, summoningSickNoHaste } from './engine.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
-import { isTouch, useLongPress } from '../touch.ts';
+import { isTouch, useLayout, useLongPress } from '../touch.ts';
 
 // ---------------------------------------------------------------- context
 
@@ -362,5 +362,65 @@ export function DivideModal({ title, total, targets, validate, onDone, even }: {
       {err && <p className="muted divide-err">{err}</p>}
       <div className="row"><button className="primary" disabled={!!err} onClick={() => onDone(vals)}>OK</button>{even && <button onClick={() => setVals(even)}>Even split</button>}<button onClick={() => onDone(null)}>Cancel</button></div>
     </Modal>
+  );
+}
+
+// ------------------------------------------------------------------ Revealed zone
+
+function revealFace(c: RevealedCard): Face {
+  return faceOf({ iid: c.iid, cardId: c.cardId, token: c.token, owner: '', controller: '', zone: 'library', tapped: false, faceDown: false, transformed: false, counters: {}, damage: 0, tempPT: [0, 0], permPT: [0, 0], summoningSick: false, noUntap: false, revealedTo: [] }, getCard);
+}
+
+function RevealRow({ r, compact }: { r: RevealEntry; compact?: boolean }) {
+  const { g } = useGame();
+  const who = g.players.find((p) => p.pid === r.by)?.name ?? 'A player';
+  return (
+    <div className={`rz-entry ${compact ? 'compact' : ''}`} data-testid="reveal-entry">
+      <div className="rz-cards">
+        {r.cards.map((c) => {
+          const face = revealFace(c);
+          return <div key={c.iid} className="rz-card" title={c.name} onMouseEnter={() => setPreview({ face })} onMouseLeave={() => setPreview(null)}><CardImage face={face} /></div>;
+        })}
+      </div>
+      <div className="rz-meta">
+        <b>{who}</b> revealed {r.cards.length > 1 ? `${r.cards.length} cards` : r.cards[0]?.name}
+        <span className="rz-src">{r.source}{compact ? '' : ` · turn ${r.turn}`}</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The "Revealed" strip: this turn's reveals (who revealed what, and what revealed it), dismissible; expands to the
+ * whole history. It is an ordinary flex row of the board column, so it never covers the hand or the buttons.
+ */
+export function RevealedZone() {
+  const { g } = useGame();
+  const [open, setOpen] = useState(false);
+  const [dismissed, setDismissed] = useState(0);
+  const landscape = useLayout() === 'landscape'; // too short for an inline history: it opens as a dialog there
+  const all = g.reveals ?? [];
+  if (!all.length) return null;
+  const current = all.filter((r) => r.turn === g.turn && r.id > dismissed);
+  const latest = current[current.length - 1];
+  if (!open && !latest) {
+    return <div className="rz rz-chip" data-testid="revealed-zone"><button className="tiny" onClick={() => setOpen(true)}>Revealed ({all.length}) ▾</button></div>;
+  }
+  return (
+    <div className={`rz ${open && !landscape ? 'open' : ''}`} data-testid="revealed-zone">
+      {open && landscape && (
+        <Modal title="Revealed cards" onClose={() => setOpen(false)}>
+          <div className="rz-list rz-modal">{all.slice().reverse().map((r) => <RevealRow key={r.id} r={r} compact />)}</div>
+        </Modal>
+      )}
+      <div className="rz-head">
+        <span className="rz-title">Revealed{current.length > 1 ? ` (+${current.length - 1} more this turn)` : ''}</span>
+        <button className="tiny" onClick={() => setOpen(!open)}>{open && !landscape ? 'Hide history ▴' : `History (${all.length}) ▾`}</button>
+        {latest && <button className="tiny" aria-label="Dismiss revealed cards" title="Dismiss" onClick={() => setDismissed(all[all.length - 1].id)}>✕</button>}
+      </div>
+      {open && !landscape
+        ? <div className="rz-list">{all.slice().reverse().map((r) => <RevealRow key={r.id} r={r} compact />)}</div>
+        : latest && <RevealRow r={latest} />}
+    </div>
   );
 }

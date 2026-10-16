@@ -74,12 +74,15 @@ export function viewFor(state: GameState, viewer: string | null): GameView {
       viewingHandOf: p.viewingHandOf,
     };
   });
-  const { history, cards: _c, players: _p, pending, events: _e, triggerQueue: _q, delayedTriggers: _d, turnStats: _t, remembered: _r, ...rest } = state;
+  const { history, cards: _c, players: _p, pending, events: _e, triggerQueue: _q, reveals, delayedTriggers: _d, turnStats: _t, remembered: _r, ...rest } = state;
   // Engine questions: only the answering player sees the options (they may name hidden cards); internal data never leaves the server.
   const pendingView = (pending ?? []).map((q) => {
     const mine = q.pid === viewer || controls(state, viewer, q.pid);
     const { revealed, ...rest } = q;
     return { ...rest, options: mine ? q.options : [], data: {}, ...(mine && revealed ? { revealed } : {}) };
   });
-  return { ...rest, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
+  // Reveals: only to those who were shown the cards (or own them); spectators see public ones.
+  const everyone = state.players.map((p) => p.pid);
+  const visibleReveals = (reveals ?? []).filter((r) => (viewer ? r.to.includes(viewer) : everyone.every((x) => r.to.includes(x))));
+  return { ...rest, reveals: visibleReveals, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
 }

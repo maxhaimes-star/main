@@ -8,7 +8,7 @@ import { browser, setup, shot, step, handLands, settle } from './lib.mjs';
 const VIEWPORTS = [[1280, 720], [1366, 768], [1440, 900], [1920, 1080], [2560, 1440], [390, 844], [844, 390]];
 const BOARD = [
   '.player-area', '.player-panel', '.battlefield', '.zones .zone', '.center-bar', '.turn-info', '.auto-toggles', '.phase',
-  '.priority button', '.priority .waiting', '.stack', '.stack-item', '.hand', '.hcard', '.tcard', '.side-toggle', '.log-btn', '.life-num', '.mana-pool',
+  '.priority button', '.priority .waiting', '.stack', '.stack-item', '.hand', '.hcard', '.tcard', '.side-toggle', '.log-btn', '.life-num', '.mana-pool', '.rz', '.rz-entry', '.rz-card',
 ];
 
 /** Runs in the page: list of problems (element overflow / clipping / overlaps). */
@@ -51,6 +51,7 @@ function boardProblems(sel) {
     ['.turn-info', '.phases .phase'], ['.phases .phase', '.auto-toggles'], ['.turn-info', '.auto-toggles'], ['.side-toggle', '.zones .zone'],
     ['.side-toggle', '.phases .phase'], ['.side-toggle', '.auto-toggles'], ['.priority button, .priority .waiting', '.zones .zone'],
     ['.priority button, .priority .waiting', '.player-panel'], ['.stack', '.zones .zone'], ['.player-panel', '.zones .zone'],
+    ['.rz', '.hand'], ['.rz', '.priority button, .priority .waiting'], ['.rz', '.center-bar'], ['.rz', '.player-panel'], ['.rz', '.stack'],
   ];
   for (const [qa, qb] of pairs) {
     for (const a of rects(qa)) for (const b of rects(qb)) {
@@ -86,10 +87,27 @@ const coveredHandCards = () => [...document.querySelectorAll('.hand .hcard')].fi
 
 let failed = false;
 const fail = (m) => { console.log('  FAIL', m); failed = true; };
-const { active: A, close } = await setup('20 Lightning Bolt\n20 Mountain', 'layout');
+const { active: A, other: B, close } = await setup('20 Lightning Bolt\n20 Mountain', 'layout');
 // Put something on the battlefield (a land) so the rows and the land's menu exist.
 await handLands(A, 'Mountain').first().click().catch(() => {});
 await settle(A, 600);
+
+// Revealed zone: reveal my hand (via fix mode's manual tools) and check both players see it.
+step('reveal my hand -> Revealed zone for both players');
+await A.getByRole('button', { name: 'Fix board', exact: true }).click();
+await B.getByRole('button', { name: 'Allow' }).click();
+await A.locator('.fix-banner').waitFor();
+await A.locator('.my-tools button:has-text("More")').first().click();
+await A.locator('.ctx-menu .ctx-item', { hasText: 'Reveal my hand' }).click();
+await A.getByRole('button', { name: 'Done fixing' }).click();
+for (const [who, P] of [['revealer', A], ['opponent', B]]) {
+  const z = P.locator('[data-testid=revealed-zone]');
+  await z.waitFor({ timeout: 5000 }).catch(() => fail(`${who} does not see the Revealed zone`));
+  const txt = await z.innerText().catch(() => '');
+  if (!/(Max|Sam)/.test(txt) || !/Reveal hand/.test(txt)) fail(`${who}: Revealed zone should say who and what revealed (got "${txt.replace(/\n/g, ' | ')}")`);
+  if (!(await z.locator('.rz-card img, .rz-card .text-card').count())) fail(`${who}: Revealed zone shows no cards`);
+}
+await shot(B, 'reveal-opponent-view');
 
 for (const [w, h] of VIEWPORTS) {
   step(`viewport ${w}x${h}`);
@@ -102,6 +120,21 @@ for (const [w, h] of VIEWPORTS) {
   const covered = await A.evaluate(coveredHandCards);
   if (covered) fail(`${w}x${h}: ${covered} hand card(s) covered`);
   await shot(A, `layout-${w}x${h}`);
+  // Revealed zone, expanded (history): still inside the viewport and clear of the hand and buttons.
+  for (const P of [A, B]) {
+    const tog = P.locator('.rz-head button:has-text("History")');
+    if (await tog.count()) {
+      await tog.click();
+      await P.waitForTimeout(150);
+      for (const p of [...new Set(await P.evaluate(boardProblems, BOARD))].slice(0, 8)) fail(`${w}x${h} revealed zone expanded: ${p}`);
+      if (P === A) await shot(A, `reveal-open-${w}x${h}`);
+      if (await P.locator('.modal-bg').count()) {
+        // landscape phones: the history is a dialog; it must fit the viewport
+        for (const p of await P.evaluate(() => { const r = document.querySelector('.modal-bg .modal').getBoundingClientRect(); return r.left < -1 || r.top < -1 || r.right > innerWidth + 1 || r.bottom > innerHeight + 1 ? [`history dialog leaves the viewport (${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)})`] : []; })) fail(`${w}x${h}: ${p}`);
+        await P.locator('.modal-bg .modal-head button:has-text("✕")').last().click();
+      } else await P.locator('.rz-head button:has-text("Hide history")').click();
+    } else fail(`${w}x${h}: no history toggle on the Revealed zone`);
+  }
 
   // Menus: a hand card's menu, the land's menu with its submenu, and the More / help / phone action menus.
   const phone = await A.locator('.table.lay-portrait, .table.lay-landscape').count() > 0;
