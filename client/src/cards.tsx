@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { type CardData, type Face, type TokenData, faceOf, tokenFace } from '@ojb/shared';
 import { CUBE, cardRegistryVersion, getCard, onCardsRegistered, registerCards, setCardResolver } from '@ojb/shared/src/cube.ts';
 import type { CardInstance, CardPayload } from '@ojb/shared';
@@ -247,13 +247,26 @@ export function HoverPreview() {
     return () => { window.removeEventListener('mousemove', move); window.removeEventListener('dragstart', hide); window.removeEventListener('mousedown', hide); };
   }, []);
   if (!p || !pos) return null;
-  const w = Math.min(300, Math.max(220, innerHeight * 0.36));
-  const h = w * 88 / 63;
+  return <HoverBox p={p} pos={pos} />;
+}
+
+/** The floating preview, measured after render and kept fully inside the viewport (beside the cursor, never under it). */
+function HoverBox({ p, pos }: { p: PreviewItem; pos: { x: number; y: number } }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [h, setH] = useState(0);
+  // Size the card so the whole box (image + back face + note) fits the viewport height.
+  const extraH = (p.backFace ? 0.55 * 88 / 63 : 0);
+  const w = Math.max(140, Math.min(300, Math.max(220, innerHeight * 0.36), (innerHeight - 16 - (p.extra ? 70 : 0)) / (88 / 63 + extraH + 0.02), innerWidth / 2 - 40));
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && Math.abs(el.offsetHeight - h) > 0.5) setH(el.offsetHeight);
+  });
   const right = pos.x < innerWidth / 2;
-  const left = right ? Math.min(pos.x + 28, innerWidth - w - 8) : Math.max(8, pos.x - 28 - w);
-  const top = Math.max(8, Math.min(pos.y - h / 2, innerHeight - h - 8 - (p.extra ? 60 : 0)));
+  const left = Math.max(8, Math.min(right ? pos.x + 28 : pos.x - 28 - w, innerWidth - w - 8));
+  const hh = h || w * 88 / 63;
+  const top = Math.max(8, Math.min(pos.y - hh / 2, innerHeight - hh - 8));
   return (
-    <div className="hover-preview" style={{ left, top, width: w }}>
+    <div ref={ref} className="hover-preview" style={{ left, top, width: w, maxHeight: innerHeight - 16 }}>
       <CardImage face={p.face} large className="hp-img" />
       {p.backFace && <CardImage face={p.backFace} className="hp-back" />}
       {p.extra && <div className="hp-extra">{p.extra}</div>}

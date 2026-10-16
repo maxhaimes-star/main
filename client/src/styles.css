@@ -57,7 +57,7 @@ h1, h2, h3, h4 { margin: 8px 0; }
 /* ---------- room shell */
 .room { height: 100%; position: relative; }
 .banner.warn { position: fixed; top: 0; left: 0; right: 0; background: var(--accent); color: #000; text-align: center; z-index: 50; padding: 4px; }
-.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #3b1f1f; border: 1px solid var(--bad); padding: 8px 16px; border-radius: 8px; z-index: 100; max-width: 80vw; }
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #3b1f1f; border: 1px solid var(--bad); padding: 8px 16px; border-radius: 8px; z-index: 250; max-width: calc(100vw - 16px); }
 .chat-head { display: none; }
 .chat { position: fixed; bottom: 12px; left: 12px; z-index: 40; }
 .chat-body { background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; width: 300px; margin-top: 6px; padding: 8px; }
@@ -174,7 +174,7 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .tcard.blocking .card-img { box-shadow: 0 0 0 3px var(--blue); }
 .tcard.selected .card-img { box-shadow: 0 0 0 3px var(--accent); }
 .tcard:hover .dots { opacity: 1; }
-.tcard .dots { position: absolute; top: 2px; right: 2px; opacity: 0; padding: 0 5px; font-size: 12px; background: #000a; border: none; border-radius: 4px; }
+.tcard .dots { position: absolute; top: 2px; right: 2px; opacity: .55; padding: 0 5px; font-size: 12px; background: #000a; border: none; border-radius: 4px; }
 .table.mode-attach .tcard:hover .card-img, .table.mode-block .tcard.attacking:hover .card-img { box-shadow: 0 0 0 3px var(--accent2); }
 .attachment { position: absolute; left: 50%; transform: translateX(-50%); z-index: -1; }
 .overlays { position: absolute; inset: 0; pointer-events: none; }
@@ -218,13 +218,17 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .log-entry.theirs { color: #c9d2ff; }
 .game-log input { margin-top: 6px; }
 
-.ctx-menu { position: fixed; z-index: 200; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 4px; min-width: 200px; max-width: 380px; box-shadow: 0 8px 30px #000a; font-size: 13px; }
+.ctx-menu { position: fixed; z-index: 200; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 4px; min-width: 200px; max-width: min(380px, calc(100vw - 12px)); max-height: calc(100vh - 12px); overflow-y: auto; box-shadow: 0 8px 30px #000a; font-size: 13px; }
 .ctx-title { font-weight: 700; padding: 4px 8px; color: var(--accent2); border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .ctx-item { padding: 5px 10px; border-radius: 4px; cursor: pointer; position: relative; }
 .ctx-item:hover { background: var(--bg3); }
 .ctx-item.disabled { color: var(--muted); cursor: default; }
 .ctx-item small { color: var(--muted); }
-.ctx-sub { position: absolute; left: 100%; top: 0; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 4px; min-width: 220px; max-width: 420px; max-height: 70vh; overflow: auto; box-shadow: 0 8px 30px #000a; z-index: 201; }
+.ctx-item.has-sub { display: flex; justify-content: space-between; gap: 10px; }
+.ctx-item.has-sub.open { background: var(--bg3); }
+.ctx-arrow { color: var(--muted); }
+/* submenus are fixed boxes placed by JS (ui.tsx placeBeside) so the menu's own scrolling never clips them */
+.ctx-sub { position: fixed; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 4px; min-width: 220px; max-width: min(420px, calc(100vw - 12px)); max-height: calc(100vh - 12px); overflow: auto; box-shadow: 0 8px 30px #000a; z-index: 201; cursor: default; }
 .modal-bg { position: fixed; inset: 0; background: #000a; z-index: 150; display: flex; align-items: center; justify-content: center; }
 .modal { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; max-width: 92vw; max-height: 88vh; overflow: auto; min-width: 320px; }
 .modal.wide { width: 1000px; }
@@ -243,8 +247,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .mulligan { background: var(--bg2); padding: 20px; border-radius: 12px; border: 1px solid var(--line); max-width: 96vw; }
 .mull-hand { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin: 12px 0; }
 .mull-hand .zcard { width: 150px; }
-.mode-hint { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #000; padding: 6px 14px; border-radius: 8px; z-index: 130; font-weight: 600; }
-.undo-req { position: fixed; top: 50px; left: 50%; transform: translateX(-50%); background: var(--bg2); border: 1px solid var(--accent); padding: 10px 16px; border-radius: 10px; z-index: 130; display: flex; gap: 8px; align-items: center; }
+.mode-hint { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #000; padding: 6px 14px; border-radius: 8px; z-index: 130; font-weight: 600; max-width: calc(100vw - 16px); flex-wrap: wrap; }
+.undo-req { position: fixed; top: 50px; left: 50%; transform: translateX(-50%); background: var(--bg2); border: 1px solid var(--accent); padding: 10px 16px; border-radius: 10px; z-index: 130; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; max-width: calc(100vw - 16px); }
 .prompt { min-width: 300px; }
 .between-games { padding: 16px; overflow: auto; height: 100%; }
 .sb-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -409,7 +413,7 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .zone .empty-zone { width: 100%; aspect-ratio: 63/88; border: 1px dashed #3d485a; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; }
 .zone-count { position: absolute; bottom: 3px; right: 3px; background: #000d; color: #fff; font-size: 12px; font-weight: 700; padding: 0 6px; border-radius: 9px; }
 .zone:hover { transform: translateY(-2px); }
-.revealed-top { position: absolute; top: 100%; left: 0; font-size: 10px; background: #000c; padding: 1px 3px; border-radius: 3px; z-index: 3; width: 150%; }
+.revealed-top { position: absolute; top: 2px; left: 2px; right: 2px; font-size: 10px; background: #000c; padding: 1px 3px; border-radius: 3px; z-index: 3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* slim phase bar */
 .center-bar { position: relative; display: flex; align-items: center; gap: 14px; padding: 0 10px; height: 34px; border-top: 1px solid #3a3320; border-bottom: 1px solid #3a3320; background: linear-gradient(#0a0c10, #12161d); flex: none; z-index: 12; }
@@ -427,7 +431,7 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .auto-toggles .tgl { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; margin: 0; cursor: pointer; color: var(--muted); user-select: none; }
 .auto-toggles .tgl.on { color: var(--gold); font-weight: 700; }
 .auto-toggles input { margin: 0; }
-.combat-panel { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); z-index: 45; background: #0d1117f2; border: 1px solid var(--gold); border-radius: 10px; padding: 8px 12px; max-width: 520px; font-size: 12px; box-shadow: 0 6px 20px #000a; }
+.combat-panel { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); z-index: 45; background: #0d1117f2; border: 1px solid var(--gold); border-radius: 10px; padding: 8px 12px; max-width: min(520px, calc(100% - 12px)); max-height: 40vh; overflow: auto; font-size: 12px; box-shadow: 0 6px 20px #000a; }
 .combat-panel ul { margin: 4px 0; padding-left: 18px; }
 
 /* pass / resolve button, bottom right */

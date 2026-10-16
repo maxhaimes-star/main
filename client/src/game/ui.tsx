@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NumberField } from '../NumberField.tsx';
 import { effectivePT, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec } from '@ojb/shared';
 import { isStrict, summoningSickNoHaste } from './engine.ts';
@@ -157,39 +157,102 @@ export function describe(c: ViewCard): string {
 
 // ---------------------------------------------------------------- context menu
 
-export function ContextMenu({ x, y, items, title, onClose }: { x: number; y: number; items: MenuItem[]; title?: string; onClose: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState({ x, y });
-  const [open, setOpen] = useState<number | null>(null);
-  useEffect(() => {
+// ---------------------------------------------------------------- viewport clamping for menus / popovers / pickers
+
+const EDGE = 6;
+type Box = { x: number; y: number };
+
+/**
+ * Where to put a fixed box of size w×h opened at the point (x, y) so it stays fully inside the viewport: flip to the
+ * other side of the point when it does not fit, then shift it in. A box larger than the viewport is pinned to the edge
+ * (its max-height keeps it scrollable).
+ */
+export function placeAtPoint(x: number, y: number, w: number, h: number): Box {
+  const vw = innerWidth, vh = innerHeight;
+  let px = x, py = y;
+  if (px + w > vw - EDGE && x - w >= EDGE) px = x - w;
+  if (py + h > vh - EDGE && y - h >= EDGE) py = y - h;
+  return { x: Math.max(EDGE, Math.min(px, vw - w - EDGE)), y: Math.max(EDGE, Math.min(py, vh - h - EDGE)) };
+}
+
+/** Beside an anchor rectangle (submenus, popovers from a button): right of it, else left of it; shifted vertically to fit. */
+export function placeBeside(r: { left: number; right: number; top: number; bottom: number }, w: number, h: number, below = false): Box {
+  const vw = innerWidth, vh = innerHeight;
+  if (below) {
+    let y = r.bottom + 2;
+    if (y + h > vh - EDGE && r.top - h - 2 >= EDGE) y = r.top - h - 2;
+    return { x: Math.max(EDGE, Math.min(r.left, vw - w - EDGE)), y: Math.max(EDGE, Math.min(y, vh - h - EDGE)) };
+  }
+  let x = r.right - 2;
+  if (x + w > vw - EDGE) x = r.left - w + 2 >= EDGE ? r.left - w + 2 : vw - w - EDGE;
+  return { x: Math.max(EDGE, x), y: Math.max(EDGE, Math.min(r.top - 4, vh - h - EDGE)) };
+}
+
+/**
+ * Measures a fixed-position element and returns its clamped position (null until measured: render it hidden).
+ * Re-measures when its size or the window changes.
+ */
+export function useClamped(ref: React.RefObject<HTMLElement>, place: (w: number, h: number) => Box, key: unknown): Box | null {
+  const [pos, setPos] = useState<Box | null>(null);
+  const placeRef = useRef(place);
+  placeRef.current = place;
+  useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    setPos({ x: Math.max(4, Math.min(x, innerWidth - r.width - 8)), y: Math.max(4, Math.min(y, innerHeight - r.height - 8)) });
-  }, [x, y]);
+    const update = () => {
+      const p = placeRef.current(el.offsetWidth, el.offsetHeight);
+      setPos((cur) => (cur && Math.abs(cur.x - p.x) < 0.5 && Math.abs(cur.y - p.y) < 0.5 ? cur : p));
+    };
+    update();
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null;
+    ro?.observe(el);
+    window.addEventListener('resize', update);
+    return () => { ro?.disconnect(); window.removeEventListener('resize', update); };
+  }, [ref, key]);
+  return pos;
+}
+
+/** Inline style for a clamped fixed box: hidden until measured so it never flashes off-screen. */
+export const clampedStyle = (pos: Box | null): React.CSSProperties => ({ left: pos?.x ?? 0, top: pos?.y ?? 0, visibility: pos ? 'visible' : 'hidden' });
+
+function SubMenu({ items, anchor, onPick }: { items: MenuItem[]; anchor: DOMRect; onPick: (s: MenuItem) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const pos = useClamped(ref, (w, h) => placeBeside(anchor, w, h), anchor);
+  return (
+    <div ref={ref} className="ctx-sub" style={clampedStyle(pos)} onClick={(e) => e.stopPropagation()}>
+      {items.map((s, j) => (
+        <div key={j} className={`ctx-item ${s.disabled ? 'disabled' : ''}`} title={s.disabled && s.hint ? s.hint : undefined}
+          onClick={(e) => { e.stopPropagation(); if (s.disabled) return; onPick(s); }}>{s.label}{s.hint && <small> {s.hint}</small>}</div>
+      ))}
+    </div>
+  );
+}
+
+export function ContextMenu({ x, y, items, title, onClose }: { x: number; y: number; items: MenuItem[]; title?: string; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const pos = useClamped(ref, (w, h) => placeAtPoint(x, y, w, h), `${x},${y},${items.length}`);
+  const [open, setOpen] = useState<{ i: number; rect: DOMRect } | null>(null);
   useEffect(() => {
     const close = (e: Event) => { if (!ref.current?.contains(e.target as Node)) onClose(); };
     const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    setTimeout(() => { window.addEventListener('mousedown', close); window.addEventListener('touchstart', close); }, 0);
+    const t = setTimeout(() => { window.addEventListener('mousedown', close); window.addEventListener('touchstart', close); }, 0);
     window.addEventListener('keydown', esc);
-    return () => { window.removeEventListener('mousedown', close); window.removeEventListener('touchstart', close); window.removeEventListener('keydown', esc); };
+    return () => { clearTimeout(t); window.removeEventListener('mousedown', close); window.removeEventListener('touchstart', close); window.removeEventListener('keydown', esc); };
   }, [onClose]);
+  const openSub = (i: number, el: HTMLElement) => setOpen({ i, rect: el.getBoundingClientRect() });
   return (
-    <div ref={ref} className="ctx-menu" style={{ left: pos.x, top: pos.y }}>
+    <div ref={ref} className="ctx-menu" style={clampedStyle(pos)} onScroll={() => setOpen(null)}>
       {title && <div className="ctx-title">{title}</div>}
+      {items.length === 0 && <div className="ctx-item disabled">No actions available</div>}
       {items.map((it, i) => it.sub ? (
-        <div key={i} className="ctx-item has-sub" onMouseEnter={() => setOpen(i)} onClick={() => setOpen(open === i ? null : i)}>
-          {it.label} ▸
-          {open === i && (
-            <div className="ctx-sub">
-              {it.sub.map((s, j) => (
-                <div key={j} className={`ctx-item ${s.disabled ? 'disabled' : ''}`} onClick={(e) => { e.stopPropagation(); if (s.disabled) return; onClose(); s.onClick?.(); }}>{s.label}{s.hint && <small> {s.hint}</small>}</div>
-              ))}
-            </div>
-          )}
+        <div key={i} className={`ctx-item has-sub ${open?.i === i ? 'open' : ''} ${it.sub.length === 0 ? 'disabled' : ''}`}
+          onMouseEnter={(e) => { if (it.sub!.length) openSub(i, e.currentTarget); }}
+          onClick={(e) => { if (it.sub!.length) openSub(i, e.currentTarget); }}>
+          <span>{it.label}</span><span className="ctx-arrow">▸</span>
+          {open?.i === i && <SubMenu items={it.sub} anchor={open.rect} onPick={(s) => { onClose(); s.onClick?.(); }} />}
         </div>
       ) : (
-        <div key={i} className={`ctx-item ${it.disabled ? 'disabled' : ''}`} onMouseEnter={() => setOpen(null)} onClick={() => { if (it.disabled) return; onClose(); it.onClick?.(); }}>
+        <div key={i} className={`ctx-item ${it.disabled ? 'disabled' : ''}`} title={it.disabled && it.hint ? it.hint : undefined} onMouseEnter={() => setOpen(null)} onClick={() => { if (it.disabled) return; onClose(); it.onClick?.(); }}>
           {it.label}{it.hint && <small> {it.hint}</small>}
         </div>
       ))}

@@ -148,7 +148,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .ctx-menu { left: 0 !important; right: 0; top: auto !important; bottom: 0; max-width: none; max-height: 72vh; max-height: 72dvh; overflow-y: auto; border-radius: 16px 16px 0 0; border-bottom: 0; padding: 6px 8px calc(10px + var(--safe-b)); z-index: 210; font-size: 16px; }
   .ctx-title { font-size: 15px; padding: 8px; }
   .ctx-item { min-height: 46px; display: flex; align-items: center; padding: 8px 12px; }
-  .ctx-sub { position: static; display: block; min-width: 0; max-width: none; max-height: none; border: 0; box-shadow: none; padding: 0 0 0 12px; background: transparent; }
+  .ctx-sub { position: static; display: block; min-width: 0; max-width: none; max-height: none; border: 0; box-shadow: none; padding: 0 0 0 12px; background: transparent; flex: 1 1 100%; }
+  .ctx-item.has-sub { flex-wrap: wrap; }
   .modal-bg { align-items: flex-end; }
   .modal { width: 100%; max-width: 100%; min-width: 0; max-height: 100vh; max-height: 100dvh; border-radius: 16px 16px 0 0; padding: 12px calc(14px + var(--safe-r)) calc(14px + var(--safe-b)) calc(14px + var(--safe-l)); }
   .modal.wide { height: 100vh; height: 100dvh; border-radius: 0; padding-top: calc(10px + var(--safe-t)); }
