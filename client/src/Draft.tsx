@@ -144,7 +144,7 @@ export function Draft({ view, send, skew }: RoomProps) {
         )}
         <div className="picks">
           <div className="picks-head"><h3>Your picks ({d.picks.length})</h3><SortToggle /><Curve cards={(d.main.length ? d.main : d.picks).map((id) => getCard(id)!).filter(Boolean)} /></div>
-          <p className="muted"><span className="hide-touch">Click a pick to move it between your main deck and sideboard — the split carries into deckbuilding.</span><span className="show-touch">Tap a pick, then move it between main deck and sideboard.</span></p>
+          <p className="muted"><span className="hide-touch">Click a pick to move it between your main deck and sideboard — the split carries over to your deck.</span><span className="show-touch">Tap a pick, then move it between main deck and sideboard.</span></p>
           <div className="picks-main">
             <PoolSummary ids={d.main} title="Main deck" tapLabel="Move to sideboard"
               onClick={(id) => setMain(multisetDiff(d.main, [id]))} />
