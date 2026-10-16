@@ -1,3 +1,4 @@
+import type { GameAction } from '@ojb/shared';
 import { describe, expect, it } from 'vitest';
 import { Rooms } from '../src/rooms.ts';
 
@@ -61,6 +62,33 @@ describe('rooms', () => {
     expect(g.winner).toBe(host.pid);
     expect(m.wins[host.pid]).toBe(1);
     expect(m.sideboarding).toBe(true);
+  });
+
+  it('free mulligan: proposed and accepted through the room; kept for the next game of the match', () => {
+    const rooms = new Rooms();
+    const host = rooms.create('Test', 'Max');
+    const friend = rooms.join(host.roomId, 'Sam')!;
+    const rec = rooms.rooms.get(host.roomId)!;
+    rooms.handle(rec, host.pid, { t: 'updateSettings', settings: { mode: 'sealed', seats: 2, sealedPacks: 3 } });
+    rooms.handle(rec, host.pid, { t: 'start' });
+    for (const p of [host.pid, friend.pid]) {
+      rooms.handle(rec, p, { t: 'saveDeck', deck: { main: rec.state.pools[p].slice(0, 23), side: [], basics: { W: 0, U: 0, B: 0, R: 17, G: 0 } }, ready: true });
+    }
+    rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, friend.pid], bestOf: 3 });
+    const m = rec.state.matches[0];
+    const game = (action: GameAction, pid: string) => rooms.handle(rec, pid, { t: 'game', matchId: m.id, action });
+    expect(game({ t: 'requestFreeMulligan' }, host.pid)).toBeNull();
+    expect(game({ t: 'answerFreeMulligan', accept: true }, friend.pid)).toBeNull();
+    expect(m.game!.freeMulligan?.on).toBe(true);
+    expect(game({ t: 'mulligan' }, host.pid)).toBeNull();
+    expect(game({ t: 'keep' }, host.pid)).toBeNull();
+    expect(m.game!.players.find((p) => p.pid === host.pid)!.needsBottom).toBe(0);
+    expect(game({ t: 'keep' }, friend.pid)).toBeNull();
+    expect(game({ t: 'concede' }, friend.pid)).toBeNull();
+    rooms.handle(rec, host.pid, { t: 'readyNext', matchId: m.id });
+    rooms.handle(rec, friend.pid, { t: 'readyNext', matchId: m.id });
+    expect(m.gameNumber).toBe(2);
+    expect(m.game!.freeMulligan?.on).toBe(true);
   });
 
   it('fills a draft with bots and drafts to completion via ticks', () => {

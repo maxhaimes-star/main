@@ -58,9 +58,20 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
     // Combat declarations
     if (g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared && c.controller === me && vis && faceOf(vis, getCard).types.includes('Creature')) {
       if (isStrict(g) && !c.attacking && (c.tapped || summoningSickNoHaste(g, iid))) { base.toast?.(c.tapped ? 'Tapped creatures cannot attack' : 'Summoning sick: cannot attack'); return; }
-      const why = !c.attacking ? attackProblem(g, me, iid, base.opp) : null;
-      if (why) { base.toast?.(why); return; }
-      act({ t: 'declareAttacker', iid, target: c.attacking ? null : base.opp });
+      if (c.attacking) { act({ t: 'declareAttacker', iid, target: null }); return; }
+      const attackTo = (target: string) => {
+        const why = attackProblem(g, me, iid, target);
+        if (why) { base.toast?.(why); return; }
+        act({ t: 'declareAttacker', iid, target });
+      };
+      // The opponent's planeswalkers can be attacked too: ask which.
+      const pws = g.battlefield.filter((id) => { const x = visible(g, id); return !!x && x.controller !== me && faceOf(x, getCard).types.includes('Planeswalker'); });
+      if (!pws.length || !base.opp) { if (base.opp) attackTo(base.opp); else act({ t: 'declareAttacker', iid, target: base.opp }); return; }
+      const oppName = g.players.find((p) => p.pid === base.opp)?.name ?? 'Opponent';
+      void base.pickOption('Attack whom?', [
+        { value: base.opp, label: oppName, detail: 'Attack the player' },
+        ...pws.map((pw) => { const x = visible(g, pw)!; return { value: pw, label: faceOf(x, getCard).name, detail: `Planeswalker — loyalty ${x.counters.loyalty ?? 0}` }; }),
+      ]).then((target) => { if (target) attackTo(target); });
       return;
     }
     if (g.step === 'blockers' && g.activePlayer !== me && !g.combat.blockersDeclared && c.controller === me) {
@@ -79,11 +90,14 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
       const scripted = scriptedMana(g, iid);
       if (scripted.length === 1 && (isLand || !faceOf(vis, getCard).types.includes('Creature'))) { act({ t: 'activateMana', iid, option: scripted[0].id }); return; }
       if (scripted.length > 1) { open(scripted.map((o) => ({ label: manaLabel(o), onClick: () => act({ t: 'activateMana', iid, option: o.id }) })), 'Tap for mana'); return; }
-      const opts = scripted.length ? [] : manaOptions(vis);
+      // Oracle-text mana (no scripted mana ability) is a manual tap: only without rules enforcement / in fix mode.
+      const opts = scripted.length || !manualOk(g) ? [] : manaOptions(vis);
       if (opts.length === 1 && (isLand || !faceOf(vis, getCard).types.includes('Creature'))) { act({ t: 'tapForMana', iid, mana: opts[0] }); return; }
       if (opts.length > 1) { open(opts.map((m) => ({ label: `Add ${m.split('').map((x) => `{${x}}`).join('')} (${MANA_NAMES[m[0]]})`, onClick: () => act({ t: 'tapForMana', iid, mana: m }) })), 'Tap for mana'); return; }
     }
-    if (manualOk(g)) act({ t: 'tap', iid });
+    if (manualOk(g)) { act({ t: 'tap', iid }); return; }
+    // Rules-enforced: never a manual action — show the card's abilities (activate / mana) instead.
+    open(menu(iid), vis ? faceOf(vis, getCard).name : undefined);
     return;
   }
   if (c.zone === 'hand' && c.owner === me && vis) {
@@ -122,7 +136,9 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
     }
   }
   let x: number | undefined;
-  if (/\{X\}/.test(cost)) {
+  // X in an additional cost (Vicious Rivalry: "pay X life") needs a value too.
+  const xExtra = !manual && c ? (safeCastOptions(base.g, iid, face).find((o) => o.id === (costOption ?? 'normal'))?.extra ?? []).some((e) => /\bX\b/.test(e)) : false;
+  if (/\{X\}/.test(cost) || xExtra) {
     const v = await base.ask('Value of X', 1);
     if (v == null) return;
     x = v;
@@ -262,7 +278,7 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
   if (c.zone === 'battlefield') {
     if (manual) items.push({ label: c.tapped ? 'Untap' : 'Tap', onClick: () => act({ t: 'tap', iid }) });
     const scriptedM = scriptedMana(g, iid);
-    const mana = scriptedM.length ? [] : manaOptions(c);
+    const mana = scriptedM.length || !manual ? [] : manaOptions(c);
     if (scriptedM.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: scriptedM.map((o) => ({ label: manaLabel(o), onClick: () => act({ t: 'activateMana', iid, option: o.id }) })) });
     }

@@ -13,7 +13,7 @@ import { isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRe
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 
 /** Actions never performed on behalf of a controlled player (see engine/turns.ts NEVER_ROUTED); also allowed while controlled. */
-const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom']);
+const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan']);
 
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
 
@@ -565,6 +565,7 @@ function FixModeBar() {
     return (
       <div className="fix-banner">
         <span>Fix mode: manual tools are on for both players</span>
+        {me && <button className="tiny" title="Draw a card (also: click your library for more tools)" onClick={() => act({ t: 'draw', n: 1 })}>Draw a card</button>}
         {me && <button className="tiny" onClick={() => act({ t: 'endFixMode' } as never)}>Done fixing</button>}
       </div>
     );

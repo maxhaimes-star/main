@@ -29,6 +29,8 @@ export interface CardInstance {
   zone: Zone;
   tapped: boolean;
   faceDown: boolean;
+  /** Face-down in exile and nobody may look at it, not even its owner (Bomat Courier: "You can't look at it."). */
+  unseen?: boolean;
   /** Showing back face (transformed / MDFC back / flipped). */
   transformed: boolean;
   counters: Record<string, number>;
@@ -196,6 +198,8 @@ export interface GameState {
   strict?: boolean;
   /** "Fix board" escape hatch: manual tools (and `force`) are allowed while on. Turned on when the opponent accepts. */
   fixMode?: { on: boolean; requestedBy: string | null };
+  /** "Free mulligan" house rule: both players agreed that each player's first mulligan doesn't cost a card. */
+  freeMulligan?: { on: boolean; requestedBy: string | null };
 }
 
 /** Stage 2: something that happened during an action (engine-internal; used to detect triggers). */
@@ -306,6 +310,9 @@ type GameActionBody =
   | { t: 'requestFixMode' }
   | { t: 'answerFixMode'; accept: boolean }
   | { t: 'endFixMode' }
+  /** Mulligan phase: propose / accept a free first mulligan for everyone (both players must agree). */
+  | { t: 'requestFreeMulligan' }
+  | { t: 'answerFreeMulligan'; accept: boolean }
   | { t: 'chat'; text: string };
 
 // ------------------------------------------------------------ client view

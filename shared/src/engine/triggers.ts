@@ -879,6 +879,12 @@ export function processTriggers(state: GameState, ctx: Ctx): boolean {
   uniqueTriggers(state, ctx); // Sagas, Hideaway, Mode$ Always, Saga sacrifice (turns.ts)
   try { detect(state, ctx); } catch (e) { log(state, ctx, null, `Trigger detection error: ${(e as Error).message}`); }
   const pushed = flush(state, ctx);
+  // Triggers put on the stack can cause events of their own ("becomes the target": Nadu, ward): detect those now,
+  // so their triggers go on the stack above them.
+  for (let guard = 0; guard < 5 && pushed.length && state.events?.some((e) => e.t === 'targeted') && !state.pending.length; guard++) {
+    try { detect(state, ctx); } catch (e) { log(state, ctx, null, `Trigger detection error: ${(e as Error).message}`); }
+    pushed.push(...flush(state, ctx));
+  }
   if (!pushed.length) return false;
   const live = state.players.filter((p) => !p.conceded).map((p) => p.pid);
   const ctrls = new Set(pushed);

@@ -136,7 +136,7 @@ function snapshot(state: GameState): string {
   return JSON.stringify(rest);
 }
 
-const NOT_UNDOABLE = new Set<GameAction['t']>(['chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek', 'setAutoTriggers', 'requestFixMode', 'answerFixMode', 'endFixMode']);
+const NOT_UNDOABLE = new Set<GameAction['t']>(['chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek', 'setAutoTriggers', 'requestFixMode', 'answerFixMode', 'endFixMode', 'requestFreeMulligan', 'answerFreeMulligan']);
 
 // ------------------------------------------------------------------ turn structure
 
@@ -457,6 +457,10 @@ export function applyAction(state: GameState, pid: string, action: GameAction, c
   return null;
 }
 
+function freeMulliganOn(state: GameState): boolean {
+  return !!state.freeMulligan?.on;
+}
+
 function card(state: GameState, iid: string): CardInstance | undefined {
   return state.cards[iid];
 }
@@ -478,7 +482,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     case 'keep': {
       if (state.phase !== 'mulligan' || me.kept) return 'Not deciding on a hand';
       me.kept = true;
-      me.needsBottom = Math.min(me.mulligans, me.zones.hand.length);
+      me.needsBottom = Math.min(freeMulliganOn(state) ? Math.max(0, me.mulligans - 1) : me.mulligans, me.zones.hand.length);
       log(state, ctx, pid, `${name} keeps ${7 - me.needsBottom}.`);
       checkMulliganDone(state, ctx);
       return null;
@@ -1112,6 +1116,32 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       if (!state.fixMode?.on && !state.fixMode?.requestedBy) return 'Fix mode is not on';
       state.fixMode = { on: false, requestedBy: null };
       log(state, ctx, pid, `${name} ends fix mode (rules enforced again).`);
+      return null;
+    }
+    case 'requestFreeMulligan': {
+      if (state.phase !== 'mulligan') return 'Only before the game starts (mulligans)';
+      if (state.freeMulligan?.on) return 'The first mulligan is already free';
+      if (state.players.some((p) => p.kept && p.mulligans > 0)) return 'Someone already kept after a mulligan';
+      if (others(state, pid).length === 0) {
+        state.freeMulligan = { on: true, requestedBy: pid };
+        log(state, ctx, pid, `${name} makes the first mulligan free.`);
+        return null;
+      }
+      state.freeMulligan = { on: false, requestedBy: pid };
+      log(state, ctx, pid, `${name} proposes a free first mulligan for both players.`);
+      return null;
+    }
+    case 'answerFreeMulligan': {
+      const req = state.freeMulligan?.requestedBy;
+      if (!req || state.freeMulligan?.on || req === pid) return 'No free-mulligan proposal to answer';
+      if (state.phase !== 'mulligan') { state.freeMulligan = undefined; return 'The game has already started'; }
+      if (a.accept) {
+        state.freeMulligan = { on: true, requestedBy: req };
+        log(state, ctx, pid, `${name} agrees: each player's first mulligan is free.`);
+      } else {
+        state.freeMulligan = undefined;
+        log(state, ctx, pid, `${name} declines the free mulligan.`);
+      }
       return null;
     }
     case 'chat': {

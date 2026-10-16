@@ -136,7 +136,7 @@ export function TableCard({ iid, small, attachments }: { iid: string; small?: bo
         )}
         {pt && <div className={`pt ${ptChanged ? 'changed' : ''} ${lethal ? 'lethal' : ''}`}>{pt[0]}/{pt[1]}{damage > 0 && <span className="dmg"> ✹{damage}</span>}</div>}
         {!pt && damage > 0 && <div className="pt lethal">✹{damage}</div>}
-        {c.attacking && <div className="combat-badge">⚔</div>}
+        {c.attacking && <div className="combat-badge" title={g.cards[c.attacking] ? `Attacking ${(() => { const t = g.cards[c.attacking!]; return t && !isHidden(t) ? faceOf(t, getCard).name : 'a planeswalker'; })()}` : 'Attacking'}>⚔{g.cards[c.attacking] ? ' PW' : ''}</div>}
         {c.blocking && <div className="combat-badge">🛡</div>}
         {!hidden && c.note && <div className="note" title={c.note}>{c.note}</div>}
         {!hidden && c.noUntap && <div className="nountap" title="Doesn't untap">⛓</div>}

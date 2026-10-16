@@ -21,8 +21,45 @@ export const SCRIPTS = data as unknown as ScriptData;
 
 export function getScript(cardId: string): ForgeFace[] | undefined {
   const s = SCRIPTS.cards[cardId];
-  if (s || !cardId.endsWith(ROOM_SUFFIX)) return s;
+  if (s) return s;
+  if (cardId.startsWith(TOKEN_PREFIX)) return tokenScript(cardId.slice(TOKEN_PREFIX.length));
+  if (!cardId.endsWith(ROOM_SUFFIX)) return s;
   return roomScript(cardId.slice(0, -ROOM_SUFFIX.length));
+}
+
+// ------------------------------------------------------------------ token abilities
+
+/**
+ * Token scripts in scripts.json carry no A: lines; the activated abilities of the predefined tokens (Treasure, Food,
+ * Clue, Blood, Map, Mutagen, Eldrazi Spawn) live here, keyed by the token's oracle text. A token with one of these uses
+ * the virtual script "token#<key>" (scriptRef), so its abilities work like a card's (mana.ts for mana abilities).
+ */
+export const TOKEN_PREFIX = 'token#';
+const TOKEN_ABILITIES: Record<string, { key: string; name: string; abilities: string[] }> = {
+  '{T}, Sacrifice this token: Add one mana of any color.': { key: 'treasure', name: 'Treasure', abilities: ['AB$ Mana | Cost$ T Sac<1/CARDNAME> | Produced$ Any | SpellDescription$ Add one mana of any color.'] },
+  'Sacrifice this creature: Add {C}.': { key: 'spawn', name: 'Eldrazi Spawn', abilities: ['AB$ Mana | Cost$ Sac<1/CARDNAME> | Produced$ C | SpellDescription$ Add {C}.'] },
+  '{2}, {T}, Sacrifice this token: You gain 3 life.': { key: 'food', name: 'Food', abilities: ['AB$ GainLife | Cost$ 2 T Sac<1/CARDNAME> | Defined$ You | LifeAmount$ 3 | SpellDescription$ You gain 3 life.'] },
+  '{2}, Sacrifice this token: Draw a card.': { key: 'clue', name: 'Clue', abilities: ['AB$ Draw | Cost$ 2 Sac<1/CARDNAME> | NumCards$ 1 | SpellDescription$ Draw a card.'] },
+  '{1}, {T}, Discard a card, Sacrifice this token: Draw a card.': { key: 'blood', name: 'Blood', abilities: ['AB$ Draw | Cost$ 1 T Discard<1/Card> Sac<1/CARDNAME> | NumCards$ 1 | SpellDescription$ Draw a card.'] },
+};
+const TOKEN_BY_KEY = new Map(Object.values(TOKEN_ABILITIES).map((t) => [t.key, t]));
+const tokenCache = new Map<string, ForgeFace[]>();
+
+function tokenScript(key: string): ForgeFace[] | undefined {
+  const t = TOKEN_BY_KEY.get(key);
+  if (!t) return undefined;
+  let faces = tokenCache.get(key);
+  if (!faces) {
+    faces = [{ name: t.name, abilities: t.abilities, triggers: [], statics: [], replacements: [], keywords: [], svars: {} }];
+    tokenCache.set(key, faces);
+  }
+  return faces;
+}
+
+/** The virtual script id of a token with predefined abilities (Treasure ...), or undefined. */
+export function tokenScriptId(oracle: string | undefined): string | undefined {
+  const t = oracle ? TOKEN_ABILITIES[oracle.trim()] : undefined;
+  return t ? `${TOKEN_PREFIX}${t.key}` : undefined;
 }
 
 // ------------------------------------------------------------------ Rooms
@@ -85,7 +122,7 @@ export function registerScripts(cards: Record<string, ForgeFace[]>, tokens?: Rec
 }
 
 /** The parts of a CardInstance that decide which script it uses. */
-type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[]; unlocked?: number[] };
+type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[]; unlocked?: number[]; token?: { oracle: string }; copyToken?: { oracle: string } };
 
 /**
  * The script (card id + face) an instance uses: a copy (copyOf, on the battlefield) uses the copied card's script, a
@@ -95,7 +132,11 @@ export function scriptRef(c: ScriptHolder): { cardId: string; face: number } | u
   if (c.animations?.some((a) => a.removeAllAbilities)) return undefined;
   if (c.copyOf && (c.zone === undefined || c.zone === 'battlefield')) return { cardId: c.copyOf, face: c.copyFace ?? 0 };
   if (c.unlocked && c.cardId && (c.zone === undefined || c.zone === 'battlefield')) return { cardId: `${c.cardId}${ROOM_SUFFIX}`, face: c.unlocked.reduce((m, d) => m | (1 << d), 0) };
-  return c.cardId ? { cardId: c.cardId, face: c.transformed ? 1 : 0 } : undefined;
+  if (c.cardId) return { cardId: c.cardId, face: c.transformed ? 1 : 0 };
+  // Treasure, Food, Clue ... (token abilities above)
+  const tok = c.copyToken && (c.zone === undefined || c.zone === 'battlefield') ? c.copyToken : c.token;
+  const id = tokenScriptId(tok?.oracle);
+  return id ? { cardId: id, face: 0 } : undefined;
 }
 
 /** The script face an instance uses (see scriptRef). */

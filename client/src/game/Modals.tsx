@@ -164,6 +164,8 @@ export function MulliganOverlay() {
   if (!p) return <div className="overlay-msg">Players are choosing their opening hands…</div>;
   const others = g.players.filter((x) => x.pid !== me);
   const waiting = p.kept && p.needsBottom === 0;
+  const free = !!g.freeMulligan?.on;
+  const freeReq = !free ? g.freeMulligan?.requestedBy ?? null : null;
   return (
     <div className="mulligan">
       <h2>{g.startingPlayer === me ? 'You are on the play.' : 'You are on the draw.'} {p.mulligans > 0 && `Mulligans: ${p.mulligans}`}</h2>
@@ -182,10 +184,20 @@ export function MulliganOverlay() {
       </div>
       {!p.kept && (
         <div className="row">
-          <button className="primary big" onClick={() => act({ t: 'keep' })}>Keep {7 - p.mulligans}</button>
-          <button className="big" onClick={() => act({ t: 'mulligan' })} disabled={p.mulligans >= 6}>Mulligan to {6 - p.mulligans}</button>
+          <button className="primary big" onClick={() => act({ t: 'keep' })}>Keep {7 - Math.max(0, p.mulligans - (free ? 1 : 0))}</button>
+          <button className="big" onClick={() => act({ t: 'mulligan' })} disabled={p.mulligans >= 6}>{free && p.mulligans === 0 ? 'Free mulligan (to 7)' : `Mulligan to ${6 - Math.max(0, p.mulligans - (free ? 1 : 0))}`}</button>
         </div>
       )}
+      {/* "Free mulligan" house rule: both players must agree (like fix mode). */}
+      {free ? <p className="muted">The first mulligan is free for both players.</p>
+        : freeReq === me ? <p className="muted">Waiting for your opponent to agree to a free first mulligan…</p>
+        : freeReq ? (
+          <div className="row">
+            <span>{g.players.find((x) => x.pid === freeReq)?.name ?? 'Your opponent'} proposes a free first mulligan.</span>
+            <button className="primary" onClick={() => act({ t: 'answerFreeMulligan', accept: true })}>Agree</button>
+            <button onClick={() => act({ t: 'answerFreeMulligan', accept: false })}>Decline</button>
+          </div>
+        ) : !p.kept && <button className="tiny" onClick={() => act({ t: 'requestFreeMulligan' })}>Propose a free first mulligan</button>}
       {p.kept && p.needsBottom > 0 && (
         <div className="row">
           <span>Choose {p.needsBottom} card(s) to put on the bottom ({sel.length} selected).</span>
