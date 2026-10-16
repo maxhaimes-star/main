@@ -40,7 +40,7 @@ export function dbCard(id: string, rarity?: Rarity): CardData | undefined {
   if (!c) return undefined;
   const faces = getScript(id);
   if (faces) registerScripts({ [id]: faces });
-  return { ...c, rank: heuristicRank(c, rarity ?? typicalRarity(id)) };
+  return { ...c, rank: heuristicRank(c, rarity ?? typicalRarity(id)), powerRanked: true };
 }
 
 /** Make sure these ids resolve (registers DB cards; cube cards are untouched). */

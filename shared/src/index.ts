@@ -1,6 +1,8 @@
 export * from './cards.ts';
 export * from './room.ts';
 export * from './draft.ts';
+export * from './bots.ts';
+export { cardPower, heuristicRank } from './power.ts';
 export * from './export.ts';
 export * from './game/types.ts';
 export * from './game/rules.ts';

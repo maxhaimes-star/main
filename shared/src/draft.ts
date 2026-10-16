@@ -1,4 +1,6 @@
-import { type CardData, type Color, COLORS } from './cards.ts';
+import { type CardData, COLORS } from './cards.ts';
+import { botDeck, botPick, cardScore } from './bots.ts';
+import { emptyDeck, multisetDiff } from './deckutil.ts';
 import type { AuctionState, Deck, DraftState, Player, RoomState } from './room.ts';
 
 export type Rng = () => number;
@@ -47,17 +49,7 @@ export function cubeList(room: RoomState, defaultList: string[]): string[] {
   return room.settings.customList?.length ? room.settings.customList : defaultList;
 }
 
-export function multisetDiff(a: string[], b: string[]): string[] {
-  const counts = new Map<string, number>();
-  for (const x of b) counts.set(x, (counts.get(x) ?? 0) + 1);
-  return a.filter((x) => {
-    const c = counts.get(x) ?? 0;
-    if (c > 0) { counts.set(x, c - 1); return false; }
-    return true;
-  });
-}
-
-export const emptyDeck = (): Deck => ({ main: [], side: [], basics: { W: 0, U: 0, B: 0, R: 0, G: 0 }, ready: false });
+export { multisetDiff, emptyDeck };
 
 // ===================================================================== booster draft
 
@@ -84,6 +76,7 @@ export function startDraftWithPacks(room: RoomState, unopened: string[][][], now
     queues: Array.from({ length: n }, () => []),
     deadlines: Array(n).fill(null),
     picks: Array.from({ length: n }, () => []),
+    main: Array.from({ length: n }, () => []),
     unopened,
     pickNumber: Array(n).fill(0),
     done: false,
@@ -143,9 +136,52 @@ export function draftPick(room: RoomState, seat: number, cardId: string, now: nu
       openRound(room, now);
     } else {
       d.done = true;
-      finishPools(room, (seatIdx) => d.picks[seatIdx]);
+      finishPools(room, (seatIdx) => d.picks[seatIdx], (seatIdx) => d.main?.[seatIdx] ?? []);
     }
   }
+  return null;
+}
+
+/**
+ * A human leaves mid-draft (or mid-auction): a bot takes over their seat so the event carries on.
+ * The seat keeps the player's id, picks and pool, so they can take it back later with `reclaimSeat`.
+ */
+export function leaveSeat(room: RoomState, pid: string): string | null {
+  if (room.phase !== 'drafting' && room.phase !== 'auction') return 'You can only leave while drafting or in an auction';
+  const p = room.players.find((x) => x.id === pid);
+  if (!p) return 'You are not seated';
+  if (p.isBot) return 'A bot is already playing your seat';
+  p.isBot = true;
+  p.away = true;
+  p.connected = false;
+  return null;
+}
+
+/** An away player takes their seat back from the bot that was playing it. */
+export function reclaimSeat(room: RoomState, pid: string, now: number): string | null {
+  const p = room.players.find((x) => x.id === pid);
+  if (!p?.away) return 'That seat is not waiting for you';
+  p.isBot = false;
+  delete p.away;
+  p.connected = true;
+  const d = room.draft;
+  if (room.phase === 'drafting' && d && !d.done) {
+    // The bot may have left a pack in front of the seat; give the human a fresh timer for it.
+    d.deadlines[p.seat] = null;
+    armDeadline(room, p.seat, now);
+  }
+  return null;
+}
+
+/** The player in `seat` chooses which of their picks form the main deck; the rest is sideboard. */
+export function setDraftMain(room: RoomState, seat: number, main: string[]): string | null {
+  const d = room.draft;
+  if (!d || d.done) return 'No draft in progress';
+  const picks = d.picks[seat];
+  if (!picks) return 'No such seat';
+  if (!Array.isArray(main) || main.some((x) => typeof x !== 'string')) return 'Invalid deck';
+  if (multisetDiff(picks, main).length !== picks.length - main.length) return 'Those cards are not in your picks';
+  (d.main ??= d.picks.map(() => []))[seat] = main.slice();
   return null;
 }
 
@@ -170,66 +206,6 @@ export function draftTick(room: RoomState, now: number, lookup: CardLookup, rng:
   return changed;
 }
 
-// ===================================================================== bots
-
-/** Colors a bot leans toward given its picks so far. */
-export function colorWeights(picks: string[], lookup: CardLookup): Record<Color, number> {
-  const w: Record<Color, number> = { W: 0, U: 0, B: 0, R: 0, G: 0 };
-  for (const id of picks) {
-    const c = lookup(id);
-    if (!c || c.types.includes('Land')) continue;
-    const power = 1 + Math.max(0, 1 - c.rank / 600);
-    for (const col of c.colors) w[col] += power / c.colors.length;
-  }
-  return w;
-}
-
-export function cardScore(card: CardData, picks: string[], lookup: CardLookup): number {
-  // Earlier in the list ≈ the cube owner's sort order; use a gentle prior plus color fit.
-  let score = 1 - Math.min(card.rank, 600) / 600;
-  score += 0.5; // baseline so nothing scores negative
-  if (picks.length >= 4) {
-    const w = colorWeights(picks, lookup);
-    const top = (Object.entries(w) as [Color, number][]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c]) => c);
-    if (card.colors.length === 0) score += 0.25;
-    else if (card.colors.every((c) => top.includes(c))) score += 0.6;
-    else if (card.colors.some((c) => top.includes(c))) score += 0.1;
-    else score -= 0.4 * Math.min(1, picks.length / 15);
-  }
-  if (card.types.includes('Land') && card.colorIdentity.length >= 2) score -= 0.15;
-  return score;
-}
-
-export function botPick(pack: string[], picks: string[], lookup: CardLookup, rng: Rng): string {
-  let best = pack[0];
-  let bestScore = -Infinity;
-  for (const id of pack) {
-    const c = lookup(id);
-    const s = (c ? cardScore(c, picks, lookup) : 0) + rng() * 0.15;
-    if (s > bestScore) { bestScore = s; best = id; }
-  }
-  return best;
-}
-
-/** Bot deckbuilding: two best colors, 23 spells, 17 lands. */
-export function botDeck(pool: string[], lookup: CardLookup): Deck {
-  const w = colorWeights(pool, lookup);
-  const top = (Object.entries(w) as [Color, number][]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([c]) => c);
-  const fits = (c: CardData) => c.colors.every((x) => top.includes(x));
-  const cards = pool.map((id) => lookup(id)).filter(Boolean) as CardData[];
-  const spells = cards.filter((c) => !c.types.includes('Land') && fits(c)).sort((a, b) => a.rank - b.rank).slice(0, 23);
-  const lands = cards.filter((c) => c.types.includes('Land') && c.producedMana.some((m) => top.includes(m as Color)) && c.producedMana.every((m) => top.includes(m as Color) || m === 'C')).slice(0, 7);
-  const main = [...spells, ...lands].map((c) => c.id);
-  const deck = emptyDeck();
-  deck.main = main;
-  deck.side = multisetDiff(pool, main);
-  const basicsNeeded = Math.max(0, 40 - main.length);
-  deck.basics[top[0]] = Math.ceil(basicsNeeded / 2);
-  deck.basics[top[1] ?? top[0]] += Math.floor(basicsNeeded / 2);
-  deck.ready = true;
-  return deck;
-}
-
 // ===================================================================== sealed
 
 export function startSealed(room: RoomState, list: string[], rng: Rng, lookup: CardLookup) {
@@ -244,13 +220,18 @@ export function startSealedWithPools(room: RoomState, pools: string[][]) {
   finishPools(room, (seat) => pools[seat] ?? []);
 }
 
-function finishPools(room: RoomState, poolForSeat: (seat: number) => string[]) {
+function finishPools(room: RoomState, poolForSeat: (seat: number) => string[], mainForSeat?: (seat: number) => string[]) {
   const players = seatedPlayers(room);
   room.pools = {};
   room.decks = {};
   players.forEach((p, seat) => {
     room.pools[p.id] = poolForSeat(seat).slice();
-    room.decks[p.id] = { ...emptyDeck(), side: room.pools[p.id].slice() };
+    const pool = room.pools[p.id];
+    const main = mainForSeat ? mainForSeat(seat) : [];
+    const leftover = multisetDiff(pool, main);
+    // Only honour a main-deck split that really is a subset of the pool.
+    const ok = leftover.length === pool.length - main.length;
+    room.decks[p.id] = { ...emptyDeck(), main: ok ? main.slice() : [], side: ok ? leftover : pool.slice() };
   });
   room.phase = 'deckbuilding';
 }

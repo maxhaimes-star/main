@@ -20,6 +20,8 @@ export type ClientMsg =
   | { t: 'rename'; name: string }
   | { t: 'start' }
   | { t: 'pick'; cardId: string }
+  /** During the draft: which of my picks are in the main deck (a sub-multiset of my picks; the rest is sideboard). */
+  | { t: 'draftMain'; main: string[] }
   | { t: 'nominate'; cardId: string; amount?: number }
   | { t: 'skipLot'; cardId: string }
   | { t: 'passLot' }
@@ -31,6 +33,10 @@ export type ClientMsg =
   | { t: 'game'; matchId: string; action: GameAction }
   | { t: 'sideboard'; matchId: string; main: string[]; side: string[] }
   | { t: 'readyNext'; matchId: string }
+  /** Leave mid-draft/auction: a bot takes over the seat until the player takes it back. */
+  | { t: 'leaveSeat' }
+  /** Take a seat back from the bot that is playing it. A spectator names the away player's seat (`pid`). */
+  | { t: 'takeSeat'; pid?: string }
   | { t: 'kick'; pid: string }
   | { t: 'chat'; text: string }
   | { t: 'backToLobby' };
@@ -42,6 +48,8 @@ export interface DraftView {
   pack: string[] | null;
   queued: number;
   picks: string[];
+  /** The picks currently in the main deck (a sub-multiset of `picks`). */
+  main: string[];
   pickNumber: number;
   deadline: number | null;
   /** Number of packs waiting per seat (for the "waiting on" display). */

@@ -56,6 +56,8 @@ export interface CardData {
   localImage?: string;
   /** Position in the cube list (lower = listed earlier); used by bots as a weak power signal. */
   rank: number;
+  /** `rank` is a power estimate (set for card-database cards) rather than a cube list position. */
+  powerRanked?: boolean;
 }
 
 export interface CubeData {
