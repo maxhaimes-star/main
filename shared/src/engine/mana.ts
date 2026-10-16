@@ -16,7 +16,7 @@ import type { CardInstance, GameAction, GameState, ViewCard } from '../game/type
 import { isHidden } from '../game/types.ts';
 import { parseCost } from './costs.ts';
 import { type CountState, evalCount } from './counts.ts';
-import { parseAbility, scriptFaceOf } from './script.ts';
+import { parseAbility, scriptFaceOf, scriptRef } from './script.ts';
 import { activateRestriction, staticMods, type StaticsState } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 import { chapterManaLines } from './turns.ts';
@@ -134,13 +134,13 @@ function untappedOfType(state: CountState, c: CardInstance, valid: string, looku
 /** Mana options of a permanent (empty = no scripted / basic-type mana ability: fall back to manual tapping). */
 export function manaOptionsFor(state: CountState, iid: string, lookup: Lookup = getCard): ManaOption[] {
   const c = state.cards[iid] as CardInstance | ViewCard | undefined;
-  if (!c || isHidden(c) || c.zone !== 'battlefield' || !(c.cardId || c.copyOf) || c.faceDown) return [];
+  if (!c || isHidden(c) || c.zone !== 'battlefield' || !(c.cardId || c.copyOf || scriptRef(c)) || c.faceDown) return [];
   return plan(state, c, lookup).map(({ id, label, produces, sideEffects }) => ({ id, label, produces, sideEffects }));
 }
 
 /** Full mana plans of a permanent (costs and side effects), for auto-pay (engine/strict.ts). */
 export function manaPlansFor(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
-  if (c.zone !== 'battlefield' || !(c.cardId || c.copyOf) || c.faceDown) return [];
+  if (c.zone !== 'battlefield' || !(c.cardId || c.copyOf || scriptRef(c)) || c.faceDown) return [];
   return plan(state, c, lookup);
 }
 
@@ -181,7 +181,7 @@ export function activateMana(state: GameState, ctx: Ctx, pid: string, a: Extract
   const notes = opt.sideEffects.filter((x) => !/^Pay \{/.test(x));
   log(state, ctx, pid, `${me.name} ${opt.tap ? 'taps' : 'uses'} ${name} for ${opt.produces ? sym(opt.produces) : 'nothing'}${notes.length ? ` (${notes.join('; ')})` : ''}${opt.life || opt.selfDamage ? ` — life ${me.life}` : ''}.`);
   if (sick) log(state, ctx, pid, `Warning: ${name} has summoning sickness.`);
-  if (opt.sacSelf) moveCard(state, ctx, c.iid, 'graveyard');
+  if (opt.sacSelf) moveCard(state, ctx, c.iid, 'graveyard', { cause: 'sacrifice' });
   if (opt.byHand.length) log(state, ctx, pid, `Do by hand: ${opt.byHand.join('; ')}.`);
   return null;
 }

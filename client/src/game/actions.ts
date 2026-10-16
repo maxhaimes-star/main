@@ -68,11 +68,14 @@ export function defaultAction(base: Base, iid: string, menu: (iid: string) => Me
       const scripted = scriptedMana(g, iid);
       if (scripted.length === 1 && (isLand || !faceOf(vis, getCard).types.includes('Creature'))) { act({ t: 'activateMana', iid, option: scripted[0].id }); return; }
       if (scripted.length > 1) { open(scripted.map((o) => ({ label: manaLabel(o), onClick: () => act({ t: 'activateMana', iid, option: o.id }) })), 'Tap for mana'); return; }
-      const opts = scripted.length ? [] : manaOptions(vis);
+      // Oracle-text mana (no scripted mana ability) is a manual tap: only without rules enforcement / in fix mode.
+      const opts = scripted.length || !manualOk(g) ? [] : manaOptions(vis);
       if (opts.length === 1 && (isLand || !faceOf(vis, getCard).types.includes('Creature'))) { act({ t: 'tapForMana', iid, mana: opts[0] }); return; }
       if (opts.length > 1) { open(opts.map((m) => ({ label: `Add ${m.split('').map((x) => `{${x}}`).join('')} (${MANA_NAMES[m[0]]})`, onClick: () => act({ t: 'tapForMana', iid, mana: m }) })), 'Tap for mana'); return; }
     }
-    if (manualOk(g)) act({ t: 'tap', iid });
+    if (manualOk(g)) { act({ t: 'tap', iid }); return; }
+    // Rules-enforced: never a manual action — show the card's abilities (activate / mana) instead.
+    open(menu(iid), vis ? faceOf(vis, getCard).name : undefined);
     return;
   }
   if (c.zone === 'hand' && c.owner === me && vis) {
@@ -247,7 +250,7 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
   if (c.zone === 'battlefield') {
     if (manual) items.push({ label: c.tapped ? 'Untap' : 'Tap', onClick: () => act({ t: 'tap', iid }) });
     const scriptedM = scriptedMana(g, iid);
-    const mana = scriptedM.length ? [] : manaOptions(c);
+    const mana = scriptedM.length || !manual ? [] : manaOptions(c);
     if (scriptedM.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: scriptedM.map((o) => ({ label: manaLabel(o), onClick: () => act({ t: 'activateMana', iid, option: o.id }) })) });
     }
