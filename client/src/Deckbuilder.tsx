@@ -88,7 +88,6 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <span className={`count ${total === 40 ? 'good' : total < 40 ? 'warn' : ''}`}>{total} cards</span>
           <span className="muted">{mainCards.filter((c) => !c.types.includes('Land')).length} spells · {lands} lands · {side.length} in sideboard</span>
           <Curve cards={mainCards} />
-          <label className="ready"><input type="checkbox" checked={ready} onChange={(e) => setReady(e.target.checked)} /> Deck ready</label>
         </div>
         <div className="basics">
           <b>Basic lands ({basicsCount}):</b>
@@ -129,14 +128,14 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <button onClick={() => download(`${me?.name ?? 'deck'}.cod`, deckToCockatrice(fullDeck, getCard, `${view.name} - ${me?.name}`))}>Cockatrice (.cod)</button>
           <button onClick={() => navigator.clipboard?.writeText(deckToText(fullDeck, getCard))}>Copy as text</button>
         </div>
-        <MatchList view={view} send={send} onWatch={onWatch} />
+        <MatchList view={view} send={send} onWatch={onWatch} ready={ready} onReady={setReady} />
         {view.hostId === view.me && <button className="link" onClick={() => { if (confirm('Start a new event? Pools and decks will be cleared.')) send({ t: 'backToLobby' }); }}>New event (back to lobby)</button>}
       </div>
     </div>
   );
 }
 
-export function MatchList({ view, send, onWatch }: { view: RoomProps['view']; send: RoomProps['send']; onWatch: (id: string) => void }) {
+export function MatchList({ view, send, onWatch, ready, onReady }: { view: RoomProps['view']; send: RoomProps['send']; onWatch: (id: string) => void; ready?: boolean; onReady?: (ready: boolean) => void }) {
   const [bestOf, setBestOf] = useState(view.settings.bestOf ?? 3);
   const humans = view.players.filter((p) => !p.isBot && p.id !== view.me);
   const name = (pid: string) => view.players.find((p) => p.id === pid)?.name ?? '?';
@@ -144,20 +143,34 @@ export function MatchList({ view, send, onWatch }: { view: RoomProps['view']; se
   const isHost = view.hostId === view.me;
   const [pa, setPa] = useState('');
   const [pb, setPb] = useState('');
+  const isReady = (pid: string) => (pid === view.me && ready != null ? ready : !!view.decksReady[pid]);
+  const readyCount = view.players.filter((p) => isReady(p.id)).length;
   return (
     <div className="matches">
       <h4>Play</h4>
       {iAmPlayer && (
         <>
-          <label>Best of <select value={bestOf} onChange={(e) => setBestOf(Number(e.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>
+          <div className="play-controls">
+            {onReady && <label className="ready"><input type="checkbox" checked={!!ready} onChange={(e) => onReady(e.target.checked)} /> Deck ready</label>}
+            <label>Best of <select value={bestOf} onChange={(e) => setBestOf(Number(e.target.value))}><option value={1}>1</option><option value={3}>3</option><option value={5}>5</option></select></label>
+          </div>
+          <ul className="ready-status" aria-label="Who is ready">
+            {view.players.map((p) => (
+              <li key={p.id} className={isReady(p.id) ? 'is-ready' : 'building'}>
+                <span className={`dot ${p.connected ? 'on' : ''}`} />{p.name}{p.id === view.me ? ' (you)' : ''}{p.isBot ? ' · bot' : ''}
+                <b>{isReady(p.id) ? 'Ready' : 'Building…'}</b>
+              </li>
+            ))}
+            <li className="ready-summary muted">{readyCount}/{view.players.length} ready</li>
+          </ul>
           {humans.length === 0 && <p className="muted">Invite a friend to play — bots only draft.</p>}
           {humans.map((p) => (
             <div key={p.id} className="challenge">
-              <span><span className={`dot ${p.connected ? 'on' : ''}`} />{p.name} {view.decksReady[p.id] ? '✅' : <small className="muted">(building)</small>}</span>
-              <button disabled={!view.decksReady[p.id] || !view.decksReady[view.me]} onClick={() => send({ t: 'createMatch', players: [view.me, p.id], bestOf })}>Play</button>
+              <span><span className={`dot ${p.connected ? 'on' : ''}`} />{p.name} {isReady(p.id) ? '✅' : <small className="muted">(building)</small>}</span>
+              <button disabled={!isReady(p.id) || !isReady(view.me)} onClick={() => send({ t: 'createMatch', players: [view.me, p.id], bestOf })}>Play</button>
             </div>
           ))}
-          {!view.decksReady[view.me] && <p className="muted">Tick "Deck ready" to play.</p>}
+          {onReady && !isReady(view.me) && <p className="muted">Tick "Deck ready" to play.</p>}
         </>
       )}
       {isHost && humans.length >= 2 && (

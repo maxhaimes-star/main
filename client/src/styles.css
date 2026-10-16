@@ -160,7 +160,13 @@ h1, h2, h3, h4 { margin: 8px 0; }
 /* ---------- deckbuilder */
 .db-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .db-head .count { font-size: 20px; font-weight: 700; }
-.ready { display: flex; align-items: center; gap: 6px; font-weight: 700; margin-left: auto; }
+.ready { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+.play-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
+.ready-status { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.ready-status li { display: flex; align-items: center; gap: 4px; }
+.ready-status li b { margin-left: auto; font-size: 12px; }
+.ready-status li.is-ready b { color: var(--good, #6c6); }
+.ready-status li.building b { color: var(--muted); font-weight: 600; }
 .db-columns { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 130px; min-height: 200px; }
 .db-col { width: 110px; flex: none; }
 .db-col-title { text-align: center; font-weight: 700; margin-bottom: 4px; }
