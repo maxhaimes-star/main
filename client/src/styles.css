@@ -458,6 +458,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .stack-ability { width: 100%; aspect-ratio: 63/88; border-radius: 6px; background: linear-gradient(160deg, #3a3350, #1b1826); border: 2px solid #8b7bd0; display: flex; align-items: flex-start; justify-content: center; font-size: 26px; padding-top: 14px; }
 .stack-item.trigger .stack-ability { border-color: var(--gold); }
 .stack-img { width: 100% !important; }
+.stack-kind { position: absolute; top: 4px; right: 4px; background: #3a3350e6; border: 1px solid #8b7bd0; color: #fff; font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 0 5px; border-radius: 4px; }
+.stack-item.trigger .stack-kind { border-color: var(--gold); }
 .stack-text { position: absolute; left: 0; right: 0; bottom: 0; min-height: 46px; display: flex; flex-direction: column; justify-content: center; background: #000e; color: #fff; padding: 2px 5px; font-size: 11px; line-height: 1.2; border-radius: 0 0 6px 6px; max-height: 70%; overflow: hidden; }
 .stack-item:not(.top) .stack-text small { display: none; }
 .stack-btns { position: absolute; left: 4px; top: 4px; display: flex; gap: 3px; z-index: 2; }

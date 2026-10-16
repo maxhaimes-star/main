@@ -762,7 +762,11 @@ function Stack({ yields, setAuto }: { yields: string[]; setAuto: (p: Partial<Aut
       <div className="stack-title">Stack ({g.stack.length})</div>
       {g.stack.slice().reverse().map((s, i, arr) => {
         const c = s.iid ? g.cards[s.iid] : undefined;
-        const face = c && !isHidden(c) ? faceOf(c, getCard) : undefined;
+        const face = c && !isHidden(c) && !c.faceDown ? faceOf(c, getCard) : undefined;
+        // Abilities and triggers show their source's art (also once the source has left the battlefield, e.g. a fetchland).
+        const srcCard = !c && s.sourceIid ? g.cards[s.sourceIid] : undefined;
+        const srcFace = srcCard && !isHidden(srcCard) && !srcCard.faceDown ? faceOf(srcCard, getCard) : undefined;
+        const art = face ?? srcFace;
         const refs = s.auto?.targets?.flat() ?? [];
         const legal = targeting ? isLegal({ kind: 'stack', id: s.id }) : null;
         const src = sourceName(g, s);
@@ -772,12 +776,12 @@ function Stack({ yields, setAuto }: { yields: string[]; setAuto: (p: Partial<Aut
           <div key={s.id} className={`stack-item ${i === 0 ? 'top' : ''} ${s.kind} ${targeting ? (legal ? 'legal-target' : 'dim') : ''}`}
             style={{ zIndex: arr.length - i }}
             data-stack-id={s.id}
-            onMouseEnter={() => { if (face) setPreview({ face }); if (refs.length) setHoverTargets(refs.flatMap((r) => (r.kind === 'card' ? [r.iid] : []))); }}
+            onMouseEnter={() => { if (art) setPreview({ face: art, extra: face ? undefined : s.text }); if (refs.length) setHoverTargets(refs.flatMap((r) => (r.kind === 'card' ? [r.iid] : []))); }}
             onMouseLeave={() => refs.length && setHoverTargets([])}
             onClick={targeting ? (e) => { e.stopPropagation(); pickTarget({ kind: 'stack', id: s.id }); } : isTouch() ? (e) => {
               e.stopPropagation();
               const items = stackItems(s, yieldable, yielding, src);
-              if (face) showSheet({ face, extra: `${s.text} · ${g.players.find((p) => p.pid === s.controller)?.name ?? ''}`, items });
+              if (art) showSheet({ face: art, extra: `${s.text} · ${g.players.find((p) => p.pid === s.controller)?.name ?? ''}`, items });
               else if (items.length) openMenu(e.clientX, e.clientY, items, src);
             } : undefined}
             onContextMenu={(e) => {
@@ -785,10 +789,13 @@ function Stack({ yields, setAuto }: { yields: string[]; setAuto: (p: Partial<Aut
               const items = stackItems(s, yieldable, yielding, src);
               if (items.length) openMenu(e.clientX, e.clientY, items, face?.name ?? src);
             }}>
-            {face ? <CardImage face={face} className="stack-img" /> : <div className="stack-ability">⚡</div>}
+            {art ? <CardImage face={art} className="stack-img" />
+              : c ? <CardBack className="stack-img" />
+                : <div className="stack-ability">⚡</div>}
+            {!face && art && <div className="stack-kind">{s.kind === 'trigger' ? 'Trigger' : 'Ability'}</div>}
             <div className="stack-text">
               <b>{s.auto && <span className="auto-badge" title="Resolved automatically">⚡ </span>}{s.kind === 'trigger' && <span className="trigger-badge">trigger</span>}{yielding && <span className="trigger-badge" title="Auto-yield on">yield</span>}{s.text}</b>
-              <small>{s.kind === 'trigger' && face ? `${face.name} · ` : ''}{g.players.find((p) => p.pid === s.controller)?.name}{s.x != null ? ` · X=${s.x}` : ''}</small>
+              <small>{!face && srcFace ? `${srcFace.name} · ` : ''}{g.players.find((p) => p.pid === s.controller)?.name}{s.x != null ? ` · X=${s.x}` : ''}</small>
               {refs.length > 0 && <small className="stack-targets">→ {refs.map((r) => targetName(g, r)).join(', ')}</small>}
             </div>
             {i === 0 && !targeting && manualOk(g) && (

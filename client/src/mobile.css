@@ -282,6 +282,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .lay-portrait .stack-text, .lay-landscape .stack-text { position: static; background: none; min-height: 0; max-height: none; padding: 0; font-size: 11px; border-radius: 0; justify-content: flex-start; flex: 1 1 auto; min-width: 0; }
 .lay-portrait .stack-text small, .lay-landscape .stack-text small { display: none; }
 .lay-portrait .stack-btns, .lay-landscape .stack-btns { position: static; flex-direction: row; }
+.lay-portrait .stack-kind, .lay-landscape .stack-kind { display: none; }
 .lay-portrait .stack-btns button, .lay-landscape .stack-btns button { min-height: 30px; }
 
 /* in-game prompts */
