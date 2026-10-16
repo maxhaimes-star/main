@@ -12,12 +12,12 @@ import { seeded } from './helpers.ts';
 
 const deck = (extra: string[], fill = 'basic_mountain') => [...extra, ...Array(40 - extra.length).fill(fill)];
 
-function setup(a: string[] = [], b: string[] = [], fillA = 'basic_mountain', fillB = 'basic_mountain') {
+function setup(a: string[] = [], b: string[] = [], fillA = 'basic_mountain', fillB = 'basic_mountain', first = 'a') {
   const ctx: Ctx = { rng: seeded(7), lookup: getCard, now: 0 };
   const g = createGame('g', [
     { pid: 'a', name: 'Alice', deck: deck(a, fillA), side: [] },
     { pid: 'b', name: 'Bob', deck: deck(b, fillB), side: [] },
-  ], 'a', ctx);
+  ], first, ctx);
   act(g, ctx, 'a', { t: 'keep' });
   act(g, ctx, 'b', { t: 'keep' });
   return { g, ctx };
@@ -457,5 +457,81 @@ describe('5: look-at-the-top effects are engine questions', () => {
     expect(applyAction(g, 'a', { t: 'resolvePeek', ...none, bottom: [pk2.iids[0]] }, ctx)).toMatch(/surveil/i);
     act(g, ctx, 'a', { t: 'resolvePeek', ...none, graveyard: [pk2.iids[0]] });
     expect(g.cards[pk2.iids[0]].zone).toBe('graveyard');
+  });
+});
+
+describe('6: Nadu, Winged Wisdom', () => {
+  const naduTriggers = (g: GameState) => g.stack.filter((s) => /Nadu|becomes the target/.test(s.text)).length;
+
+  it('an Aura spell targeting my creature triggers it; the trigger uses the stack', () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'splinter_twin', 'ponder', 'brainstorm']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    for (let k = 0; k < 4; k++) put(g, ctx, 'a', 'basic_mountain');
+    const twin = toZone(g, ctx, 'a', 'splinter_twin', 'hand');
+    const [pd] = stackLibrary(g, 'a', ['ponder', 'brainstorm']);
+    act(g, ctx, 'a', { t: 'cast', iid: twin, targets: card(nadu) });
+    expect(g.stack.length, logTail(g)).toBe(2);
+    expect(naduTriggers(g)).toBe(1);
+    expect(g.cards[pd].zone).toBe('library'); // not yet: the trigger waits on the stack
+    drain(g, ctx);
+    expect(g.cards[pd].zone).toBe('hand');
+    expect(g.cards[twin].attachedTo).toBe(nadu);
+  });
+
+  it("an opponent's activated ability on the opponent's turn triggers it (I control the trigger); a land goes onto the battlefield", () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'giver_of_runes', 'basic_forest'], ['jace_the_mind_sculptor'], 'basic_mountain', 'basic_island', 'b');
+    put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const giver = put(g, ctx, 'a', 'giver_of_runes');
+    const jace = put(g, ctx, 'b', 'jace_the_mind_sculptor');
+    const [forest] = stackLibrary(g, 'a', ['basic_forest']);
+    expect(g.activePlayer).toBe('b');
+    act(g, ctx, 'b', { t: 'activate', iid: jace, text: '', ability: loyalty('jace_the_mind_sculptor', 2), targets: card(giver) });
+    expect(g.stack.length, logTail(g)).toBe(2);
+    expect(g.stack[1].controller).toBe('a');
+    drain(g, ctx);
+    expect(g.cards[forest].zone).toBe('battlefield');
+    expect(g.cards[forest].controller).toBe('a');
+    expect(g.cards[giver].zone).toBe('hand');
+  });
+
+  it('one spell targeting two of my creatures: two triggers', () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'giver_of_runes', 'fire_covenant', 'ponder', 'brainstorm', 'basic_swamp']);
+    const nadu = put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const giver = put(g, ctx, 'a', 'giver_of_runes');
+    put(g, ctx, 'a', 'basic_swamp');
+    for (let k = 0; k < 2; k++) put(g, ctx, 'a', 'basic_mountain');
+    const fc = toZone(g, ctx, 'a', 'fire_covenant', 'hand');
+    const [c1, c2] = stackLibrary(g, 'a', ['ponder', 'brainstorm']);
+    const targets = [[{ kind: 'card' as const, iid: nadu }, { kind: 'card' as const, iid: giver }]];
+    act(g, ctx, 'a', { t: 'cast', iid: fc, x: 2, targets, division: { [nadu]: 1, [giver]: 1 } });
+    expect(naduTriggers(g), logTail(g)).toBe(2);
+    drain(g, ctx);
+    expect(g.cards[c1].zone).toBe('hand');
+    expect(g.cards[c2].zone).toBe('hand');
+  });
+
+  it('twice per turn for each creature, counted separately; again next turn', () => {
+    const { g, ctx } = setup(['nadu_winged_wisdom', 'giver_of_runes', 'giver_of_runes']);
+    put(g, ctx, 'a', 'nadu_winged_wisdom');
+    const g1 = put(g, ctx, 'a', 'giver_of_runes');
+    const g2 = put(g, ctx, 'a', 'giver_of_runes');
+    const prot = (q: Q) => (q.options.find((o) => /red/i.test(o.value + o.label)) ?? q.options[0]).value;
+    const target = (src: string, tgt: string) => {
+      g.cards[src].tapped = false;
+      act(g, ctx, 'a', { t: 'activate', iid: src, text: '', ability: 0, targets: card(tgt) });
+      const n = naduTriggers(g);
+      drain(g, ctx, prot);
+      return n;
+    };
+    expect([target(g1, g2), target(g1, g2), target(g1, g2)]).toEqual([1, 1, 0]);
+    expect([target(g2, g1), target(g2, g1), target(g2, g1)]).toEqual([1, 1, 0]);
+    // next turn of mine: the count starts over
+    for (let k = 0; k < 300 && !(g.turn >= 3 && g.step === 'main1'); k++) {
+      const q = g.pending[0];
+      if (q) { act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(g.activePlayer).toBe('a');
+    expect(target(g1, g2)).toBe(1);
   });
 });
