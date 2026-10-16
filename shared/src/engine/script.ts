@@ -577,6 +577,7 @@ export function peekFallback(step: ParsedAbility): string | null {
   if (step.api === 'RearrangeTopOfLibrary') return several ? 'peek: RearrangeTopOfLibrary (several players)' : null;
   if (step.api !== 'Dig' || p.ChangeNum === 'All') return null;
   if (p.DestinationZone3) return 'peek: Dig (DestinationZone3$)';
+  if (p.ChangeNum !== 'Any' && !amountSupported(p.ChangeNum, step.svars)) return `peek: Dig (ChangeNum$ ${p.ChangeNum})`;
   if (p.Choser && p.Choser !== 'Player.Opponent' && p.Choser !== 'Opponent') return `peek: Dig (Choser$ ${p.Choser})`;
   if (several) return 'peek: Dig (several players)';
   const dest = p.DestinationZone ?? 'Hand', dest2 = p.DestinationZone2 ?? 'Library';

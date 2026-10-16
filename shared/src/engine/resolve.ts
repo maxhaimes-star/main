@@ -286,6 +286,14 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
     if (b == null || k == null) return undefined;
     return sm[2] === 'Plus' ? b + k : sm[2] === 'Minus' ? b - k : b * k;
   }
+  // Count$Compare Y GE2.2.1: 2 if SVar Y >= 2, else 1 (Flow State, Undermountain Adventurer).
+  sm = /^Count\$Compare (\w+) (LT|LE|EQ|NE|GE|GT)(-?\w+)\.(-?\d+)\.(-?\d+)$/.exec(v);
+  if (sm) {
+    const left = amount(state, ctx, r, sm[1], 0);
+    if (left == null) return undefined;
+    const c = compare(state, ctx, r, left, `${sm[2]}${sm[3]}`);
+    return c === 'unknown' ? undefined : parseInt(c ? sm[4] : sm[5], 10);
+  }
   sm = /^SVar\$(\w+)\/(HalfDown|HalfUp|Twice|Negative)$/.exec(v);
   if (sm) { const b = amount(state, ctx, r, sm[1], 0); if (b == null) return undefined; return sm[2] === 'HalfDown' ? Math.floor(b / 2) : sm[2] === 'HalfUp' ? Math.ceil(b / 2) : sm[2] === 'Twice' ? b * 2 : -b; }
   // TriggeredCard$CardCounters.P1P1 (last known), Sacrificed$CardManaCost(/Plus.N)

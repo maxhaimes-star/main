@@ -37,7 +37,7 @@ function splitMods(v: string): [string, string[]] {
   return [parts[0], parts.slice(1)];
 }
 
-const MOD_RE = /^(Plus\.-?\d+|Minus\.-?\d+|Times\.-?\d+|Twice|HalfUp|HalfDown|Negative)$/;
+const MOD_RE = /^(Plus\.-?\d+|Minus\.-?\d+|Times\.-?\d+|LimitMax\.-?\d+|LimitMin\.-?\d+|Twice|HalfUp|HalfDown|Negative)$/;
 
 /** Is this a Count$ value evalCount understands? (static check, no state) */
 export function supportedCount(v: string): boolean {
@@ -99,6 +99,8 @@ function applyMods(n: number, mods: string[]): number {
     else if (k === 'HalfUp') n = Math.ceil(n / 2);
     else if (k === 'HalfDown') n = Math.floor(n / 2);
     else if (k === 'Negative') n = -n;
+    else if (k === 'LimitMax') n = Math.min(n, v);
+    else if (k === 'LimitMin') n = Math.max(n, v);
   }
   return n;
 }

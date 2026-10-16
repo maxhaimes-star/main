@@ -421,6 +421,21 @@ describe('5: look-at-the-top effects are engine questions', () => {
     expect(lib(g, 'a').slice(-3)).toContain(top[0]);
   });
 
+  for (const [label, grave, n] of [['one card', [], 1], ['two cards with an instant and a sorcery in the graveyard', ['lightning_bolt', 'ponder'], 2]] as const) {
+    it(`Flow State: ${label} into hand, the rest on the bottom`, () => {
+      const { g, ctx } = setup(['flow_state', 'lightning_bolt', 'ponder', 'giver_of_runes', 'brainstorm', 'expressive_iteration'], [], 'basic_island');
+      put(g, ctx, 'a', 'basic_island'); put(g, ctx, 'a', 'basic_island');
+      for (const id of grave) toZone(g, ctx, 'a', id, 'graveyard');
+      const fs = toZone(g, ctx, 'a', 'flow_state', 'hand');
+      const top = stackLibrary(g, 'a', ['giver_of_runes', 'brainstorm', 'expressive_iteration']);
+      act(g, ctx, 'a', { t: 'cast', iid: fs });
+      drain(g, ctx);
+      expect(g.players.every((p) => !p.peek), 'no by-hand look window').toBe(true);
+      expect(top.filter((x) => g.cards[x].zone === 'hand').length, logTail(g)).toBe(n);
+      expect(lib(g, 'a').slice(-(3 - n)).sort()).toEqual(top.filter((x) => g.cards[x].zone === 'library').sort());
+    });
+  }
+
   it("Mirri's Guile: at my upkeep, may rearrange the top three", () => {
     const { g, ctx } = setup(['mirris_guile', 'lightning_bolt', 'giver_of_runes', 'ponder']);
     put(g, ctx, 'a', 'mirris_guile');
