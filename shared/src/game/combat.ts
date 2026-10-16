@@ -64,6 +64,13 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
   const blockersOf = (a: string) => state.battlefield.filter((id) => cards[id].blocking === a);
 
   for (const phase of ['first', 'regular'] as const) {
+    // Combat damage in a step is dealt simultaneously: who deals damage (and which blockers are still there) is decided
+    // by the damage marked before the step, not by damage assigned earlier in this loop.
+    const before = { ...damage };
+    const deadBefore = new Set(Object.keys(cards).filter((id) => cards[id].zone === 'battlefield' && (cards[id].attacking || cards[id].blocking) && !alive(id)));
+    const standing = (id: string) => !deadBefore.has(id);
+    // Damage assigned (not dealt: doublers / prevention don't count, rule 510.1c) to each creature so far in this step.
+    const assignedNow: Record<string, number> = {};
     const strikes = (id: string) => {
       const fs = hasKeyword(cards[id], lookup, 'First strike', state);
       const ds = hasKeyword(cards[id], lookup, 'Double strike', state);
@@ -74,22 +81,26 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
       const blockers = blockersOf(a);
       const ac = cards[a];
       const target = ac.attacking!;
-      if (alive(a) && strikes(a)) {
+      if (standing(a) && strikes(a)) {
         const [power] = effectivePT(ac, lookup, state);
         if (blockers.length === 0) {
           deal(a, target, power);
         } else {
           let left = power;
           const dt = hasKeyword(ac, lookup, 'Deathtouch', state);
-          const liveBlockers = blockers.filter(alive);
+          const liveBlockers = blockers.filter(standing);
           liveBlockers.forEach((b, i) => {
             const bc = cards[b];
             const [, bt] = effectivePT(bc, lookup, state);
-            const already = bc.damage + (damage[b] ?? 0);
+            // Lethal damage (rule 702.19b / 510.1c): damage already marked (as actually dealt, e.g. doubled first-strike
+            // damage) plus damage assigned by other creatures this step — ignoring effects that would change the
+            // amount dealt (a damage doubler doesn't let an attacker assign less, nor does prevention force more).
+            const already = bc.damage + (before[b] ?? 0) + (assignedNow[b] ?? 0);
             const lethal = dt ? (already > 0 && deathtouched.has(b) ? 0 : 1) : Math.max(0, bt - already);
             const isLast = i === liveBlockers.length - 1;
             const trample = hasKeyword(ac, lookup, 'Trample', state);
             const assign = isLast && !trample ? left : Math.min(left, lethal);
+            assignedNow[b] = (assignedNow[b] ?? 0) + assign;
             deal(a, b, assign);
             left -= assign;
           });
@@ -97,7 +108,7 @@ export function computeCombat(state: GameState, lookup: Lookup): CombatProposal 
         }
       }
       for (const b of blockers) {
-        if (alive(b) && strikes(b)) deal(b, a, effectivePT(cards[b], lookup, state)[0]);
+        if (standing(b) && strikes(b)) deal(b, a, effectivePT(cards[b], lookup, state)[0]);
       }
     }
   }
