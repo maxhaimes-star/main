@@ -1,5 +1,6 @@
 import type { Color } from './cards.ts';
 import type { GameState } from './game/types.ts';
+import type { BotLevel } from './ai/player.ts';
 
 export type Mode = 'draft' | 'auction' | 'sealed' | 'constructed';
 /** Where draft/sealed packs come from: the cube list (OJ cube or an imported list) or real set boosters. */
@@ -47,6 +48,8 @@ export interface RoomSettings {
   format: string;
   /** Default match length. */
   bestOf: number;
+  /** "Play vs bot": a computer opponent (this difficulty) joins the event and can be challenged once decks are built. */
+  vsBot?: BotLevel | null;
 }
 
 export const CONSTRUCTED_FORMATS = ['Standard', 'Pioneer', 'Modern', 'Legacy', 'Vintage', 'Pauper', 'Freeform'] as const;
@@ -82,6 +85,8 @@ export interface Player {
   connected: boolean;
   /** A human who left mid-event: a bot (isBot is true) is playing their seat until they take it back. */
   away?: boolean;
+  /** Bots: how well the bot plays games (shared/src/ai/player.ts). Absent = 'normal'. */
+  botLevel?: BotLevel;
 }
 
 export interface Deck {

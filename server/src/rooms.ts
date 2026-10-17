@@ -4,7 +4,7 @@ import {
   applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, leaveSeat, reclaimSeat, setDraftMain, emptyDeck,
   finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, placeBid, skipCard, seatedPlayers, startAuction, startDraft,
   startSealed, viewFor, type Color, type RoomSettings, type Deck, startDraftWithPacks, startSealedWithPools,
-  CONSTRUCTED_FORMATS, type CardPayload,
+  CONSTRUCTED_FORMATS, type CardPayload, botDeck, BOT_LEVELS, type BotLevel,
 } from '@ojb/shared';
 import { CUBE, getCard, isCubeCard } from '@ojb/shared/src/cube.ts';
 import { carddbAvailable, formatLegality, getCardById, resolveDeck } from './carddb.ts';
@@ -204,12 +204,13 @@ export class Rooms {
         for (const p of [a, b]) {
           const pl = s.players.find((x) => x.id === p);
           if (!pl) return 'Unknown player';
-          if (pl.isBot) return 'Bots can draft but not play — pick a human opponent';
+          if (pl.away) return `${pl.name} left — a bot is only holding their seat`;
           if (!s.decks[p] || deckSize(s.decks[p]) < 1) return `${pl.name} hasn't built a deck yet`;
         }
         if (s.matches.some((m) => !m.winner && (m.players.includes(a) || m.players.includes(b)))) return 'One of those players is already in a match';
         if (s.settings.mode === 'constructed') {
           for (const p of [a, b]) {
+            if (s.players.find((x) => x.id === p)?.isBot) continue; // the bot plays a cube deck
             const errs = this.constructedErrors(s, s.decks[p]);
             if (errs.length) return `${s.players.find((x) => x.id === p)?.name}'s deck is not legal: ${errs.slice(0, 3).join(' ')}`;
           }
@@ -230,6 +231,14 @@ export class Rooms {
         const err = applyAction(match.game, pid, msg.action, { rng, lookup: getCard, now });
         if (err) return err;
         if (match.game.phase === 'over' && !match.sideboarding && !match.winner) this.gameOver(match);
+        return null;
+      }
+      case 'addBot': {
+        if (!me) return 'Only players can add a bot';
+        if (s.phase !== 'deckbuilding') return 'Add a bot once the decks are being built (or tick "Play vs bot" in the lobby)';
+        if (s.players.length >= 12) return 'The table is full';
+        const level: BotLevel = BOT_LEVELS.includes(msg.level as BotLevel) ? msg.level as BotLevel : 'normal';
+        this.addBotPlayer(s, level);
         return null;
       }
       case 'sideboard': {
@@ -271,8 +280,12 @@ export class Rooms {
       s.pools = {};
       s.decks = {};
       s.phase = 'deckbuilding';
+      if (s.settings.vsBot) this.addBotPlayer(s, s.settings.vsBot);
       return null;
     }
+    // "Play vs bot": make sure at least one bot sits at the table (it drafts / bids / opens a pool like the others).
+    if (s.settings.vsBot && !players.some((p) => p.isBot)) players.push({ id: `bot_${id(6)}`, name: BOT_NAMES[0], seat: 0, isBot: true, connected: true });
+    if (s.settings.vsBot) for (const p of players) if (p.isBot) p.botLevel = s.settings.vsBot;
     if (players.length < 2 && s.settings.mode !== 'sealed') return 'Need at least 2 seats (turn on bots or invite friends)';
     if (s.settings.source === 'set' && s.settings.mode !== 'auction') {
       const err = this.checkSets(s.settings.setCodes);
@@ -323,6 +336,23 @@ export class Rooms {
   /** When drafting ends, bots build decks. */
   afterPools(s: RoomState) {
     if (s.phase === 'deckbuilding' && s.players.some((p) => p.isBot && !s.decks[p.id]?.ready)) finishPoolsWithBots(s, getCard);
+  }
+
+  /**
+   * A computer opponent joins during deckbuilding: it opens a 90-card pool from the room's cube list (the full cube
+   * in constructed) and builds a 40-card deck with the draft bots' deckbuilder.
+   */
+  addBotPlayer(s: RoomState, level: BotLevel): Player {
+    const taken = new Set(s.players.map((p) => p.name));
+    const name = BOT_NAMES.find((n) => !taken.has(n)) ?? `Bot ${s.players.length + 1}`;
+    const bot: Player = { id: `bot_${id(6)}`, name, seat: s.players.length, isBot: true, connected: true, botLevel: level };
+    const list = s.settings.mode === 'constructed' ? CUBE.list : cubeList(s, CUBE.list);
+    const pool = list.map((c) => ({ c, r: rng() })).sort((x, y) => x.r - y.r).slice(0, 90).map((x) => x.c);
+    ensureCards(pool);
+    s.players.push(bot);
+    s.pools[bot.id] = pool;
+    s.decks[bot.id] = botDeck(pool, getCard);
+    return bot;
   }
 
   private checkSets(codes: string[]): string | null {
@@ -379,9 +409,10 @@ export class Rooms {
     match.gameNumber++;
     match.sideboarding = false;
     match.readyForNext = [];
-    const seat = (pid: string) => ({
-      pid, name: s.players.find((p) => p.id === pid)?.name ?? '?', deck: match.decks[pid].main, side: match.decks[pid].side,
-    });
+    const seat = (pid: string) => {
+      const pl = s.players.find((p) => p.id === pid);
+      return { pid, name: pl?.name ?? '?', deck: match.decks[pid].main, side: match.decks[pid].side, ...(pl?.isBot && !pl.away ? { bot: true } : {}) };
+    };
     const freeMulligan = !!match.game?.freeMulligan?.on; // agreed once: stays for the rest of the match
     match.game = createGame(`${match.id}-${match.gameNumber}`, [seat(match.players[0]), seat(match.players[1])], starting, { rng, lookup: getCard, now }, { strict: true }); // rules-enforced (Arena-style)
     if (freeMulligan) match.game.freeMulligan = { on: true, requestedBy: null };
@@ -507,6 +538,7 @@ export function sanitizeSettings(x: RoomSettings, humans: number, keepList?: str
     auctionPackSize: clamp(x.auctionPackSize, 3, 30, d.auctionPackSize),
     auctionPoolSize: clamp(x.auctionPoolSize, 0, 90, d.auctionPoolSize),
     colorBalance: !!x.colorBalance,
+    ...(BOT_LEVELS.includes(x.vsBot as BotLevel) ? { vsBot: x.vsBot } : {}),
     customList,
     ...(customList?.length && x.customListName ? { customListName: String(x.customListName).slice(0, 80) } : {}),
   };

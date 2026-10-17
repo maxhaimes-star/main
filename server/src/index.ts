@@ -7,6 +7,7 @@ import { Server, type Socket } from 'socket.io';
 import type { ClientMsg } from '@ojb/shared';
 import { type RoomRecord, Rooms } from './rooms.ts';
 import { registerCardDbRoutes } from './carddb-routes.ts';
+import { BotDriver } from './botdriver.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3001);
@@ -73,6 +74,8 @@ if (fs.existsSync(CLIENT_DIST)) {
 }
 
 const server = http.createServer(app);
+// Computer opponents: play the bot seats of matches (server/src/botdriver.ts).
+const bots = new BotDriver(rooms, { onChange: (rid) => broadcast(rid) });
 const io = new Server(server, { cors: { origin: true }, pingInterval: 10000, pingTimeout: 20000 });
 
 // socket id -> {roomId, pid}
@@ -130,7 +133,7 @@ io.on('connection', (socket) => {
       error = 'Server error: ' + (e as Error).message;
     }
     if (typeof ack === 'function') ack({ error });
-    if (!error) broadcast(rid);
+    if (!error) { broadcast(rid); bots.kick(rid); }
   });
 
   socket.on('disconnect', () => {
@@ -142,6 +145,7 @@ io.on('connection', (socket) => {
 
 setInterval(() => {
   for (const rid of rooms.tick(Date.now())) broadcast(rid);
+  bots.kickAll();
 }, 250);
 
 server.listen(PORT, () => console.log(`OJB Cube server on http://localhost:${PORT}`));

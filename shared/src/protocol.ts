@@ -30,6 +30,8 @@ export type ClientMsg =
   /** Constructed: submit a pasted deck list (validated against the room's format). */
   | { t: 'submitDeck'; text: string }
   | { t: 'createMatch'; players: [string, string]; bestOf: number }
+  /** After the draft / sealed / auction or in constructed: add a computer opponent (with a deck) to play against. */
+  | { t: 'addBot'; level?: import('./ai/player.ts').BotLevel }
   | { t: 'game'; matchId: string; action: GameAction }
   | { t: 'sideboard'; matchId: string; main: string[]; side: string[] }
   | { t: 'readyNext'; matchId: string }

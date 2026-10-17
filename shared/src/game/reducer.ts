@@ -35,7 +35,7 @@ import {
 export type { Ctx } from './state.ts';
 export { moveCard, player } from './state.ts';
 
-export interface GameSeat { pid: string; name: string; deck: string[]; side: string[] }
+export interface GameSeat { pid: string; name: string; deck: string[]; side: string[]; /** A computer opponent (shown with a "Bot" badge). */ bot?: boolean }
 
 const HISTORY_LIMIT = 25;
 const DEFAULT_STOPS: GamePlayer['stops'] = {
@@ -82,6 +82,7 @@ export function createGame(id: string, seats: GameSeat[], startingPlayer: string
       manaPool: {}, mulligans: 0, kept: false, needsBottom: 0, landsPlayed: 0,
       stops: { own: [...DEFAULT_STOPS.own], opp: [...DEFAULT_STOPS.opp] },
       passUntilEOT: false, peek: null, viewingHandOf: null, conceded: false, designations: [], autoTriggers: true,
+      ...(seat.bot ? { bot: true } : {}),
     };
     state.players.push(p);
     for (const cardId of seat.deck) p.zones.library.push(newInstance(state, ctx.rng, seat.pid, 'library', cardId).iid);

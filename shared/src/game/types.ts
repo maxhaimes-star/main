@@ -121,6 +121,8 @@ export interface GamePlayer {
   drewFromEmpty?: boolean;
   /** Strict mode: why this player lost the game (state-based action), if they did. */
   lost?: string;
+  /** A computer opponent (shared/src/ai/player.ts). */
+  bot?: boolean;
 }
 
 export interface LogEntry { at: number; pid: string | null; text: string }
