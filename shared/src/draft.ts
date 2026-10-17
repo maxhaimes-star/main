@@ -119,6 +119,8 @@ export function draftPick(room: RoomState, seat: number, cardId: string, now: nu
   if (idx < 0) return 'Card not in pack';
   pack.splice(idx, 1);
   d.picks[seat].push(cardId);
+  // New picks go straight to the main deck; the player can move them to the sideboard.
+  (d.main ??= d.picks.map(() => []))[seat].push(cardId);
   d.pickNumber[seat]++;
   d.queues[seat].shift();
   d.deadlines[seat] = null;
@@ -173,7 +175,7 @@ export function reclaimSeat(room: RoomState, pid: string, now: number): string |
   return null;
 }
 
-/** The player in `seat` chooses which of their picks form the main deck; the rest is sideboard. */
+/** The player in `seat` chooses which of their picks form the main deck (new picks start there); the rest is sideboard. */
 export function setDraftMain(room: RoomState, seat: number, main: string[]): string | null {
   const d = room.draft;
   if (!d || d.done) return 'No draft in progress';
