@@ -11,3 +11,4 @@ export * from './game/reducer.ts';
 export * from './game/view.ts';
 export * from './protocol.ts';
 export * from './engine/index.ts';
+export * from './ai/player.ts';

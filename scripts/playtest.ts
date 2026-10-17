@@ -3,11 +3,14 @@
  * engine is checked for problems along the way.
  *
  *   npx tsx scripts/playtest.ts [games=100] [firstSeed=1] [--turns=30] [--json=out.json] [--quiet]
- *                               [--pool=cube|standard|set:CODE[+CODE...]] [--force=card_id,card_id]
+ *                               [--pool=cube|standard|set:CODE[+CODE...]] [--force=card_id,card_id] [--ai[=easy|normal]]
  *
  * --pool draws the random decks from the card database (data/carddb, server/src/carddb.ts) instead of the cube:
  * Standard-legal cards, or the cards of one or more sets. --force puts these cards into every deck (when their
  * colors fit), to exercise specific cards.
+ *
+ * --ai: both seats are played by the computer opponent (shared/src/ai/player.ts) instead of the random agents, so the
+ * same checks run on the bot that people play against.
  *
  * The agents only use legal actions: play one land per turn, cast spells they can pay for (tapping their mana
  * sources first; in strict mode the server's auto-pay does it) with random legal targets / modes / X, activate
@@ -28,6 +31,7 @@ import {
   abilitiesOfInstance, activatedAbilitiesOf, adjustCost, applyAction, castOptions, type CardData, type Color, createGame, type Ctx,
   effectivePT, faceOf, landPlaysAllowed, landPlaysLeft, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
   parseManaSymbols, type Pending, castSpellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
+  type BotLevel, type BotMemory, botNeedsToAct, botStep, newBotMemory,
 } from '../shared/src/index.ts';
 
 // ------------------------------------------------------------------ rng
@@ -492,7 +496,7 @@ function checkLeaks(G: Game) {
 
 export interface GameResult { seed: number; turns: number; actions: number; winner: string | null; end: 'win' | 'turns' | 'stall' | 'actions'; issues: Issue[]; decks: string[][] }
 
-export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: number; leakEvery?: number; trace?: boolean; pool?: CardData[]; force?: CardData[] } = {}): GameResult {
+export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: number; leakEvery?: number; trace?: boolean; pool?: CardData[]; force?: CardData[]; ai?: BotLevel } = {}): GameResult {
   const rng = seeded(seed * 7919 + 13);
   const maxTurns = opts.maxTurns ?? 30;
   const stallAfter = opts.stallAfter ?? 400;
@@ -505,7 +509,8 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
   const realCards = Object.values(g.cards).filter((c) => !c.token).length;
   let actions = 0, sinceProgress = 0, lastTurn = -1, lastStep = '';
   let end: GameResult['end'] = 'actions';
-  for (const p of g.players) act(G, p.pid, { t: 'keep' });
+  const mems: Record<string, BotMemory> = Object.fromEntries(g.players.map((p, i) => [p.pid, newBotMemory(seed * 31 + i)]));
+  if (!opts.ai) for (const p of g.players) act(G, p.pid, { t: 'keep' });
   while (actions < 20000) {
     actions++;
     ctx.now = actions;
@@ -524,7 +529,27 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
       end = 'stall';
       break;
     }
-    if (g.pending.length) {
+    if (opts.ai) {
+      // The computer opponent plays both seats, seeing only its own view.
+      const actor = g.players.find((p) => botNeedsToAct(g, p.pid));
+      if (!actor) {
+        G.issues.push({ kind: 'stall', card: G.context, text: `nobody has anything to do (phase ${g.phase}, step ${g.step}, priority ${g.priority}, pending ${g.pending.length})`, seed, turn: g.turn });
+        end = 'stall';
+        break;
+      }
+      const q = g.pending.find((x) => x.pid === actor.pid);
+      if (q) G.context = cardIn(q.prompt) ?? G.context;
+      else if (g.stack.length) G.context = stackCard(G);
+      const r = botStep(() => viewFor(g, actor.pid), actor.pid, mems[actor.pid], (a) => {
+        if (a.t === 'cast' || a.t === 'activate' || a.t === 'playLand') G.context = nameOf(G, a.iid);
+        return act(G, actor.pid, a);
+      }, { level: opts.ai });
+      if (r.stuck) {
+        G.issues.push({ kind: 'stall', card: G.context, text: `the bot found no legal action (${q ? `question "${q.prompt}"` : `step ${g.step}`})`, seed, turn: g.turn });
+        end = 'stall';
+        break;
+      }
+    } else if (g.pending.length) {
       const q = g.pending[0];
       G.context = cardIn(q.prompt) ?? G.context;
       if (!answerPending(G, q)) {
@@ -643,7 +668,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const pool = poolSpec === 'cube' ? undefined : await databasePool(poolSpec);
   if (pool) console.log(`Pool ${poolSpec}: ${pool.length} cards`);
   const force = (flag('force') ?? '').split(',').filter(Boolean).map((id) => getCard(id)).filter((c): c is CardData => !!c);
-  const s = playtest(n, seed, { maxTurns: parseInt(flag('turns') ?? '30', 10), trace: args.includes('--trace'), ...(pool ? { pool } : {}), ...(force.length ? { force } : {}) });
+  const aiFlag = args.find((a) => a === '--ai' || a.startsWith('--ai='));
+  const ai = aiFlag ? ((aiFlag.split('=')[1] ?? 'normal') as BotLevel) : undefined;
+  const s = playtest(n, seed, { maxTurns: parseInt(flag('turns') ?? '30', 10), trace: args.includes('--trace'), ...(pool ? { pool } : {}), ...(force.length ? { force } : {}), ...(ai ? { ai } : {}) });
   console.log(formatReport(s, parseInt(flag('top') ?? '40', 10)));
   console.log(`(${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   const out = flag('json');
