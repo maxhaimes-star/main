@@ -33,7 +33,8 @@ export type ClientMsg =
   | { t: 'submitSavedDeck'; deck: { main: string[]; side: string[]; basics: Record<Color, number> } }
   | { t: 'createMatch'; players: [string, string]; bestOf: number }
   /** After the draft / sealed / auction or in constructed: add a computer opponent (with a deck) to play against. */
-  | { t: 'addBot'; level?: import('./ai/player.ts').BotLevel }
+  /** Constructed: `deck` (a saved deck, by card ids) gives the bot that deck instead of a random cube deck. */
+  | { t: 'addBot'; level?: import('./ai/player.ts').BotLevel; deck?: { main: string[]; side: string[]; basics: Record<Color, number> } }
   | { t: 'game'; matchId: string; action: GameAction }
   | { t: 'sideboard'; matchId: string; main: string[]; side: string[] }
   | { t: 'readyNext'; matchId: string }

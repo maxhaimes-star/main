@@ -377,17 +377,19 @@ function answerPending(ctx: Ctx, q: Pending): GameAction | null {
       if (!failed(mem, v, actionKey(a))) return a;
     }
   }
-  if (q.targets && failed(mem, v, `ctany:${q.id}`)) {
-    // The best guess was refused: random legal targets (a few tries, then the options).
-    const tries = mem.failed.filter((k) => k.startsWith(`ct:${q.id}:`)).length;
-    if (tries < 4) {
+  // The best guess was refused or would only hurt us: the question's own options (a "no target" choice ...), else
+  // random legal targets — a mandatory trigger must be answered even when every target is ours.
+  const randomTargets = (): GameAction | null => {
+    if (!q.targets) return null;
+    for (let k = 0; k < 4; k++) {
       const random = pickTargets(ctx, q.targets.specs, q.targets.controller, q.targets.sourceIid, q.prompt, undefined, true);
-      if (random) {
-        const a: GameAction = { t: 'chooseTargets', id: q.id, targets: random.targets };
-        if (!failed(mem, v, actionKey(a))) return a;
-      }
+      if (!random) return null;
+      const a: GameAction = { t: 'chooseTargets', id: q.id, targets: random.targets };
+      if (!failed(mem, v, actionKey(a))) return a;
     }
-  }
+    return null;
+  };
+  if (q.targets && !opts.length) return randomTargets();
   // Divide damage / counters: the suggested split, else an even split of our own.
   if (q.divide) {
     const list: GameAction[] = opts.map((o) => ({ t: 'choose', id: q.id, value: o.value }));
@@ -409,7 +411,7 @@ function answerPending(ctx: Ctx, q: Pending): GameAction | null {
   }
   if (!opts.length) return null;
   const ranked = rankOptions(ctx, q).map((value) => ({ t: 'choose', id: q.id, value }) as GameAction);
-  return firstOk(ctx, ranked);
+  return firstOk(ctx, ranked) ?? randomTargets();
   void pid; void L;
 }
 
@@ -747,6 +749,19 @@ function planSpell(ctx: Ctx, iid: string, c: CardInstance, d: CardData, face: nu
       targetValue = pick.value;
     }
   }
+  // A permanent whose enters trigger removes a target (Journey to Nowhere, Banisher Priest ...) waits for a target.
+  const etb = /\bwhen [^.]*enters[^.]*?(exile|destroy|deals? \d+ damage to|return) (up to one )?(another )?target ([a-z ]*?)(creature|permanent|artifact|enchantment|planeswalker)/i.exec(fd.oracle);
+  if (permanent && etb && !etb[2]) {
+    const kind = etb[5].toLowerCase();
+    const theirs = v.battlefield.some((b) => {
+      const oc = v.cards[b];
+      if (!oc || oc.controller === pid) return false;
+      if (isHidden(oc)) return kind === 'creature' || kind === 'permanent';
+      const t = safe(() => faceOf(oc as CardInstance, L).types, [] as string[]);
+      return kind === 'permanent' ? !t.includes('Land') : t.some((x) => x.toLowerCase() === kind);
+    });
+    if (!theirs) return null;
+  }
   // Value.
   let value: number;
   const cmc = d.cmc;
@@ -979,7 +994,10 @@ export function botStep(view: () => GameView, pid: string, mem: BotMemory, apply
   for (; tries < maxTries; tries++) {
     const v = view();
     const a = decideBotAction(v, pid, mem, opts);
-    if (!a) return { action: null, stuck: false, tries };
+    if (!a) {
+      if (botNeedsToAct(v, pid)) break; // we must act but found nothing: last resort below
+      return { action: null, stuck: false, tries };
+    }
     const err = apply(a);
     if (!err) { botActionDone(mem, v, a); return { action: a, stuck: false, tries: tries + 1 }; }
     botActionFailed(mem, a, v.seq);

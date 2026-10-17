@@ -1,3 +1,4 @@
+import { BotBadge } from '../BotControls.tsx';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react';
 import {
   type GameAction, type GameView, isHidden, faceOf, type MatchView, STEP_LABELS, STEPS, type Step, type TargetRef, type TargetSpec, type ViewPlayer, type Zone,
@@ -532,6 +533,7 @@ function PlayerPanel({ p }: { p: ViewPlayer }) {
       onClick={targeting ? (e) => { e.stopPropagation(); pickTarget({ kind: 'player', pid: p.pid }); } : undefined}>
       <div className="pp-name">
         <span className={`dot ${p.conceded ? '' : 'on'}`} />{p.name}
+        {p.bot && <BotBadge />}
         {g.activePlayer === p.pid && <span className="turn-badge">turn</span>}
       </div>
       <div className="pp-counts" title="Hand · Library · Graveyard">

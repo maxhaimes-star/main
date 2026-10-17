@@ -6,6 +6,7 @@ import { compareCards, cmcBucket, Curve, PoolSummary } from './Draft.tsx';
 import { SortToggle, useSortMode } from './sort.tsx';
 import { download } from './net.ts';
 import { Constructed } from './Constructed.tsx';
+import { PlayVsBot } from './BotControls.tsx';
 import { defaultDeckName, eventName, namesFor, saveDeck, sourceName } from './decklib.ts';
 
 type DeckState = { main: string[]; basics: Record<Color, number> };
@@ -179,7 +180,7 @@ export function MatchList({ view, send, onWatch, ready, onReady }: { view: RoomP
             ))}
             <li className="ready-summary muted">{readyCount}/{view.players.length} ready</li>
           </ul>
-          {humans.length === 0 && <p className="muted">Invite a friend to play — bots only draft.</p>}
+          <PlayVsBot view={view} send={send} bestOf={bestOf} myReady={isReady(view.me)} />
           {humans.map((p) => (
             <div key={p.id} className="challenge">
               <span><span className={`dot ${p.connected ? 'on' : ''}`} />{p.name} {isReady(p.id) ? '✅' : <small className="muted">(building)</small>}</span>

@@ -7,6 +7,7 @@ import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel, setImageSource, useImageSource } from './cards.tsx';
 import { api, download } from './net.ts';
 import { MyDecks } from './MyDecks.tsx';
+import { BotLobbyOption } from './BotControls.tsx';
 import { cobraIdOf, deleteCube, loadCubes, saveCube, type SavedCube } from './cubelib.ts';
 
 type EventId = 'cube-draft' | 'cube-sealed' | 'cube-auction' | 'set-draft' | 'set-sealed' | 'constructed';
@@ -210,6 +211,7 @@ export function Lobby({ view, send }: RoomProps) {
           </p>
         )}
         {ev === 'constructed' && <p className="muted">After the host starts, everyone pastes a deck list (MTGA / MTGO / plain text) or picks one of their saved decks. Decks are checked for {s.format} legality before matches start{s.format !== 'Freeform' ? ' — choose Freeform to play saved cube decks with any cards' : ''}.</p>}
+        <BotLobbyOption view={view} send={send} />
         <MyDecks />
 
         {isHost

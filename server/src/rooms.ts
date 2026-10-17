@@ -247,7 +247,14 @@ export class Rooms {
         if (s.phase !== 'deckbuilding') return 'Add a bot once the decks are being built (or tick "Play vs bot" in the lobby)';
         if (s.players.length >= 12) return 'The table is full';
         const level: BotLevel = BOT_LEVELS.includes(msg.level as BotLevel) ? msg.level as BotLevel : 'normal';
-        this.addBotPlayer(s, level);
+        let deck: Deck | undefined;
+        if (msg.deck) {
+          if (s.settings.mode !== 'constructed') return 'In draft, sealed and auction events the bot plays the deck it built from its pool';
+          const r = this.savedDeck(s, msg.deck);
+          if ('error' in r) return r.error;
+          deck = r.deck;
+        }
+        this.addBotPlayer(s, level, deck);
         return null;
       }
       case 'sideboard': {
@@ -348,17 +355,23 @@ export class Rooms {
   }
 
   /**
-   * A computer opponent joins during deckbuilding: it opens a 90-card pool from the room's cube list (the full cube
+   * * A computer opponent joins during deckbuilding: it plays `deck` (a saved deck) or opens a 90-card pool from the room's cube list (the full cube
    * in constructed) and builds a 40-card deck with the draft bots' deckbuilder.
    */
-  addBotPlayer(s: RoomState, level: BotLevel): Player {
+  addBotPlayer(s: RoomState, level: BotLevel, deck?: Deck): Player {
     const taken = new Set(s.players.map((p) => p.name));
     const name = BOT_NAMES.find((n) => !taken.has(n)) ?? `Bot ${s.players.length + 1}`;
     const bot: Player = { id: `bot_${id(6)}`, name, seat: s.players.length, isBot: true, connected: true, botLevel: level };
+    s.players.push(bot);
+    if (deck) {
+      // A saved deck (already validated by savedDeck).
+      s.pools[bot.id] = [...deck.main, ...deck.side];
+      s.decks[bot.id] = { ...deck, ready: true };
+      return bot;
+    }
     const list = s.settings.mode === 'constructed' ? CUBE.list : cubeList(s, CUBE.list);
     const pool = list.map((c) => ({ c, r: rng() })).sort((x, y) => x.r - y.r).slice(0, 90).map((x) => x.c);
     ensureCards(pool);
-    s.players.push(bot);
     s.pools[bot.id] = pool;
     s.decks[bot.id] = botDeck(pool, getCard);
     return bot;

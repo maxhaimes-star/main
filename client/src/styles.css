@@ -206,6 +206,9 @@ h1, h2, h3, h4 { margin: 8px 0; }
 
 .player-panel.has-priority { border-color: var(--accent); box-shadow: 0 0 12px #f29b3840; }
 .pp-name { font-weight: 700; display: flex; align-items: center; gap: 4px; }
+.bot-badge { background: #6b8afd; color: #000; font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 6px; margin-left: 4px; }
+.play-bot .add-bot { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.bot-option small { display: block; }
 .turn-badge { background: var(--accent); color: #000; font-size: 10px; padding: 0 5px; border-radius: 6px; }
 .life { display: flex; align-items: center; justify-content: center; gap: 6px; }
 .life-num.low { color: var(--bad); }
