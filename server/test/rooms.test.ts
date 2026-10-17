@@ -1,5 +1,6 @@
 import type { GameAction } from '@ojb/shared';
 import { describe, expect, it } from 'vitest';
+import { CUBE } from '@ojb/shared/src/cube.ts';
 import { Rooms } from '../src/rooms.ts';
 
 describe('rooms', () => {
@@ -175,5 +176,25 @@ describe('rooms', () => {
       const rec = rooms.rooms.get(host.roomId)!;
       expect(rooms.handle(rec, host.pid, { t: 'leaveSeat' })).toMatch(/while drafting/);
     });
+  });
+
+  it('constructed: saved decks (exact ids, cube cards) are accepted in a Freeform room and start a game', () => {
+    const rooms = new Rooms();
+    const host = rooms.create('Test', 'Max');
+    const friend = rooms.join(host.roomId, 'Sam')!;
+    const rec = rooms.rooms.get(host.roomId)!;
+    expect(rooms.handle(rec, host.pid, { t: 'updateSettings', settings: { mode: 'constructed', format: 'Freeform' } })).toBeNull();
+    expect(rooms.handle(rec, host.pid, { t: 'start' })).toBeNull();
+    const ids = CUBE.list.slice(0, 40);
+    const saved = { main: ids.slice(0, 23), side: ids.slice(23), basics: { W: 0, U: 0, B: 0, R: 17, G: 0 } };
+    expect(rooms.handle(rec, host.pid, { t: 'submitSavedDeck', deck: { ...saved, main: ['no_such_card'] } })).toMatch(/Unknown card/);
+    expect(rooms.handle(rec, host.pid, { t: 'submitSavedDeck', deck: { main: [], side: [], basics: { W: 0, U: 0, B: 0, R: 0, G: 0 } } })).toMatch(/empty/);
+    expect(rooms.handle(rec, host.pid, { t: 'submitSavedDeck', deck: saved })).toBeNull();
+    expect(rooms.handle(rec, friend.pid, { t: 'submitSavedDeck', deck: saved })).toBeNull();
+    expect(rec.state.decks[host.pid]).toMatchObject({ main: saved.main, side: saved.side, ready: true });
+    expect(rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, friend.pid], bestOf: 1 })).toBeNull();
+    const g = rec.state.matches[0].game!;
+    expect(g.players[0].zones.hand).toHaveLength(7);
+    expect(g.players[0].zones.library).toHaveLength(33);
   });
 });

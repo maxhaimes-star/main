@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { RoomView } from '@ojb/shared';
 import { api, forgetSeat, loadSeat, saveSeat, type Send, useRoom } from './net.ts';
 import { Lobby } from './Lobby.tsx';
@@ -8,7 +8,8 @@ import { Deckbuilder } from './Deckbuilder.tsx';
 import { GameScreen } from './game/GameScreen.tsx';
 import { navigate } from './App.tsx';
 import { Chat } from './Chat.tsx';
-import { useCardRegistry } from './cards.tsx';
+import { getCard, useCardRegistry } from './cards.tsx';
+import { eventName, namesFor, saveDeck, sourceName } from './decklib.ts';
 
 export interface RoomProps { view: RoomView; send: Send; skew: number }
 
@@ -20,6 +21,17 @@ export function Room({ roomId }: { roomId: string }) {
   const [watching, setWatching] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string[]>([]);
   useCardRegistry(); // re-render when card data for non-cube cards arrives
+
+  // Decks are saved to the browser's library when a game starts from a draft/sealed/auction pool (de-duplicated by content).
+  const autoSaved = useRef(new Set<string>());
+  useEffect(() => {
+    if (!view || view.settings.mode === 'constructed' || !view.deck) return;
+    const m = view.matches.find((x) => x.players.includes(view.me) && !x.winner && x.game && !autoSaved.current.has(x.id));
+    if (!m) return;
+    autoSaved.current.add(m.id);
+    const d = view.deck;
+    saveDeck({ main: d.main, side: d.side, basics: d.basics, cube: sourceName(view.settings), format: eventName(view.settings), names: namesFor([...d.main, ...d.side], getCard), auto: true });
+  }, [view]);
 
   useEffect(() => {
     if (view) document.title = `${view.name} · OJB Cube`;

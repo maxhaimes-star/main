@@ -580,3 +580,15 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .rz-entry.compact .rz-card { width: 28px; }
 .rz-list.rz-modal { max-height: 60vh; }
 .rz-modal .rz-card { width: 36px; }
+
+/* Saved deck library */
+.my-decks { margin-top: 12px; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.my-decks summary { cursor: pointer; font-weight: 600; }
+.deck-lib { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.saved-deck-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.saved-deck-row .deck-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-left: auto; }
+.saved-deck-list { display: flex; flex-wrap: wrap; gap: 24px; margin: 6px 0 0 8px; font-size: 13px; }
+.saved-deck-list ul { list-style: none; margin: 0; padding: 0; columns: 2; column-gap: 24px; }
+.saved-deck-list h5 { margin: 0 0 4px; }
+.saved-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0; }
+.save-deck input { width: 100%; box-sizing: border-box; }

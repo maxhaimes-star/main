@@ -6,6 +6,7 @@ import { compareCards, cmcBucket, Curve, PoolSummary } from './Draft.tsx';
 import { SortToggle, useSortMode } from './sort.tsx';
 import { download } from './net.ts';
 import { Constructed } from './Constructed.tsx';
+import { defaultDeckName, eventName, namesFor, saveDeck, sourceName } from './decklib.ts';
 
 type DeckState = { main: string[]; basics: Record<Color, number> };
 
@@ -57,6 +58,15 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
   const lands = mainCards.filter((c) => c.types.includes('Land')).length + basicsCount;
   const fullDeck: Deck = { main: deck.main, side, basics: deck.basics, ready };
   const me = view.players.find((p) => p.id === view.me);
+
+  const [deckName, setDeckName] = useState('');
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const cubeName = sourceName(view.settings);
+  const evName = eventName(view.settings);
+  function saveToLibrary() {
+    const r = saveDeck({ name: deckName, main: deck.main, side, basics: deck.basics, cube: cubeName, format: evName, names: namesFor([...deck.main, ...side], getCard) });
+    setSavedMsg(r.saved ? `${r.duplicate ? 'Updated' : 'Saved'} "${r.deck.name}" (${r.decks.length} in My decks)` : 'Could not save: browser storage is unavailable');
+  }
 
   const toMain = (id: string) => setDeck((d) => ({ ...d, main: [...d.main, id] }));
   const toSide = (index: number) => setDeck((d) => ({ ...d, main: d.main.filter((_, i) => i !== index) }));
@@ -127,6 +137,12 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <button onClick={() => download(`${me?.name ?? 'deck'}.txt`, deckToText(fullDeck, getCard))}>Text (MTGA/MTGO)</button>
           <button onClick={() => download(`${me?.name ?? 'deck'}.cod`, deckToCockatrice(fullDeck, getCard, `${view.name} - ${me?.name}`))}>Cockatrice (.cod)</button>
           <button onClick={() => navigator.clipboard?.writeText(deckToText(fullDeck, getCard))}>Copy as text</button>
+        </div>
+        <div className="exports save-deck">
+          <h4>Save deck</h4>
+          <input aria-label="Deck name" value={deckName} onChange={(e) => setDeckName(e.target.value)} placeholder={defaultDeckName(cubeName, evName)} maxLength={80} />
+          <button className="primary" disabled={deck.main.length + basicsCount === 0} onClick={saveToLibrary}>Save deck</button>
+          {savedMsg && <small className="muted" role="status">{savedMsg}</small>}
         </div>
         <MatchList view={view} send={send} onWatch={onWatch} ready={ready} onReady={setReady} />
         {view.hostId === view.me && <button className="link" onClick={() => { if (confirm('Start a new event? Pools and decks will be cleared.')) send({ t: 'backToLobby' }); }}>New event (back to lobby)</button>}

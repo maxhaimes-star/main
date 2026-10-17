@@ -4,6 +4,7 @@ import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
 import { MatchList } from './Deckbuilder.tsx';
 import { download } from './net.ts';
+import { deckSize, loadDecks, type SavedDeck } from './decklib.ts';
 
 interface Entry { id: string; name: string; count: number; section: 'main' | 'side' | 'commander' }
 interface Validation { ok: boolean; errors: string[]; deck: { entries: Entry[] } }
@@ -43,6 +44,9 @@ export function Constructed({ view, send, onWatch }: RoomProps & { onWatch: (id:
   const [checking, setChecking] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const me = view.players.find((p) => p.id === view.me);
+  const [saved] = useState<SavedDeck[]>(() => loadDecks());
+  const [savedId, setSavedId] = useState('');
+  const [usedSaved, setUsedSaved] = useState<string | null>(null);
 
   useEffect(() => {
     try { localStorage.setItem(STORE(format), text); } catch { /* ignore */ }
@@ -71,6 +75,14 @@ export function Constructed({ view, send, onWatch }: RoomProps & { onWatch: (id:
     if (err) setSubmitErr(err);
   }
 
+  async function useSaved() {
+    const d = saved.find((x) => x.id === savedId);
+    if (!d) return;
+    setSubmitErr(null);
+    const err = await send({ t: 'submitSavedDeck', deck: { main: d.main, side: d.side, basics: d.basics } });
+    if (err) setSubmitErr(err); else setUsedSaved(d.name);
+  }
+
   return (
     <div className="deckbuilder constructed">
       <div className="db-main">
@@ -80,7 +92,16 @@ export function Constructed({ view, send, onWatch }: RoomProps & { onWatch: (id:
           {checking && <span className="muted">checking…</span>}
           {submitted && <span className="good">✅ Deck submitted</span>}
         </div>
-        <p className="muted">Paste a deck list exported from MTG Arena, MTGO or any site (“4 Lightning Bolt”, optional “Sideboard” section). {legalFormat ? `It's checked against ${format} legality.` : 'Freeform: any cards, no restrictions.'}</p>
+        <div className="saved-picker">
+          <label>Saved deck: <select value={savedId} onChange={(e) => setSavedId(e.target.value)} aria-label="Saved deck">
+            <option value="">{saved.length ? 'Choose one of your saved decks…' : 'No saved decks yet'}</option>
+            {saved.map((d) => <option key={d.id} value={d.id}>{d.name} ({deckSize(d)} cards)</option>)}
+          </select></label>
+          <button className="primary" disabled={!savedId} onClick={useSaved}>Use saved deck</button>
+          {usedSaved && submitted && <span className="good" role="status">Using saved deck “{usedSaved}” ({view.deck!.main.length + Object.values(view.deck!.basics).reduce((a, b) => a + b, 0)} cards)</span>}
+          {legalFormat && <small className="muted">Saved cube decks usually aren't {format}-legal; the host can pick Freeform in the lobby.</small>}
+        </div>
+        <p className="muted">Or paste a deck list exported from MTG Arena, MTGO or any site (“4 Lightning Bolt”, optional “Sideboard” section). {legalFormat ? `It's checked against ${format} legality.` : 'Freeform: any cards, no restrictions.'}</p>
         <div className="deck-import">
           <textarea rows={18} value={text} onChange={(e) => setText(e.target.value)} placeholder={'Deck\n4 Lightning Bolt\n4 Monastery Swiftspear\n…\n20 Mountain\n\nSideboard\n2 Abrade'} spellCheck={false} />
           <div className="deck-check">
