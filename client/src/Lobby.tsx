@@ -6,6 +6,7 @@ import { CUBE } from '@ojb/shared/src/cube.ts';
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel, setImageSource, useImageSource } from './cards.tsx';
 import { api, download } from './net.ts';
+import { cobraIdOf, deleteCube, loadCubes, saveCube, type SavedCube } from './cubelib.ts';
 
 type EventId = 'cube-draft' | 'cube-sealed' | 'cube-auction' | 'set-draft' | 'set-sealed' | 'constructed';
 
@@ -246,30 +247,44 @@ export function cubeListText(text: string): string {
   return text;
 }
 
+const OJB = 'ojb';
+const IMPORT = 'import';
+const CURRENT = 'current';
+
 function CustomList({ view, set }: { view: RoomProps['view']; set: (p: Partial<RoomSettings>) => void }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
   const [name, setName] = useState('');
   const [cobra, setCobra] = useState('');
+  const [loadedCobra, setLoadedCobra] = useState<string | null>(null);
+  const [save, setSave] = useState(true);
   const [busy, setBusy] = useState(false);
   const [missing, setMissing] = useState<string[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
+  const [cubes, setCubes] = useState<SavedCube[]>(() => loadCubes());
   const s = view.settings;
-  if (!open) {
-    return (
-      <div className="cube-choice">
-        <b>Cube:</b> {s.customList?.length ? `${s.customListName ?? 'Imported list'} (${s.customList.length} cards)` : CUBE.name}
-        <button className="link" onClick={() => setOpen(true)}>Import a cube list…</button>
-        {s.customList?.length ? <button className="link" onClick={() => set({ customList: [], customListName: undefined })}>Back to the {CUBE.name} cube</button> : null}
-      </div>
-    );
+  const active = s.customList?.length ? s.customList : null;
+  const saved = active ? cubes.find((c) => c.name === (s.customListName ?? 'Imported list') && c.cards.length === active.length && c.cards[0] === active[0]) : undefined;
+  const selected = open ? IMPORT : !active ? OJB : saved ? saved.id : CURRENT;
+
+  function pick(v: string) {
+    setMsg(null); setMissing([]);
+    if (v === IMPORT) { setOpen(true); return; }
+    setOpen(false);
+    if (v === OJB) set({ customList: [], customListName: undefined });
+    else { const c = cubes.find((x) => x.id === v); if (c) set({ customList: c.cards, customListName: c.name }); }
   }
 
-  function applyLocal() {
+  /** Names/lines to card ids: through the card database when the server has one, else against the built-in cube. */
+  async function resolve(list: string): Promise<{ ids: string[]; missing: string[] }> {
+    if (view.carddb) {
+      const r = await api<{ deck: { entries: { id: string; count: number }[]; errors: string[] } }>('/api/decks/validate', { text: cubeListText(list) });
+      return { ids: r.deck.entries.flatMap((e) => Array(e.count).fill(e.id) as string[]), missing: r.deck.errors.map((e) => e.replace(/^Line \d+: unknown card /, '')) };
+    }
     const byName = new Map(CUBE.cards.map((c) => [c.name.toLowerCase(), c.id]));
     const ids: string[] = [];
     const miss: string[] = [];
-    for (const raw of cubeListText(text).split('\n')) {
+    for (const raw of cubeListText(list).split('\n')) {
       const line = raw.trim();
       if (!line || line.startsWith('#')) continue;
       const m = /^(\d+)x?\s+(.*)$/.exec(line);
@@ -279,61 +294,113 @@ function CustomList({ view, set }: { view: RoomProps['view']; set: (p: Partial<R
       if (id) for (let i = 0; i < count; i++) ids.push(id);
       else miss.push(line);
     }
-    setMissing(miss);
-    set({ customList: ids, customListName: name.trim() || undefined });
+    return { ids, missing: miss };
+  }
+
+  async function fetchCobra(id: string): Promise<{ name?: string; text: string }> {
+    const res = await fetch(`/api/cubecobra/${encodeURIComponent(id)}`);
+    const j = await res.json() as { name?: string; text?: string; error?: string };
+    if (!res.ok || !j.text) throw new Error(j.error ?? 'Could not load that cube');
+    return { name: j.name, text: j.text };
   }
 
   async function apply() {
-    if (!view.carddb) return applyLocal();
     setBusy(true);
     setMsg(null);
     try {
-      const r = await api<{ deck: { entries: { id: string; count: number; section: string }[]; errors: string[] } }>('/api/decks/validate', { text: cubeListText(text) });
-      const ids = r.deck.entries.flatMap((e) => Array(e.count).fill(e.id) as string[]);
-      setMissing(r.deck.errors.map((e) => e.replace(/^Line \d+: unknown card /, '')));
-      set({ customList: ids, customListName: name.trim() || undefined });
-      setMsg(`Using ${ids.length} cards.`);
+      const r = await resolve(text);
+      setMissing(r.missing);
+      if (!r.ids.length) throw new Error('No cards were recognised in that list.');
+      const nm = name.trim() || undefined;
+      set({ customList: r.ids, customListName: nm });
+      let note = `Using ${r.ids.length} cards.`;
+      if (save) {
+        const out = saveCube({ name: nm ?? 'Imported list', cards: r.ids, cobraId: loadedCobra ?? undefined });
+        setCubes(out.cubes);
+        note += out.saved ? ' Saved to your library.' : ' (Could not save: browser storage is unavailable.)';
+      }
+      setMsg(note);
+      setOpen(false);
     } catch (e) { setMsg((e as Error).message); }
     setBusy(false);
   }
 
   async function fromCobra() {
-    const id = cobra.trim().replace(/.*cubecobra\.com\/cube\/\w+\//, '').replace(/[?#].*$/, '');
+    const id = cobraIdOf(cobra);
     if (!id) return;
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/cubecobra/${encodeURIComponent(id)}`);
-      const j = await res.json() as { name?: string; text?: string; error?: string };
-      if (!res.ok || !j.text) throw new Error(j.error ?? 'Could not load that cube');
+      const j = await fetchCobra(id);
       setText(j.text);
+      setLoadedCobra(id);
       if (j.name && !name) setName(j.name);
       setMsg('Loaded — check the list and press "Use this list".');
     } catch (e) { setMsg((e as Error).message); }
     setBusy(false);
   }
 
+  async function refresh(c: SavedCube) {
+    if (!c.cobraId) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const j = await fetchCobra(c.cobraId);
+      const r = await resolve(j.text);
+      if (!r.ids.length) throw new Error('CubeCobra returned no recognisable cards.');
+      const out = saveCube({ id: c.id, name: c.name, cards: r.ids, cobraId: c.cobraId });
+      setCubes(out.cubes);
+      setMissing(r.missing);
+      if (saved?.id === c.id) set({ customList: r.ids, customListName: c.name });
+      setMsg(`Refreshed ${c.name}: ${r.ids.length} cards.`);
+    } catch (e) { setMsg((e as Error).message); }
+    setBusy(false);
+  }
+
+  function remove(c: SavedCube) {
+    setCubes(deleteCube(c.id));
+    setMsg(`Deleted ${c.name} from your library.`);
+  }
+
   return (
-    <div className="custom-list">
-      <p className="muted">
-        Paste a cube list: one card per line (optional counts like "2 Lightning Bolt"), or a CubeCobra CSV / text export.
-        {view.carddb ? ' Any Magic card works.' : ' This server has no card database, so only cards from the built-in cube can be used.'}
-      </p>
-      {view.carddb && (
-        <div className="cobra-row">
-          <input placeholder="CubeCobra cube ID or link (optional)" value={cobra} onChange={(e) => setCobra(e.target.value)} />
-          <button disabled={busy || !cobra.trim()} onClick={fromCobra}>Load from CubeCobra</button>
+    <div className="cube-choice-wrap">
+      <div className="cube-choice">
+        <label className="setting">Cube:{' '}
+          <select value={selected} onChange={(e) => pick(e.target.value)}>
+            <option value={OJB}>{CUBE.name}</option>
+            {cubes.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.cards.length} cards)</option>)}
+            {selected === CURRENT && <option value={CURRENT}>{s.customListName ?? 'Imported list'} ({active?.length} cards, this room only)</option>}
+            <option value={IMPORT}>Import new…</option>
+          </select>
+        </label>
+        {saved && <button className="link" disabled={busy} onClick={() => remove(saved)}>Delete from library</button>}
+        {saved?.cobraId && <button className="link" disabled={busy} onClick={() => refresh(saved)}>Refresh from CubeCobra</button>}
+      </div>
+      {!open && msg && <div className="muted">{msg}</div>}
+      {!open && missing.length > 0 && <div className="error">Not found ({missing.length}): {missing.slice(0, 40).join(', ')}{missing.length > 40 ? '…' : ''}</div>}
+      {open && (
+        <div className="custom-list">
+          <p className="muted">
+            Paste a cube list: one card per line (optional counts like "2 Lightning Bolt"), or a CubeCobra CSV / text export.
+            {view.carddb ? ' Any Magic card works.' : ' This server has no card database, so only cards from the built-in cube can be used.'}
+          </p>
+          {view.carddb && (
+            <div className="cobra-row">
+              <input placeholder="CubeCobra cube ID or link (optional)" value={cobra} onChange={(e) => setCobra(e.target.value)} />
+              <button disabled={busy || !cobra.trim()} onClick={fromCobra}>Load from CubeCobra</button>
+            </div>
+          )}
+          <input placeholder="Cube name (optional)" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+          <textarea rows={8} value={text} onChange={(e) => { setText(e.target.value); setLoadedCobra(null); }} placeholder={'Lightning Bolt\nCounterspell\n…'} />
+          <label className="setting check"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} /> Save to library</label>
+          <div>
+            <button disabled={busy || !text.trim()} onClick={apply}>Use this list</button>
+            <button className="link" onClick={() => setOpen(false)}>Close</button>
+          </div>
+          {msg && <div className="muted">{msg}</div>}
+          {missing.length > 0 && <div className="error">Not found ({missing.length}): {missing.slice(0, 40).join(', ')}{missing.length > 40 ? '…' : ''}</div>}
         </div>
       )}
-      <input placeholder="Cube name (optional)" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
-      <textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} placeholder={'Lightning Bolt\nCounterspell\n…'} />
-      <div>
-        <button disabled={busy || !text.trim()} onClick={apply}>Use this list</button>
-        {s.customList?.length ? <button onClick={() => set({ customList: [], customListName: undefined })}>Back to the {CUBE.name} cube</button> : null}
-        <button className="link" onClick={() => setOpen(false)}>Close</button>
-      </div>
-      {msg && <div className="muted">{msg}</div>}
-      {missing.length > 0 && <div className="error">Not found ({missing.length}): {missing.slice(0, 40).join(', ')}{missing.length > 40 ? '…' : ''}</div>}
     </div>
   );
 }
