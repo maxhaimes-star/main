@@ -97,4 +97,26 @@ describe('bot vs bot through the room path', () => {
       expect(g().undoRequest).toBeNull();
     }
   }, 120_000);
+
+  it('Freeform constructed: the bot plays a saved deck, or a cube deck by default', () => {
+    const rooms = new Rooms();
+    const host = rooms.create('Freeform', 'Max');
+    const rec = rooms.rooms.get(host.roomId)!;
+    rooms.handle(rec, host.pid, { t: 'updateSettings', settings: { mode: 'constructed', format: 'Freeform', vsBot: 'easy' } });
+    expect(rooms.handle(rec, host.pid, { t: 'start' })).toBeNull();
+    const cubeBot = rec.state.players.find((p) => p.isBot)!;
+    expect(cubeBot.botLevel).toBe('easy');
+    expect(rec.state.decks[cubeBot.id]!.ready).toBe(true);
+    const saved = { main: Array(20).fill('lightning_bolt'), side: [], basics: { W: 0, U: 0, B: 0, R: 20, G: 0 } };
+    expect(rooms.handle(rec, host.pid, { t: 'addBot', level: 'normal', deck: saved })).toBeNull();
+    const deckBot = rec.state.players.filter((p) => p.isBot)[1];
+    expect(rec.state.decks[deckBot.id]!.main).toEqual(saved.main);
+    expect(rec.state.decks[deckBot.id]!.basics.R).toBe(20);
+    expect(rooms.handle(rec, host.pid, { t: 'addBot', deck: { main: ['no_such_card'], side: [], basics: saved.basics } })).toMatch(/Unknown card/);
+    expect(rooms.handle(rec, host.pid, { t: 'submitSavedDeck', deck: saved })).toBeNull();
+    expect(rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, deckBot.id], bestOf: 1 })).toBeNull();
+    const g = rec.state.matches[0].game!;
+    const botCards = Object.values(g.cards).filter((c) => c.owner === deckBot.id);
+    expect(botCards.filter((c) => c.cardId === 'lightning_bolt')).toHaveLength(20);
+  });
 });
