@@ -1,7 +1,7 @@
 import type { Deck, Match, Player, RoomSettings, RoomState } from './room.ts';
 import type { GameAction, GameView } from './game/types.ts';
 import type { AuctionState, DraftState } from './room.ts';
-import type { CardData, TokenData } from './cards.ts';
+import type { CardData, Color, TokenData } from './cards.ts';
 import type { ForgeFace } from './engine/types.ts';
 
 /**
@@ -29,6 +29,8 @@ export type ClientMsg =
   | { t: 'saveDeck'; deck: Omit<Deck, 'ready'>; ready: boolean }
   /** Constructed: submit a pasted deck list (validated against the room's format). */
   | { t: 'submitDeck'; text: string }
+  /** Constructed: submit a saved deck by exact card ids (cube cards, imported-cube cards, basics as counts). */
+  | { t: 'submitSavedDeck'; deck: { main: string[]; side: string[]; basics: Record<Color, number> } }
   | { t: 'createMatch'; players: [string, string]; bestOf: number }
   /** After the draft / sealed / auction or in constructed: add a computer opponent (with a deck) to play against. */
   | { t: 'addBot'; level?: import('./ai/player.ts').BotLevel }

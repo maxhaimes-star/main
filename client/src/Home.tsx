@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CUBE } from '@ojb/shared/src/cube.ts';
 import { navigate } from './App.tsx';
 import { api, saveSeat } from './net.ts';
+import { MyDecks } from './MyDecks.tsx';
 
 export function Home() {
   const [name, setName] = useState(() => localStorage.getItem('ojb:name') ?? '');
@@ -47,6 +48,7 @@ export function Home() {
           </div>
         </div>
         {err && <div className="error">{err}</div>}
+        <MyDecks />
       </div>
     </div>
   );

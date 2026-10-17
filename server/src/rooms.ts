@@ -197,6 +197,15 @@ export class Rooms {
         s.prints = { ...(s.prints ?? {}), ...r.prints };
         return null;
       }
+      case 'submitSavedDeck': {
+        if (!me) return 'Only players can submit decks';
+        if (s.settings.mode !== 'constructed' || s.phase !== 'deckbuilding') return 'Saved decks are for constructed events';
+        const r = this.savedDeck(s, msg.deck);
+        if ('error' in r) return r.error;
+        s.pools[pid] = [...r.deck.main, ...r.deck.side];
+        s.decks[pid] = r.deck;
+        return null;
+      }
       case 'createMatch': {
         const [a, b] = msg.players;
         if (a === b) return 'Pick two different players';
@@ -275,7 +284,7 @@ export class Rooms {
       while (players.length < seats) players.push({ id: `bot_${id(6)}`, name: BOT_NAMES[b++ % BOT_NAMES.length], seat: 0, isBot: true, connected: true });
     }
     if (s.settings.mode === 'constructed') {
-      if (!carddbAvailable()) return 'Constructed needs the card database, which this server does not have';
+      if (!carddbAvailable() && s.settings.format !== 'Freeform') return 'Constructed needs the card database, which this server does not have';
       s.players = humans.map((p, i) => ({ ...p, seat: i }));
       s.pools = {};
       s.decks = {};
@@ -382,6 +391,23 @@ export class Rooms {
     const errs = this.constructedErrors(s, deck);
     if (errs.length) return { error: errs.slice(0, 6).join('\n') };
     return { deck, prints };
+  }
+
+  /** Validate a saved deck: every id must resolve (cube cards work without the card DB; others need it). */
+  savedDeck(s: RoomState, raw: { main?: unknown; side?: unknown; basics?: Partial<Record<Color, number>> } | undefined): { error: string } | { deck: Deck } {
+    const ids = (x: unknown) => (Array.isArray(x) ? x.filter((i): i is string => typeof i === 'string') : []);
+    const main = ids(raw?.main);
+    const side = ids(raw?.side);
+    if (main.length + side.length > 400) return { error: 'That deck is too big' };
+    const deck: Deck = { ...emptyDeck(), main, side, ready: true };
+    for (const c of Object.keys(deck.basics) as Color[]) deck.basics[c] = Math.max(0, Math.min(250, Math.floor(Number(raw?.basics?.[c] ?? 0)) || 0));
+    ensureCards([...main, ...side]);
+    const unknown = [...new Set([...main, ...side].filter((i) => !getCard(i)))];
+    if (unknown.length) return { error: `Unknown card ids in the saved deck: ${unknown.slice(0, 5).join(', ')}` };
+    if (deckSize(deck) < 1) return { error: 'The deck is empty' };
+    const errs = this.constructedErrors(s, deck);
+    if (errs.length) return { error: errs.slice(0, 6).join('\n') };
+    return { deck };
   }
 
   constructedErrors(s: RoomState, deck: Deck | undefined): string[] {

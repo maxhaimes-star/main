@@ -6,6 +6,7 @@ import { CUBE } from '@ojb/shared/src/cube.ts';
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel, setImageSource, useImageSource } from './cards.tsx';
 import { api, download } from './net.ts';
+import { MyDecks } from './MyDecks.tsx';
 import { cobraIdOf, deleteCube, loadCubes, saveCube, type SavedCube } from './cubelib.ts';
 
 type EventId = 'cube-draft' | 'cube-sealed' | 'cube-auction' | 'set-draft' | 'set-sealed' | 'constructed';
@@ -16,7 +17,7 @@ const EVENTS: { id: EventId; label: string; blurb: string; settings: Partial<Roo
   { id: 'cube-auction', label: 'Cube auction', blurb: 'Packs open one at a time; each card is auctioned off with a shared budget.', settings: { mode: 'auction', source: 'cube' } },
   { id: 'set-draft', label: 'Set draft', blurb: 'Real boosters from any set (or mix sets per pack). Bots fill the table.', settings: { mode: 'draft', source: 'set' }, db: true },
   { id: 'set-sealed', label: 'Set sealed', blurb: 'Open six boosters of a set and build a 40-card deck.', settings: { mode: 'sealed', source: 'set' }, db: true },
-  { id: 'constructed', label: 'Constructed', blurb: 'Bring your own deck list: Standard, Pioneer, Modern, Legacy, Vintage, Pauper…', settings: { mode: 'constructed' }, db: true },
+  { id: 'constructed', label: 'Constructed', blurb: 'Bring your own deck list (Standard, Pioneer, Modern, Legacy, Vintage, Pauper…) or play a deck you saved earlier.', settings: { mode: 'constructed' } },
 ];
 
 function eventOf(s: RoomSettings): EventId {
@@ -208,7 +209,8 @@ export function Lobby({ view, send }: RoomProps) {
             {cardsNeeded > view.cubeSize && <b className="error"> Not enough cards!</b>}
           </p>
         )}
-        {ev === 'constructed' && <p className="muted">After the host starts, everyone pastes a deck list (MTGA / MTGO / plain text). Decks are checked for {s.format} legality before matches start.</p>}
+        {ev === 'constructed' && <p className="muted">After the host starts, everyone pastes a deck list (MTGA / MTGO / plain text) or picks one of their saved decks. Decks are checked for {s.format} legality before matches start{s.format !== 'Freeform' ? ' — choose Freeform to play saved cube decks with any cards' : ''}.</p>}
+        <MyDecks />
 
         {isHost
           ? <button className="primary big" onClick={() => send({ t: 'start' })}>Start {event.label.toLowerCase()}</button>

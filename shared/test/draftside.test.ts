@@ -21,7 +21,10 @@ describe('draft main/sideboard split', () => {
     const first = d.picks[0][0];
     expect(setDraftMain(r, 0, ['nope'])).toMatch(/not in your picks/);
     expect(setDraftMain(r, 0, [first, first])).toMatch(/not in your picks/);
-    expect(setDraftMain(r, 0, [first])).toBeNull();
+    expect(d.main![0]).toEqual([first]); // picks go to the main deck by default
+    expect(setDraftMain(r, 0, [])).toBeNull(); // click: to the sideboard
+    expect(setDraftMain(r, 0, [first])).toBeNull(); // click again: back to main
+    expect(setDraftMain(r, 0, [])).toBeNull(); // and leave it in the sideboard
     let t = 0;
     while (r.phase === 'drafting' && t < 1000) {
       if (d.queues[0][0]) draftPick(r, 0, d.queues[0][0][0], t);
@@ -29,8 +32,9 @@ describe('draft main/sideboard split', () => {
       t++;
     }
     expect(r.phase).toBe('deckbuilding');
-    expect(r.decks.p0.main).toEqual([first]);
-    expect(r.decks.p0.side).toHaveLength(r.pools.p0.length - 1);
+    // Everything picked after the first went to the main deck by default; the first stayed where the player put it.
+    expect(r.decks.p0.side).toEqual([first]);
+    expect(r.decks.p0.main).toHaveLength(r.pools.p0.length - 1);
     expect([...r.decks.p0.main, ...r.decks.p0.side].sort()).toEqual(r.pools.p0.slice().sort());
   });
 });

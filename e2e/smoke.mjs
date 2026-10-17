@@ -44,8 +44,9 @@ await A.getByText('Deckbuilding').waitFor({ timeout: 30000 });
 step('drafted 45 cards each');
 
 async function build(p, name) {
-  for (let i = 0; i < 23; i++) {
-    await p.locator('.db-main > .pool-summary .pool-stack').first().locator('.cube-card').last().click({ force: true });
+  // Draft picks arrive in the main deck (all 45); cut it down to 23 by moving cards to the sideboard.
+  for (let i = 0; i < 22; i++) {
+    await p.locator('.db-columns .cube-card').first().click({ force: true });
   }
   await p.getByRole('button', { name: /Suggest lands/ }).click();
   await p.getByLabel('Deck ready').check();
