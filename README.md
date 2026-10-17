@@ -1,6 +1,6 @@
 # 🍊 OJB Cube Online
 
-A private, MTGO/Arena-style website for drafting and playing the **Orangejuicebox cube** (606 cards) with friends in different places. Everyone sees the same table live.
+An MTGO/Arena-style website for drafting and playing cubes — the **Orangejuicebox cube** (606 cards) by default, or any imported list — with friends in different places. Everyone sees the same table live.
 
 - **Booster draft**: packs pass left, right, left, with a pick timer that shrinks as packs get smaller. Bots fill empty seats.
 - **Auction draft (pack-based)**: one pack is opened at a time. Players take turns choosing a card from it to put up for auction. The chooser opens the bidding at 0, and everyone bids from a shared budget. Each bid resets the timer.
@@ -102,3 +102,10 @@ server/src/      Express + Socket.IO server: rooms, timers, bots, matches, persi
 client/src/      React UI: lobby, draft, auction, deckbuilder, game table
 e2e/             Playwright browser tests
 ```
+
+## License and credits
+
+- Licensed under the **GNU GPL v3** (see `LICENSE`), because the card rules come from [Forge](https://github.com/Card-Forge/forge)'s card scripts, which are GPL-3.0.
+- Card images come from [Scryfall](https://scryfall.com). Card data is built from Forge.
+- **Unofficial fan content.** It is permitted under the [Wizards of the Coast Fan Content Policy](https://company.wizards.com/en/legal/fancontentpolicy), and it is not approved or endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Magic: The Gathering is a trademark of Wizards of the Coast. This project is free and non-commercial.
+- No card art is included in this repository.
