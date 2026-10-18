@@ -370,7 +370,7 @@ function env(state: GameState, ctx: Ctx, r: Run): MatchEnv {
   return {
     controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup, num: (name) => amount(state, ctx, r, name, 0),
     turnInfo: turnInfo(state), remembered: r.remembered, defender: r.trig?.defender, attachedTo: src?.attachedTo ?? '',
-    ...(src?.chosen ? { chosen: src.chosen } : {}), ...(r.chosen?.cards ? { chosenCards: r.chosen.cards } : {}), exiledWith: exiledWithSource(state, r.sourceIid),
+    ...(src?.chosen ? { chosen: src.chosen } : {}), ...(r.chosen?.cards ? { chosenCards: r.chosen.cards } : {}), ...(r.chosen?.imprinted ? { imprinted: r.chosen.imprinted } : {}), exiledWith: exiledWithSource(state, r.sourceIid),
   };
 }
 
@@ -1089,7 +1089,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         r.lki[iid] ??= lkiOf(c, ctx, state);
         const nm = cardName(c, ctx.lookup);
         const from = c.zone;
+        // A card revealed to everyone (Atraxa's PeekAndReveal) stays revealed as it goes from the library to the hand.
+        const shown = from === 'library' && dest === 'hand' && state.players.every((q) => c.revealedTo.includes(q.pid));
         moveTo(state, ctx, r, iid, dest, p);
+        if (shown && state.cards[iid]?.zone === 'hand') state.cards[iid].revealedTo = state.players.map((q) => q.pid);
         moved.push(nm);
         if (untilHost && state.cards[iid]?.zone === 'exile') exiled.push({ iid, from, owner: c.owner });
       }
@@ -1118,6 +1121,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const ms = valid === 'Card.IsRemembered' ? pool.map((x) => [x, r.remembered.includes(x)] as const) : pool.map((x) => [x, matchCard(state.cards[x], valid, E)] as const);
       if (ms.some(([, m]) => m === 'unknown')) return bad();
       const list = ms.filter(([, m]) => m).map(([x]) => x);
+      // RandomOrder$ True (Atraxa: "put the rest on the bottom of your library in a random order").
+      if (p.RandomOrder === 'True') for (let k = list.length - 1; k > 0; k--) { const j = Math.floor(ctx.rng() * (k + 1)); [list[k], list[j]] = [list[j], list[k]]; }
       const owners = new Set(list.map((x) => state.cards[x].owner));
       for (const iid of list) moveTo(state, ctx, r, iid, dest, p);
       remember(list.filter((x) => state.cards[x]));

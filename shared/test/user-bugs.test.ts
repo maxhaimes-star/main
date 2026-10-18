@@ -768,3 +768,49 @@ describe('15: Chaos Defiler — for each opponent choose a nonland permanent, de
     expect(g.stack).toHaveLength(0);
   });
 });
+
+describe('16: Atraxa, Grand Unifier — one revealed card of each card type to hand', () => {
+  function stacked() {
+    const ids = ['esper_sentinel', 'nadu_winged_wisdom', 'lightning_bolt', 'ponder', 'sylvan_library', 'skullclamp'];
+    const { g, ctx } = setup(['atraxa_grand_unifier', ...ids]);
+    const top: string[] = ids.map((id) => find(g, 'a', id));
+    const lands = g.players[0].zones.library.filter((i) => g.cards[i].cardId === 'basic_mountain').slice(0, 4);
+    top.push(...lands);
+    for (const iid of [...top].reverse()) moveCard(g, ctx, iid, 'library', { position: 'top' });
+    expect(g.players[0].zones.library.slice(0, 10)).toEqual(top);
+    return { g, ctx, top };
+  }
+
+  it('ETB: one pick per type, a multi-type card only once, chosen cards revealed into hand, the rest on the bottom', () => {
+    const { g, ctx, top } = stacked();
+    const hand = g.players[0].zones.hand.length;
+    put(g, ctx, 'a', 'atraxa_grand_unifier');
+    processTriggers(g, ctx);
+    const asked: string[][] = [];
+    drain(g, ctx, (q) => {
+      const opts = q.options.map((o) => o.value).filter((v) => v !== 'done');
+      asked.push(opts);
+      return opts[0] ?? q.options[0].value;
+    });
+    expect(g.log.some((l) => /by hand|Not automated/i.test(l.text)), logTail(g)).toBe(false);
+    expect(asked.length, logTail(g)).toBe(6);
+    expect(asked.filter((o) => o.includes(top[0])).length, 'Esper Sentinel offered again after it was chosen').toBe(1);
+    const chosen = [top[0], top[1], top[2], top[3], top[4], top[6]];
+    for (const iid of chosen) {
+      expect(g.cards[iid].zone, logTail(g)).toBe('hand');
+      expect(g.cards[iid].revealedTo).toContain('b');
+    }
+    expect(g.players[0].zones.hand.length).toBe(hand + 6);
+    const lib = g.players[0].zones.library;
+    expect(new Set(lib.slice(-4))).toEqual(new Set([top[5], ...top.slice(7)]));
+  });
+
+  it('the picks are optional ("you may")', () => {
+    const { g, ctx, top } = stacked();
+    put(g, ctx, 'a', 'atraxa_grand_unifier');
+    processTriggers(g, ctx);
+    drain(g, ctx, (q) => (q.options.some((o) => o.value === 'done') ? 'done' : q.options[0].value));
+    expect(top.filter((x) => g.cards[x].zone === 'hand'), logTail(g)).toHaveLength(0);
+    expect(new Set(g.players[0].zones.library.slice(-10))).toEqual(new Set(top));
+  });
+});

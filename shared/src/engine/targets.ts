@@ -30,6 +30,8 @@ export interface MatchEnv {
   exiledWith?: string[];
   /** Cards chosen during this resolution (ChosenCard). */
   chosenCards?: string[];
+  /** Cards imprinted during this resolution (IsImprinted: Atraxa's revealed cards); absent = unknown. */
+  imprinted?: string[];
   /** This turn's bookkeeping (attackedThisCombat / attackedThisTurn / ThisTurnEntered); absent = unknown. */
   turnInfo?: { turn: number; activations: Record<string, number> };
   /** The trigger's defending player (DefenderCtrl). */
@@ -133,6 +135,7 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'ChosenColor': return env.chosen === undefined ? 'unknown' : !!env.chosen.color && fx.colors.includes(COLOR_WORDS[env.chosen.color] ?? env.chosen.color);
     case 'IsRemembered': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.iid);
     case 'ChosenCard': return env.chosenCards === undefined ? 'unknown' : env.chosenCards.includes(c.iid);
+    case 'IsImprinted': return env.imprinted === undefined ? 'unknown' : env.imprinted.includes(c.iid);
     case 'ExiledWithSource': case 'ExiledWithSourceLKI': return env.exiledWith === undefined ? 'unknown' : env.exiledWith.includes(c.iid);
     // How / where it was cast (CastInfo.from is set when not cast from the hand).
     case 'wasCast': return !!c.castInfo;
