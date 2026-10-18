@@ -225,7 +225,7 @@ export interface GameState {
 /** Stage 2: something that happened during an action (engine-internal; used to detect triggers). */
 export type GameEvent =
   /** from 'none' = a token was created. */
-  | { t: 'zone'; iid: string; from: Zone | 'none'; to: Zone; snap: CardInstance; cause?: 'discard' | 'sacrifice' }
+  | { t: 'zone'; iid: string; from: Zone | 'none'; to: Zone; snap: CardInstance; cause?: 'discard' | 'sacrifice'; attached?: string[] }
   | { t: 'phase'; step: Step; active: string; turn: number }
   | { t: 'attacks'; iid: string; defender: string }
   | { t: 'attackersDeclared'; pid: string }

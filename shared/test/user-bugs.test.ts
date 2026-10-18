@@ -491,3 +491,104 @@ describe('12: free mulligan (both players agree)', () => {
     expect(applyAction(g, 'a', { t: 'requestFreeMulligan' }, ctx)).toMatch(/before the game/);
   });
 });
+
+const logTail = (g: GameState, n = 10) => g.log.slice(-n).map((l) => l.text).join('\n');
+
+describe('13: Skullclamp draws when the equipped creature dies', () => {
+  const equipIdx = () => activatedAbilitiesOf('skullclamp', 0).find((e) => /Equip/i.test(e.keyword ?? e.ability.api))!.index;
+  const hand = (g: GameState) => g.players[0].zones.hand.length;
+  const equip = (g: GameState, ctx: Ctx, clamp: string, target: string) =>
+    act(g, ctx, 'a', { t: 'activate', iid: clamp, text: '', ability: equipIdx(), targets: card(target) });
+
+  it('equipping a 1/1 token kills it (+1/-1): its controller draws 2', () => {
+    const { g, ctx } = setup(['skullclamp']);
+    const clamp = put(g, ctx, 'a', 'skullclamp');
+    put(g, ctx, 'a', 'basic_mountain');
+    const tok = createTokenInstance(g, ctx, 'a', SCRIPTS.tokens.w_1_1_soldier, false).iid;
+    const n = hand(g);
+    equip(g, ctx, clamp, tok);
+    drain(g, ctx);
+    expect(g.cards[tok]?.zone ?? 'gone').not.toBe('battlefield');
+    expect(hand(g), logTail(g)).toBe(n + 2);
+    expect(g.cards[clamp].attachedTo).toBeFalsy();
+  });
+
+  it('a nontoken 1-toughness creature dies to the equip: draw 2', () => {
+    const { g, ctx } = setup(['skullclamp', 'esper_sentinel']);
+    const clamp = put(g, ctx, 'a', 'skullclamp');
+    put(g, ctx, 'a', 'basic_mountain');
+    const giver = put(g, ctx, 'a', 'esper_sentinel');
+    const n = hand(g);
+    equip(g, ctx, clamp, giver);
+    drain(g, ctx);
+    expect(g.cards[giver].zone).toBe('graveyard');
+    expect(hand(g), logTail(g)).toBe(n + 2);
+  });
+
+  it('an equipped 2/2 token (3/1) dies blocked in combat: draw 2', () => {
+    const { g, ctx } = setup(['skullclamp'], ['nadu_winged_wisdom']);
+    const clamp = put(g, ctx, 'a', 'skullclamp');
+    put(g, ctx, 'a', 'basic_mountain');
+    const tok = createTokenInstance(g, ctx, 'a', SCRIPTS.tokens.b_2_2_zombie, false).iid;
+    g.cards[tok].summoningSick = false;
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    equip(g, ctx, clamp, tok);
+    drain(g, ctx);
+    expect(g.cards[clamp].attachedTo).toBe(tok);
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: tok, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 10 && g.step !== 'blockers'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    act(g, ctx, 'b', { t: 'declareBlocker', iid: nadu, attacker: tok });
+    act(g, ctx, 'b', { t: 'confirmBlockers' });
+    const n = hand(g);
+    for (let i = 0; i < 30 && g.step !== 'main2'; i++) {
+      if (g.pending.length) answer(g, ctx); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    drain(g, ctx);
+    expect(g.cards[tok]?.zone ?? 'gone').not.toBe('battlefield');
+    expect(hand(g), logTail(g, 20)).toBe(n + 2);
+  });
+
+  it('the equipped creature destroyed by a spell: draw 2', () => {
+    const { g, ctx } = setup(['skullclamp', 'nadu_winged_wisdom'], ['lightning_bolt']);
+    const clamp = put(g, ctx, 'a', 'skullclamp');
+    put(g, ctx, 'a', 'basic_mountain');
+    put(g, ctx, 'b', 'basic_mountain');
+    const tok = createTokenInstance(g, ctx, 'a', SCRIPTS.tokens.b_2_2_zombie, false).iid;
+    equip(g, ctx, clamp, tok);
+    drain(g, ctx);
+    const n = hand(g);
+    const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+    g.priority = 'b'; // b holds priority in a's main phase
+    act(g, ctx, 'b', { t: 'cast', iid: bolt, targets: card(tok) });
+    drain(g, ctx);
+    expect(g.cards[tok]).toBeUndefined();
+    expect(hand(g), logTail(g)).toBe(n + 2);
+  });
+});
+
+describe('13b: other "equipped creature" triggers look back at a creature that died', () => {
+  it("Umezawa's Jitte: the equipped creature trades in combat and Jitte still gets two counters", () => {
+    const { g, ctx } = setup(['umezawas_jitte'], ['nadu_winged_wisdom']);
+    const jitte = put(g, ctx, 'a', 'umezawas_jitte');
+    for (let i = 0; i < 2; i++) put(g, ctx, 'a', 'basic_mountain');
+    const tok = createTokenInstance(g, ctx, 'a', SCRIPTS.tokens.b_2_2_zombie, false).iid;
+    g.cards[tok].summoningSick = false;
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    const eq = activatedAbilitiesOf('umezawas_jitte', 0).find((e) => /Equip/i.test(e.keyword ?? e.ability.api))!.index;
+    act(g, ctx, 'a', { t: 'activate', iid: jitte, text: '', ability: eq, targets: card(tok) });
+    drain(g, ctx);
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: tok, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 10 && g.step !== 'blockers'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    act(g, ctx, 'b', { t: 'declareBlocker', iid: nadu, attacker: tok });
+    act(g, ctx, 'b', { t: 'confirmBlockers' });
+    for (let i = 0; i < 30 && g.step !== 'main2'; i++) {
+      if (g.pending.length) answer(g, ctx); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(g.cards[tok]).toBeUndefined();
+    expect(g.cards[jitte].counters.charge, logTail(g)).toBe(2);
+  });
+});

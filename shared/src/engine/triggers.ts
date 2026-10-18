@@ -578,7 +578,13 @@ function detect(state: GameState, ctx: Ctx) {
   const found: Detected[] = [];
   const once = new Set<string>();
   const leftSnaps = new Map<string, CardInstance>();
-  for (const ev of events) if (ev.t === 'zone' && ev.from === 'battlefield') leftSnaps.set(ev.iid, ev.snap);
+  // Last-known attachments: an Equipment / Aura whose creature left in these events still "equips" it for them
+  // (Skullclamp: "whenever equipped creature dies"; Jitte / Swords: combat damage from a creature that then died).
+  const lkiAttached = new Map<string, string>();
+  for (const ev of events) if (ev.t === 'zone' && ev.from === 'battlefield') {
+    leftSnaps.set(ev.iid, ev.snap);
+    for (const a of ev.attached ?? []) if (!lkiAttached.has(a)) lkiAttached.set(a, ev.iid);
+  }
   const auto = (pid: string) => state.players.find((p) => p.pid === pid)?.autoTriggers !== false;
   for (const ev of events) {
     let hosts: Host[];
@@ -587,7 +593,7 @@ function detect(state: GameState, ctx: Ctx) {
       const c = host.c;
       if (!auto(c.controller)) continue;
       try {
-        const env: MatchEnv = { controller: c.controller, sourceIid: c.iid, lookup: ctx.lookup, attachedTo: c.attachedTo ?? '', turnInfo: turnInfo(state), ...(host.effect ? { remembered: host.effect.remembered } : {}) };
+        const env: MatchEnv = { controller: c.controller, sourceIid: c.iid, lookup: ctx.lookup, attachedTo: c.attachedTo || lkiAttached.get(c.iid) || '', turnInfo: turnInfo(state), ...(host.effect ? { remembered: host.effect.remembered } : {}) };
         // Prowess (keyword) as a synthesized trigger.
         if (ev.t === 'cast' && !host.lki && c.zone === 'battlefield' && hasKeyword(c, ctx.lookup, 'Prowess')) {
           const p = { Mode: 'SpellCast', ValidCard: 'Card.nonCreature', ValidActivatingPlayer: 'You', TriggerZones: 'Battlefield', TriggerDescription: 'Prowess (+1/+1 until end of turn)' };

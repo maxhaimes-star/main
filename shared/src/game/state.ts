@@ -140,7 +140,13 @@ export function moveCardRaw(state: GameState, ctx: Ctx, iid: string, to: Zone, o
   // Stage 2: zone-change event with a last-known-information snapshot (taken before anything is reset).
   if (state.phase === 'playing' && from !== to) {
     const snap = JSON.parse(JSON.stringify(inst)) as CardInstance;
-    emit(state, opts.cause ? { t: 'zone', iid, from, to, snap, cause: opts.cause } : { t: 'zone', iid, from, to, snap });
+    const ev: GameEvent = opts.cause ? { t: 'zone', iid, from, to, snap, cause: opts.cause } : { t: 'zone', iid, from, to, snap };
+    // Last-known information: what was attached to it (Skullclamp's "equipped creature dies" looks back to this).
+    if (from === 'battlefield') {
+      const attached = state.battlefield.filter((o) => o !== iid && state.cards[o]?.attachedTo === iid);
+      if (attached.length) (ev as Extract<GameEvent, { t: 'zone' }>).attached = attached;
+    }
+    emit(state, ev);
   }
   detach(state, inst);
   // Tokens and copies cease to exist outside the battlefield/stack.
