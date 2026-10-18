@@ -22,6 +22,34 @@ async function setupWith(list, tag, ok) {
   return g;
 }
 
+/** The attack buttons (`sel` must be shown) and the other priority buttons: visible, inside the viewport, not covered and not
+ *  overlapping each other or the board pieces, on phones (portrait + landscape) and desktop. Leaves the desktop viewport. */
+async function attackButtonsFit(p, sel, tag) {
+  for (const [w, h] of [[360, 740], [390, 844], [844, 390], [1440, 900]]) {
+    await p.setViewportSize({ width: w, height: h });
+    await settle(p, 400);
+    const problems = await p.evaluate((sel) => {
+      const out = [];
+      const rect = (e) => e.getBoundingClientRect();
+      const hit = (a, b) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+      const btns = [...document.querySelectorAll('.priority button, .priority .waiting')].filter((e) => rect(e).width > 0);
+      const want = document.querySelector(sel);
+      if (!want || rect(want).width === 0) out.push(`${sel} not visible`);
+      for (const b of btns) {
+        const r = rect(b);
+        if (r.left < -1 || r.top < -1 || r.right > innerWidth + 1 || r.bottom > innerHeight + 1) out.push(`${b.textContent} leaves the viewport`);
+        const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (!at || !b.contains(at)) out.push(`${b.textContent} is covered by ${at?.className}`);
+      }
+      for (let i = 0; i < btns.length; i++) for (let j = i + 1; j < btns.length; j++) if (hit(rect(btns[i]), rect(btns[j]))) out.push(`${btns[i].textContent} overlaps ${btns[j].textContent}`);
+      for (const b of btns) for (const o of document.querySelectorAll('.zones .zone, .player-panel, .stack-item')) if (hit(rect(b), rect(o))) out.push(`${b.textContent} overlaps ${o.className}`);
+      return out;
+    }, sel);
+    await shot(p, `${tag}-${w}x${h}`);
+    assert(!problems.length, `${w}x${h}: ${problems.join('; ')}`);
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 scenario('1. one land per turn, castability dimming, Lightning Bolt auto-pay', async () => {
   const g = await setupWith('60 Lightning Bolt', 's1', async ({ active }) => (await handCard(active, 'Lightning Bolt').count()) >= 1 && (await handLands(active, 'Mountain').count()) >= 2);
@@ -161,6 +189,20 @@ scenario('3. combat: summoning sickness, then a real attack', async () => {
     await settle(active, 400);
     assert(/attacking/.test(await creature.getAttribute('class')), 'creature should be attacking');
     await shot(active, 's3-2-attacking');
+
+    step('"Clear attackers" undoes it; "Attack with all" declares every creature that can attack');
+    await active.locator('.priority .clear-attackers-btn').click();
+    await settle(active, 400);
+    assert(!/attacking/.test(await creature.getAttribute('class')), 'Clear attackers should remove the attacker');
+    assert(!(await active.locator('.priority .clear-attackers-btn').count()), 'no Clear button without attackers');
+    assert(!(await other.locator('.attack-all').count()), 'the defender has no attack buttons');
+    await attackButtonsFit(active, '.priority .attack-all-btn', 's3-attack-all');
+    await active.locator('.priority .attack-all-btn').click();
+    await settle(active, 400);
+    assert(/attacking/.test(await creature.getAttribute('class')), 'Attack with all should declare the creature');
+    assert(!(await active.locator('.priority .attack-all-btn').count()), 'no Attack-with-all button once everything attacks');
+    await active.locator('.priority .clear-attackers-btn').waitFor();
+    await attackButtonsFit(active, '.priority .clear-attackers-btn', 's3-clear');
     await active.locator('button.ok', { hasText: 'Attack with 1' }).click();
     await settle(other, 600);
     // The defender has no creatures, so the blockers step may be skipped; otherwise passUntil confirms "no blocks".

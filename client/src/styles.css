@@ -221,6 +221,11 @@ h1, h2, h3, h4 { margin: 8px 0; }
 
 .turn-info { min-width: 120px; }
 .stop-dot { position: absolute; top: 1px; right: 1px; width: 5px; height: 5px; border-radius: 50%; background: var(--bad); }
+/* declare attackers: "Attack with all" / "Clear attackers", next to the pass button */
+.attack-all { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: nowrap; }
+.attack-all button { white-space: nowrap; font-weight: 700; border-radius: 999px; padding: 6px 14px; background: #3a1a10e6; color: #ffd9c9; border: 1px solid #e0603a; box-shadow: 0 2px 6px #0009; }
+.attack-all button:hover { filter: brightness(1.2); }
+.attack-all .clear-attackers-btn { background: #000b; color: var(--text, #ddd); border-color: #666; }
 .waiting { color: var(--muted); font-style: italic; }
 .sub-actions { display: flex; gap: 4px; }
 .stack-title { font-size: 11px; text-transform: uppercase; color: var(--accent); font-weight: 700; }

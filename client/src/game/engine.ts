@@ -179,6 +179,20 @@ export function attackProblem(g: GameView, pid: string | null, iid: string, targ
   return (r && safe(() => (r as unknown as (...a: unknown[]) => string | null)(g, iid, getCard))) || null;
 }
 
+/**
+ * "Attack with all": my untapped creatures, not yet attacking, that can legally attack `opp` now
+ * (no summoning sickness without haste, attackProblem null). Only while I'm declaring attackers.
+ */
+export function attackAllCandidates(g: GameView, me: string | null, opp: string): string[] {
+  if (!me || g.phase !== 'playing' || g.step !== 'attackers' || g.activePlayer !== me || g.combat.attackersDeclared) return [];
+  return g.battlefield.filter((iid) => {
+    const c = g.cards[iid];
+    if (!c || c.controller !== me || c.attacking || c.tapped || Shared.isHidden(c)) return false;
+    const creature = c.faceDown || !!safe(() => Shared.isCreature(c as never, getCard, g as never));
+    return creature && !summoningSickNoHaste(g, iid) && !attackProblem(g, me, iid, opp);
+  });
+}
+
 /** Why `blocker` can't block `attacker` now; null = it can (or unknown). */
 export function blockProblem(g: GameView, blocker: string, attacker: string): string | null {
   const fn = shared.blockError;

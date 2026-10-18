@@ -243,6 +243,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .lay-portrait .priority .ok, .lay-landscape .priority .ok { font-size: 16px; min-width: 112px; min-height: 48px; padding: 8px 18px; }
 .lay-portrait .priority, .lay-landscape .priority { gap: 6px; }
 .lay-portrait .more-btn, .lay-landscape .more-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; padding: 0; font-size: 20px; border-radius: 50%; background: #000b; }
+.lay-portrait .attack-all button, .lay-landscape .attack-all button { min-height: 44px; padding: 6px 9px; font-size: 12px; }
 .lay-portrait .priority .land-chip, .lay-landscape .priority .land-chip { display: inline-block; margin: 0; background: #000b; }
 .lay-portrait .waiting, .lay-landscape .waiting { font-size: 12px; padding: 6px 10px; }
 

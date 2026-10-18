@@ -10,7 +10,7 @@ import { hideSheet, showSheet } from '../sheet.tsx';
 import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
 import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, RevealedZone, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
-import { isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
+import { attackAllCandidates, isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
 import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 import { ATTACH_PEEK, COMBAT_SHIFT, fitBoard, STACK_UNITS, TAPPED_UNITS, type BoardSpec, type RowFit } from './boardLayout.ts';
 
@@ -932,7 +932,7 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
 }
 
 function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
-  const { g, me, act, openMenu, undo } = useGame();
+  const { g, me, opp, act, openMenu, undo } = useGame();
   const phone = useLayout() !== 'desktop';
   const myTurn = g.activePlayer === me;
   const havePriority = g.priority === me && g.phase === 'playing';
@@ -953,10 +953,14 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
     okLabel = next && next !== 'cleanup' ? `To ${STEP_LABELS[next]}` : 'End turn';
   }
   okRef.current = () => { if (havePriority) act({ t: 'pass' }); };
+  // Declare attackers: "Attack with all" (every creature that can legally attack the opponent) / "Clear attackers".
+  const declaring = havePriority && myTurn && g.step === 'attackers' && !g.combat.attackersDeclared;
+  const canAttackAll = declaring ? attackAllCandidates(g, me, opp) : [];
+  const myAttackers = declaring ? g.battlefield.filter((id) => g.cards[id].attacking && g.cards[id].controller === me) : [];
 
   return (
     <div className="priority">
-      {phone && g.phase === 'playing' && me && landLeft != null && <span className={`land-plays land-chip ${landLeft === 0 ? 'none' : ''}`}>Land {landsPlayed}/{landsPlayed + landLeft}</span>}
+      {phone && g.phase === 'playing' && me && landLeft != null && !declaring && <span className={`land-plays land-chip ${landLeft === 0 ? 'none' : ''}`}>Land {landsPlayed}/{landsPlayed + landLeft}</span>}
       {pools.length > 0 && (
         <div className="pool-float">
           {pools.map((pl) => (
@@ -964,6 +968,14 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
               <span className="mp-label">{pl.pid === me ? 'Your mana' : pl.name}</span><ManaPips pool={pl.manaPool} />
             </span>
           ))}
+        </div>
+      )}
+      {declaring && (canAttackAll.length > 0 || myAttackers.length > 0) && (
+        <div className="attack-all">
+          {canAttackAll.length > 0 && <button className="attack-all-btn" title="Declare every creature that can attack your opponent"
+            onClick={() => { for (const iid of canAttackAll) act({ t: 'declareAttacker', iid, target: opp }); }}>{phone ? 'Attack all' : 'Attack with all'}</button>}
+          {myAttackers.length > 0 && <button className="clear-attackers-btn" title="Remove all declared attackers"
+            onClick={() => { for (const iid of myAttackers) act({ t: 'declareAttacker', iid, target: null }); }}>{phone ? 'Clear' : 'Clear attackers'}</button>}
         </div>
       )}
       {g.phase === 'playing' && me && (havePriority
