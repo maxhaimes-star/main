@@ -211,7 +211,7 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     const players = (...ids: (string | undefined)[]) => [...new Set(ids.filter((x): x is string => !!x && isPlayer(x)))];
     const ctrl = (id: string | undefined) => (id ? (r.lki[id]?.controller ?? state.cards[id]?.controller) : undefined);
     switch (value) {
-      case 'TriggeredCard': case 'TriggeredCardLKICopy': case 'TriggeredNewCardLKICopy': return { cards: cardIds(t.card).filter((x) => state.cards[x]), players: [] };
+      case 'TriggeredCard': case 'TriggeredCardLKICopy': case 'TriggeredNewCardLKICopy': case 'TriggeredAttacker': case 'TriggeredAttackerLKICopy': return { cards: cardIds(t.card).filter((x) => state.cards[x]), players: [] };
       case 'TriggeredSource': return { cards: cardIds(t.source).filter((x) => state.cards[x]), players: [] };
       case 'TriggeredCardController': return { cards: [], players: players(t.card ? ctrl(t.card) : t.player) };
       case 'TriggeredCardOwner': return { cards: [], players: players(t.card ? (r.lki[t.card]?.owner ?? state.cards[t.card]?.owner) : undefined) };

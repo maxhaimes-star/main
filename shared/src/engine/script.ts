@@ -481,7 +481,7 @@ export const SUPPORTED_DEFINED = new Set([
   'You', 'Self', 'Parent', 'Targeted', 'TargetedCard', 'TargetedController', 'TargetedOwner', 'TargetedPlayer', 'Player', 'Opponent',
   'ParentTarget', 'Remembered', 'RememberedLKI', 'Enchanted', 'Equipped', 'TargetedAndYou', 'Player.Opponent',
   // Stage 2: objects a trigger saw
-  'TriggeredCard', 'TriggeredCardLKICopy', 'TriggeredNewCardLKICopy', 'TriggeredCardController', 'TriggeredCardOwner',
+  'TriggeredCard', 'TriggeredCardLKICopy', 'TriggeredNewCardLKICopy', 'TriggeredAttacker', 'TriggeredAttackerLKICopy', 'TriggeredCardController', 'TriggeredCardOwner',
   'TriggeredPlayer', 'TriggeredActivator', 'TriggeredTarget', 'TriggeredDefendingPlayer', 'TriggeredSourceController',
   'TriggeredAttackingPlayer', 'TriggeredSource', 'DelayTriggerRemembered', 'DelayTriggerRememberedLKI',
   // engine/copy.ts

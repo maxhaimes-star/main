@@ -51,7 +51,7 @@ const KNOWN_PARAMS = new Set([
   'PresentCompare', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
   'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA', 'CheckDefinedPlayer', 'FirstAttack', 'Delirium', 'ResolvedLimit',
   'ValidDefenders', 'ValidAttackingPlayer', 'ValidToken', 'CounterType', 'SearchOwnLibrary', 'ThisDoor', 'ValidAttacker', 'ValidBlocker',
-  'TargetsValid',
+  'TargetsValid', 'Attacked',
 ]);
 
 const PROWESS_LINE = 'DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Prowess: +1/+1 until end of turn.';
@@ -381,6 +381,8 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (p.FirstAttack === 'True' && (turnInfo(state).activations[`attacked|${ev.iid}`] ?? 0) > 1) r = false;
       // Alone$ True (exalted): the only attacking creature.
       if (p.Alone === 'True' && state.battlefield.filter((x) => state.cards[x].attacking).length !== 1) r = false;
+      // Attacked$ You,Planeswalker.YouCtrl (Tamiyo, Seasoned Scholar): what it attacks — a player or a permanent.
+      if (p.Attacked && r !== false) r = and(r, attackedMatches(state, c?.attacking ?? ev.defender, p.Attacked, env));
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: c?.controller, defender: ev.defender };
     }
@@ -566,6 +568,19 @@ function queueFor(state: GameState, ctx: Ctx, host: Host, index: number, p: Reco
 function counterName(forge: string): string {
   const t = forge.trim().toUpperCase();
   return t === 'P1P1' ? '+1/+1' : t === 'M1M1' ? '-1/-1' : t === 'LOYALTY' ? 'loyalty' : t.toLowerCase();
+}
+
+/** Attacked$: comma-separated player specs (You, Opponent ...) or card specs (Planeswalker.YouCtrl, Battle ...). */
+function attackedMatches(state: GameState, target: string, spec: string, env: MatchEnv): Tri {
+  const card = state.cards[target];
+  let res: Tri = false;
+  for (const one of spec.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const isCardSpec = /^(Card|Permanent|Creature|Planeswalker|Battle|Artifact|Enchantment)\b/.test(one);
+    const m: Tri = isCardSpec ? (card ? matchCard(card, one, env) : false) : (card ? false : matchPlayer(target, one, env));
+    if (m === true) return true;
+    if (m === 'unknown') res = 'unknown';
+  }
+  return res;
 }
 
 /** Find the triggered abilities that the events in state.events trigger, and queue them (APNAP). */

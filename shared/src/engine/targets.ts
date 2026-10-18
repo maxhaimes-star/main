@@ -178,6 +178,8 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     const w = m[1].charAt(0).toUpperCase() + m[1].slice(1);
     if (COLOR_WORDS[w]) return !fx.colors.includes(COLOR_WORDS[w]);
     if (w === 'Token') return !c.token;
+    // nonChosenCard / nonIsRemembered ...: the negation of a property (Ajani, Nacatl Avenger: "sacrifices the rest").
+    if (/^(ChosenCard|IsRemembered|ExiledWithSource|NamedCard|ChosenType|ChosenColor)$/.test(w)) return not(propCheck(c, fx, w, env));
     return not(typeCheck(fx, c, w));
   }
   if (CARD_TYPES.includes(prop) || prop === 'Permanent' || prop === 'Historic' || /^[A-Z][a-z]+$/.test(prop)) return typeCheck(fx, c, prop);

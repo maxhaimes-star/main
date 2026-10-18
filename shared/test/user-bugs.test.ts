@@ -5,6 +5,7 @@ import {
   activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard, viewFor,
 } from '../src/index.ts';
 import { createTokenInstance } from '../src/engine/resolve.ts';
+import { effectivePT } from '../src/game/rules.ts';
 import { SCRIPTS } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
 
@@ -678,5 +679,50 @@ describe('14: exile, then return transformed (Ajani, Kytheon, Tamiyo)', () => {
     drain(g, ctx, yes);
     expect(g.cards[tam], logTail(g)).toMatchObject({ zone: 'battlefield', transformed: true });
     expect(g.cards[tam].counters.loyalty).toBe(2);
+  });
+
+  it('Ajani, Nacatl Avenger −4: the opponent keeps one artifact, creature, enchantment and planeswalker, sacrifices the rest', () => {
+    const { g, ctx } = setup(['ajani_nacatl_pariah'], ['nadu_winged_wisdom', 'esper_sentinel', 'giver_of_runes', 'skullclamp', 'boros_signet']);
+    const ajani = put(g, ctx, 'a', 'ajani_nacatl_pariah');
+    g.cards[ajani].transformed = true;
+    g.cards[ajani].counters.loyalty = 5;
+    const bs = ['nadu_winged_wisdom', 'esper_sentinel', 'giver_of_runes', 'skullclamp', 'boros_signet', 'basic_mountain'].map((id) => put(g, ctx, 'b', id));
+    g.events = [];
+    const ult = activatedAbilitiesOf('ajani_nacatl_pariah', 1).find((e) => e.ability.api === 'ChooseCard')!;
+    act(g, ctx, 'a', { t: 'activate', iid: ajani, text: '', ability: ult.index });
+    drain(g, ctx); // b picks the first option each time
+    expect(g.log.some((l) => /by hand|Not automated/i.test(l.text)), logTail(g)).toBe(false);
+    const left = bs.filter((x) => g.cards[x].zone === 'battlefield');
+    // Esper Sentinel is an artifact creature: it can be kept for both; the land always stays.
+    expect(left, logTail(g)).toContain(bs[5]);
+    expect(left.length).toBeLessThanOrEqual(3);
+    expect(left.length).toBeGreaterThanOrEqual(2);
+    expect(g.cards[ajani].counters.loyalty).toBe(1);
+  });
+
+  it("Tamiyo, Seasoned Scholar +2: until her controller's next turn, a creature attacking her or him gets -1/-0", () => {
+    const { g, ctx } = setup(['tamiyo_inquisitive_student'], ['nadu_winged_wisdom', 'esper_sentinel']);
+    const tam = put(g, ctx, 'a', 'tamiyo_inquisitive_student');
+    g.cards[tam].transformed = true;
+    g.cards[tam].counters.loyalty = 2;
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    const sentinel = put(g, ctx, 'b', 'esper_sentinel');
+    g.events = [];
+    const plus = activatedAbilitiesOf('tamiyo_inquisitive_student', 1).find((e) => e.ability.api === 'Effect')!;
+    act(g, ctx, 'a', { t: 'activate', iid: tam, text: '', ability: plus.index });
+    drain(g, ctx);
+    expect(g.cards[tam].counters.loyalty).toBe(4);
+    for (let i = 0; i < 40 && !(g.activePlayer === 'b' && g.step === 'main1'); i++) {
+      if (g.pending.length) answer(g, ctx); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(g.activePlayer).toBe('b');
+    act(g, ctx, 'b', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'b', { t: 'declareAttacker', iid: nadu, target: 'a' });
+    act(g, ctx, 'b', { t: 'declareAttacker', iid: sentinel, target: tam });
+    act(g, ctx, 'b', { t: 'confirmAttackers' });
+    drain(g, ctx);
+    expect(g.log.some((l) => /by hand/i.test(l.text)), logTail(g)).toBe(false);
+    expect(effectivePT(g.cards[nadu], getCard, g)[0], logTail(g)).toBe(2); // 3/4 -> 2/4
+    expect(effectivePT(g.cards[sentinel], getCard, g)[0]).toBe(0);
   });
 });
