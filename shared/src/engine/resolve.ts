@@ -471,9 +471,10 @@ function moveTo(state: GameState, ctx: Ctx, r: Run, iid: string, dest: Zone, p: 
   if (!c) return;
   if (dest === 'library') moveCard(state, ctx, iid, 'library', { position: libraryIndex(state, ctx, r, p.LibraryPosition) });
   else if (dest === 'battlefield') {
-    moveCard(state, ctx, iid, 'battlefield', { tapped: p.Tapped === 'True', controller: p.GainControl === 'True' ? r.controller : c.zone === 'battlefield' ? c.controller : c.owner });
-    // Transformed$ True: "return it to the battlefield transformed" (Fable of the Mirror-Breaker).
-    if (p.Transformed === 'True' && state.cards[iid]?.zone === 'battlefield') state.cards[iid].transformed = true;
+    // Transformed$ True: "return it to the battlefield transformed" (Fable of the Mirror-Breaker, Ajani, Kytheon):
+    // it enters transformed, so a planeswalker back face enters with its own loyalty.
+    const transformed = p.Transformed === 'True';
+    moveCard(state, ctx, iid, 'battlefield', { tapped: p.Tapped === 'True', controller: p.GainControl === 'True' ? r.controller : c.zone === 'battlefield' ? c.controller : c.owner, ...(transformed ? { transformed } : {}) });
     // WithCountersType$ (persist / undying): it returns with a counter.
     const back = state.cards[iid];
     if (p.WithCountersType && back?.zone === 'battlefield') {

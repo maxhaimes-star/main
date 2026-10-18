@@ -592,3 +592,91 @@ describe('13b: other "equipped creature" triggers look back at a creature that d
     expect(g.cards[jitte].counters.charge, logTail(g)).toBe(2);
   });
 });
+
+describe('14: exile, then return transformed (Ajani, Kytheon, Tamiyo)', () => {
+  const yes = (q: GameState['pending'][number]) => (q.options.find((o) => /^(yes|exile)/i.test(o.label ?? o.value)) ?? q.options[0]).value;
+  const no = (q: GameState['pending'][number]) => (q.options.find((o) => /^(no|decline|skip)/i.test(o.label ?? o.value)) ?? q.options[q.options.length - 1]).value;
+  const cats = (g: GameState) => g.battlefield.filter((i) => g.cards[i].token && g.cards[i].controller === 'a').length;
+
+  function ajaniAndCat(b = ['lightning_bolt']) {
+    const { g, ctx } = setup(['ajani_nacatl_pariah'], b);
+    put(g, ctx, 'b', 'basic_mountain');
+    const ajani = put(g, ctx, 'a', 'ajani_nacatl_pariah');
+    const cat = createTokenInstance(g, ctx, 'a', SCRIPTS.tokens.w_2_1_cat_warrior, false).iid;
+    g.events = []; // no ETB token: put() bypasses the stack
+    return { g, ctx, ajani, cat };
+  }
+
+  it('Ajani: another Cat dies, he is exiled and returns as Ajani, Nacatl Avenger with 3 loyalty', () => {
+    const { g, ctx, ajani, cat } = ajaniAndCat();
+    const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+    g.priority = 'b';
+    act(g, ctx, 'b', { t: 'cast', iid: bolt, targets: card(cat) });
+    drain(g, ctx, yes);
+    expect(g.cards[ajani].zone, logTail(g)).toBe('battlefield');
+    expect(g.cards[ajani].transformed).toBe(true);
+    expect(g.cards[ajani].counters.loyalty).toBe(3);
+    expect(cats(g), 'the front face ETB must not trigger again').toBe(0);
+    expect(g.log.some((l) => /Avenger is put into the graveyard/.test(l.text))).toBe(false);
+    // His loyalty abilities work: 0: create a 2/1 Cat Warrior.
+    const zero = activatedAbilitiesOf('ajani_nacatl_pariah', 1).find((e) => e.ability.api === 'Token')!;
+    act(g, ctx, 'a', { t: 'activate', iid: ajani, text: '', ability: zero.index });
+    drain(g, ctx);
+    expect(cats(g)).toBe(1);
+    expect(g.cards[ajani].counters.loyalty).toBe(3);
+  });
+
+  it('Ajani: the Cat dies in combat and he flips; declining keeps him as the 1/2', () => {
+    const { g, ctx, ajani, cat } = ajaniAndCat(['nadu_winged_wisdom']);
+    g.cards[cat].summoningSick = false;
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: cat, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 10 && g.step !== 'blockers'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    act(g, ctx, 'b', { t: 'declareBlocker', iid: nadu, attacker: cat });
+    act(g, ctx, 'b', { t: 'confirmBlockers' });
+    for (let i = 0; i < 30 && g.step !== 'main2'; i++) {
+      if (g.pending.length) answer(g, ctx, yes); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(g.cards[ajani]).toMatchObject({ zone: 'battlefield', transformed: true });
+    expect(g.cards[ajani].counters.loyalty).toBe(3);
+
+    const s2 = ajaniAndCat();
+    const bolt = toZone(s2.g, s2.ctx, 'b', 'lightning_bolt', 'hand');
+    s2.g.priority = 'b';
+    act(s2.g, s2.ctx, 'b', { t: 'cast', iid: bolt, targets: card(s2.cat) });
+    drain(s2.g, s2.ctx, no);
+    expect(s2.g.cards[s2.ajani]).toMatchObject({ zone: 'battlefield', transformed: false });
+  });
+
+  it('Kytheon: attacks with two others, at end of combat returns as Gideon, Battle-Forged with 3 loyalty', () => {
+    const { g, ctx } = setup(['kytheon_hero_of_akros', 'esper_sentinel', 'thraben_inspector']);
+    const ky = put(g, ctx, 'a', 'kytheon_hero_of_akros');
+    const others = [put(g, ctx, 'a', 'esper_sentinel'), put(g, ctx, 'a', 'thraben_inspector')];
+    g.events = [];
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    for (const iid of [ky, ...others]) act(g, ctx, 'a', { t: 'declareAttacker', iid, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 30 && g.step !== 'main2'; i++) {
+      if (g.pending.length) answer(g, ctx, yes); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    drain(g, ctx, yes);
+    expect(g.cards[ky], logTail(g)).toMatchObject({ zone: 'battlefield', transformed: true });
+    expect(g.cards[ky].counters.loyalty).toBe(3);
+  });
+
+  it('Tamiyo: the third card drawn in a turn flips her into Tamiyo, Seasoned Scholar with 2 loyalty', () => {
+    const { g, ctx } = setup(['tamiyo_inquisitive_student', 'brainstorm'], [], 'basic_island');
+    const tam = put(g, ctx, 'a', 'tamiyo_inquisitive_student');
+    put(g, ctx, 'a', 'basic_island');
+    g.events = [];
+    const bs = toZone(g, ctx, 'a', 'brainstorm', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: bs });
+    drain(g, ctx, yes);
+    for (let i = 0; i < 5 && g.players[0].needsBottom; i++) answer(g, ctx);
+    drain(g, ctx, yes);
+    expect(g.cards[tam], logTail(g)).toMatchObject({ zone: 'battlefield', transformed: true });
+    expect(g.cards[tam].counters.loyalty).toBe(2);
+  });
+});

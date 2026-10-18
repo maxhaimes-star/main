@@ -224,7 +224,7 @@ interface MoxData { kind: 'payBeforeEtb'; iid: string; pid: string; valid: strin
 function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOpts): MoveResult | undefined {
   const from = c.zone;
   const controller = opts.controller ?? c.controller;
-  const projected: CardInstance = { ...c, controller, zone: 'battlefield' };
+  const projected: CardInstance = { ...c, controller, zone: 'battlefield', ...(opts.transformed ? { transformed: true } : {}) };
   const afters: (() => void)[] = [];
   let tapped = !!opts.tapped;
 
@@ -253,7 +253,7 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
   // The card's own "as it enters" replacements.
   const nm = cardName(c, ctx.lookup);
   const counters: [string, number][] = [];
-  for (const r of own(c, 'Moved')) {
+  for (const r of own(projected, 'Moved')) { // projected: a card entering transformed uses its back face's lines
     if (r.params.Destination !== 'Battlefield') continue;
     const sv = svarParams(r, r.params.ReplaceWith);
     if (sv?.api === 'Tap') {

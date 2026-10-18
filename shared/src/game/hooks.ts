@@ -7,7 +7,7 @@
 import type { Ctx } from './state.ts';
 import type { GameState, Zone } from './types.ts';
 
-export interface MoveOpts { position?: 'top' | 'bottom' | number; faceDown?: boolean; /** face-down exile nobody may look at (CardInstance.unseen) */ unseen?: boolean; tapped?: boolean; controller?: string; cause?: 'discard' | 'sacrifice' }
+export interface MoveOpts { position?: 'top' | 'bottom' | number; faceDown?: boolean; /** face-down exile nobody may look at (CardInstance.unseen) */ unseen?: boolean; tapped?: boolean; controller?: string; cause?: 'discard' | 'sacrifice'; /** enters the battlefield transformed (its back face up) */ transformed?: boolean }
 
 export const moveHooks: {
   before?: (state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts) => { to: Zone; opts: MoveOpts; after?: () => void } | undefined;

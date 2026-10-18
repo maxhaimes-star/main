@@ -173,6 +173,8 @@ export function moveCardRaw(state: GameState, ctx: Ctx, iid: string, to: Zone, o
       inst.faceDown = !!opts.faceDown;
       inst.castAs = undefined;
       if (opts.controller) inst.controller = opts.controller;
+      // "Return it to the battlefield transformed": it enters back face up (a planeswalker gets the back face's loyalty).
+      if (opts.transformed) inst.transformed = true;
       const face = faceOf(inst, ctx.lookup);
       if (face.loyalty && !inst.faceDown) inst.counters.loyalty = parseInt(face.loyalty, 10) || 0;
     }
