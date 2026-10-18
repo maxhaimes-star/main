@@ -5,6 +5,7 @@ import {
   activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard, viewFor,
 } from '../src/index.ts';
 import { createTokenInstance } from '../src/engine/resolve.ts';
+import { processTriggers } from '../src/engine/triggers.ts';
 import { effectivePT } from '../src/game/rules.ts';
 import { SCRIPTS } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
@@ -724,5 +725,46 @@ describe('14: exile, then return transformed (Ajani, Kytheon, Tamiyo)', () => {
     expect(g.log.some((l) => /by hand/i.test(l.text)), logTail(g)).toBe(false);
     expect(effectivePT(g.cards[nadu], getCard, g)[0], logTail(g)).toBe(2); // 3/4 -> 2/4
     expect(effectivePT(g.cards[sentinel], getCard, g)[0]).toBe(0);
+  });
+});
+
+describe('15: Chaos Defiler — for each opponent choose a nonland permanent, destroy one at random', () => {
+  it('ETB: the chosen permanent of the opponent is destroyed', () => {
+    const { g, ctx } = setup(['chaos_defiler'], ['nadu_winged_wisdom', 'skullclamp']);
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    const clamp = put(g, ctx, 'b', 'skullclamp');
+    const land = put(g, ctx, 'b', 'basic_mountain');
+    g.events = [];
+    put(g, ctx, 'a', 'chaos_defiler');
+    processTriggers(g, ctx);
+    let offered: string[] = [];
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => o.value === clamp)?.value ?? q.options[0].value; });
+    expect(offered, logTail(g)).toContain(nadu);
+    expect(offered).not.toContain(land);
+    expect(g.cards[clamp].zone, logTail(g)).toBe('graveyard');
+    expect(g.cards[nadu].zone).toBe('battlefield');
+  });
+
+  it('dies: the trigger also destroys the chosen permanent', () => {
+    const { g, ctx } = setup(['chaos_defiler'], ['nadu_winged_wisdom']);
+    const chaos = put(g, ctx, 'a', 'chaos_defiler');
+    g.events = [];
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    g.events = [];
+    moveCard(g, ctx, chaos, 'graveyard');
+    processTriggers(g, ctx);
+    drain(g, ctx);
+    expect(g.cards[nadu].zone, logTail(g)).toBe('graveyard');
+  });
+
+  it('no nonland permanent: nothing to choose, no question left over', () => {
+    const { g, ctx } = setup(['chaos_defiler']);
+    put(g, ctx, 'b', 'basic_mountain');
+    g.events = [];
+    put(g, ctx, 'a', 'chaos_defiler');
+    processTriggers(g, ctx);
+    drain(g, ctx);
+    expect(g.pending).toHaveLength(0);
+    expect(g.stack).toHaveLength(0);
   });
 });
