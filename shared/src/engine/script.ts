@@ -495,12 +495,12 @@ export function supportedVar(v: string | undefined): boolean {
   if (!v) return false;
   if (baseVarSupported(v)) return true;
   const m = splitVarMath(v);
-  return !!m && baseVarSupported(m.base) && (m.arg == null || /^-?\d+$/.test(m.arg) || supportedVar(m.arg));
+  return !!m && baseVarSupported(m.base) && (m.arg == null || /^-?\d+$/.test(m.arg) || /^[A-Z][A-Za-z0-9]*$/.test(m.arg) || supportedVar(m.arg)); // a number, an SVar name, or a variable
 }
 
 /** "<var>/<op>" arithmetic on a variable (Forge AbilityUtils.doXMath): Twice, HalfUp, Plus.N, Minus.<var>, NMinus.N ... */
 export function splitVarMath(v: string): { base: string; op: string; arg?: string } | undefined {
-  const m = /^(.+?)\/(Twice|Thrice|HalfUp|HalfDown|Negative|Plus|Minus|NMinus|Times|DivideEvenlyDown|DivideEvenlyUp|LimitMax|LimitMin)(?:\.(.+))?$/.exec(v);
+  const m = /^(.+?)\/(Twice|Thrice|HalfUp|HalfDown|Negative|Plus|Minus|NMinus|Times|Pow|DivideEvenlyDown|DivideEvenlyUp|LimitMax|LimitMin)(?:\.(.+))?$/.exec(v);
   if (!m || /\//.test(m[1])) return undefined;
   if (['Twice', 'Thrice', 'HalfUp', 'HalfDown', 'Negative'].includes(m[2]) !== (m[3] == null)) return undefined;
   return { base: m[1], op: m[2], arg: m[3] };
@@ -518,6 +518,7 @@ export function applyVarMath(b: number, op: string, k: number): number {
     case 'Minus': return b - k;
     case 'NMinus': return k - b;
     case 'Times': return b * k;
+    case 'Pow': return Math.pow(b, Math.min(k, 30));
     case 'DivideEvenlyDown': return k ? Math.floor(b / k) : 0;
     case 'DivideEvenlyUp': return k ? Math.ceil(b / k) : 0;
     case 'LimitMax': return Math.min(b, k);

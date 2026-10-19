@@ -629,3 +629,28 @@ describe('Count$ with remembered objects (IsRemembered, RememberedPlayerOwn)', (
     expect(evalCount('Count$ValidLibrary Card.IsRemembered$CardManaCost', env)).toBe(7);
   });
 });
+
+describe('ConditionPresent2, keywords with spaces in with<keyword>, /Pow math', () => {
+  it('Super-Adaptoid: copies the target creature keywords it lacks as counters', () => {
+    const { g, ctx } = setup(['super_adaptoid', 'serra_angel']);
+    const angel = put(g, ctx, 'serra_angel');
+    pool(g, 'a', { C: 8, U: 2, W: 2, B: 2, R: 2, G: 2 });
+    const sa = toHand(g, ctx, 'super_adaptoid');
+    act(g, ctx, 'a', { t: 'cast', iid: sa });
+    resolveAll(g, ctx, undefined, [[{ kind: 'card', iid: angel }]]);
+    expect(g.cards[sa].counters.flying).toBe(1);
+    expect(g.cards[sa].counters.vigilance).toBe(1);
+    expect(g.cards[sa].counters.haste ?? 0).toBe(0);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Mathemagics: target player draws 2^X cards', () => {
+    const { g, ctx } = setup(['mathemagics']);
+    pool(g, 'a', { U: 2, C: 4 });
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'mathemagics'), x: 2, targets: [[{ kind: 'player', pid: 'a' }]] });
+    resolveAll(g, ctx);
+    expect(g.players[0].zones.hand.length).toBe(hand + 4);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});

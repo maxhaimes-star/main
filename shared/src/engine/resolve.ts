@@ -433,7 +433,7 @@ function env(state: GameState, ctx: Ctx, r: Run): MatchEnv {
     controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup, num: (name) => amount(state, ctx, r, name, 0),
     turnInfo: turnInfo(state), remembered: r.remembered, defender: r.trig?.defender, attachedTo: src?.attachedTo ?? '',
     ...(src?.chosen ? { chosen: src.chosen } : {}), ...(r.chosen?.cards ? { chosenCards: r.chosen.cards } : {}), exiledWith: exiledWithSource(state, r.sourceIid),
-    targetedPlayers: [...new Set(r.targets.flat().map((t) => (t.kind === 'player' ? t.pid : '')).filter(Boolean))], imprinted: r.chosen?.imprinted ?? [],
+    targetedPlayers: [...new Set(r.targets.flat().map((t) => (t.kind === 'player' ? t.pid : '')).filter(Boolean))], targetedCards: r.targets.flat().map((t) => (t.kind === 'card' ? t.iid : '')).filter(Boolean), imprinted: r.chosen?.imprinted ?? [],
     libraries: Object.fromEntries(state.players.map((pl) => [pl.pid, pl.zones.library])),
   };
 }
@@ -485,6 +485,16 @@ function condition(state: GameState, ctx: Ctx, r: Run, i: number): Tri {
     const c2: Tri = unknown && c !== 'unknown' ? 'unknown' : c;
     if (c2 === false) return false;
     if (c2 === 'unknown') result = 'unknown';
+  }
+  // A second presence condition (Super-Adaptoid: "if that creature has haste and CARDNAME doesn't").
+  if (p.ConditionPresent2) {
+    const cards = p.ConditionDefined2 ? defined(state, r, i, p.ConditionDefined2)?.cards.filter((c) => state.cards[c]) : [...state.battlefield];
+    if (!cards) return 'unknown';
+    let count = 0, unknown = false;
+    for (const iid of cards) { const m = matchCard(state.cards[iid], p.ConditionPresent2, env(state, ctx, r)); if (m === true) count++; else if (m === 'unknown') unknown = true; }
+    const c = compare(state, ctx, r, count, p.ConditionCompare2 ?? 'GE1');
+    if (c === false && !unknown) return false;
+    if ((c === 'unknown' || unknown) && result === true) result = 'unknown';
   }
   if (p.ConditionCheckSVar) {
     const v = amount(state, ctx, r, p.ConditionCheckSVar, 0);

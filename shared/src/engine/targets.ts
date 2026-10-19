@@ -38,6 +38,8 @@ export interface MatchEnv {
   defender?: string;
   /** Players the resolving spell / ability targets (TargetedPlayerCtrl / TargetedPlayerOwn); absent = unknown. */
   targetedPlayers?: string[];
+  /** Cards the resolving spell / ability targets (targetedBy); absent = unknown. */
+  targetedCards?: string[];
   /** Library order by player (TopLibrary / BottomLibrary); absent = unknown. */
   libraries?: Record<string, string[]>;
 }
@@ -138,6 +140,7 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'NamedCard': return env.chosen === undefined ? 'unknown' : !!env.chosen.name && fx.name === env.chosen.name;
     case 'ChosenColor': return env.chosen === undefined ? 'unknown' : !!env.chosen.color && fx.colors.includes(COLOR_WORDS[env.chosen.color] ?? env.chosen.color);
     case 'IsRemembered': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.iid);
+    case 'targetedBy': return env.targetedCards === undefined ? 'unknown' : env.targetedCards.includes(c.iid);
     case 'HasCounters': return Object.values(c.counters).some((n) => n > 0);
     case 'IsImprinted': return env.imprinted === undefined ? 'unknown' : env.imprinted.includes(c.iid);
     case 'TargetedPlayerCtrl': return env.targetedPlayers === undefined ? 'unknown' : env.targetedPlayers.includes(c.controller);
@@ -188,8 +191,8 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     const kind = t === 'P1P1' ? '+1/+1' : t === 'M1M1' ? '-1/-1' : t.toLowerCase();
     return cmp(c.counters[kind] ?? 0, m[1], right);
   }
-  if ((m = /^without(\w+)$/.exec(prop))) return !(env.kw ? env.kw(c, m[1]) : hasKeyword(c, env.lookup, m[1]));
-  if ((m = /^with(\w+)$/.exec(prop))) return env.kw ? env.kw(c, m[1]) : hasKeyword(c, env.lookup, m[1]);
+  if ((m = /^without(\w[\w ]*)$/.exec(prop))) return !(env.kw ? env.kw(c, m[1]) : hasKeyword(c, env.lookup, m[1]));
+  if ((m = /^with(\w[\w ]*)$/.exec(prop))) return env.kw ? env.kw(c, m[1]) : hasKeyword(c, env.lookup, m[1]);
   if ((m = /^named(.+)$/.exec(prop))) return fx.name === m[1];
   if ((m = /^non(\w+)$/.exec(prop))) {
     const w = m[1].charAt(0).toUpperCase() + m[1].slice(1);
