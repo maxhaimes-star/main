@@ -557,3 +557,22 @@ describe('MoveCounter, Defined$ Self.nonCreature, Firebending', () => {
     expect(logText(g)).toMatch(/adds \{R\}\{R\}/);
   });
 });
+
+describe('optional additional costs (S:Mode$ OptionalCost)', () => {
+  it('Cinder Strike: 2 damage, 4 if you blighted 1 as you cast it', () => {
+    const { g, ctx } = setup(['cinder_strike', 'cinder_strike', 'grizzly_bears'], ['serra_angel', 'serra_angel']);
+    const bear = put(g, ctx, 'grizzly_bears');
+    const [a1, a2] = [put(g, ctx, 'serra_angel', 'b'), put(g, ctx, 'serra_angel', 'b')];
+    const cs1 = toHand(g, ctx, 'cinder_strike');
+    expect(castOptions(g, cs1).map((o) => o.id)).toContain('optcost');
+    pool(g, 'a', { R: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid: cs1, targets: [[{ kind: 'card', iid: a1 }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[a1].damage).toBe(2);
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'cinder_strike'), costOption: 'optcost', targets: [[{ kind: 'card', iid: a2 }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[a2].zone).toBe('graveyard');
+    expect(g.cards[bear].counters['-1/-1']).toBe(1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});

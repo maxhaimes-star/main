@@ -537,6 +537,9 @@ export function staticGaps(s: Pick<StaticAbility, 'params' | 'svars' | 'modes'> 
       if (!['Spell', 'Ability'].includes(costKind(p))) gaps.push(`Type$ ${p.Type}`);
       if (p.Cost || p.Color) gaps.push('colored cost change');
       if (!exprSupported(full, p.Amount ?? '1')) gaps.push(`Amount$ ${p.Amount}`);
+    } else if (mode === 'OptionalCost') {
+      // costs.ts optionDefs: a second cast option paying the optional additional cost.
+      if (p.ReduceColor || /^(CollectEvidence|Forage)/.test(p.Cost ?? '')) gaps.push(`OptionalCost (${(p.Cost ?? '').replace(/<.*/, '')})`);
     } else if (mode === 'CantBeCast') {
       if (p.Caster && !['You', 'Opponent', 'Player.IsRemembered'].includes(p.Caster)) gaps.push(`Caster$ ${p.Caster}`);
     } else if (!ENFORCED_MODES.has(mode)) gaps.push(REMINDER_MODES.has(mode) ? `${mode} (reminder)` : mode);

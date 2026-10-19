@@ -212,6 +212,8 @@ export interface CastInfo {
   /** Zone it was cast from (when not the hand), e.g. 'exile' for "whenever you cast a spell from exile". */
   from?: string;
   colorsSpent?: string[];
+  /** The optional additional cost (S:Mode$ OptionalCost) was paid (Condition$ OptionalCost, Count$OptionalGenericCostPaid). */
+  optionalCost?: boolean;
   /** Total mana spent to cast it (Opus: "if five or more mana was spent"; TriggeredCard$CastTotalManaSpent). */
   manaSpent?: number;
   /** X paid (permanents keep it: ravenous). */

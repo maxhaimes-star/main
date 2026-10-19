@@ -284,6 +284,7 @@ function countEnv(state: GameState, ctx: Ctx, r: Run): CountEnv {
   return {
     state, lookup: ctx.lookup, controller: r.controller, sourceIid: r.sourceIid, x: auto?.x ?? r.item.x,
     kicked: auto?.kicked ?? r.item.castInfo?.kicked ?? src?.castInfo?.kicked,
+    optionalCost: r.item.castInfo?.optionalCost ?? src?.castInfo?.optionalCost,
     timesKicked: r.item.castInfo?.timesKicked ?? src?.castInfo?.timesKicked,
     colorsSpent: auto?.colorsSpent ?? r.item.castInfo?.colorsSpent ?? src?.castInfo?.colorsSpent,
   };

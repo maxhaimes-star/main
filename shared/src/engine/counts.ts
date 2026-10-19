@@ -24,9 +24,11 @@ export interface CountEnv {
   /** Multikicker: times kicked. */
   timesKicked?: number;
   colorsSpent?: string[];
+  /** The spell's optional additional cost was paid (S:Mode$ OptionalCost). */
+  optionalCost?: boolean;
 }
 
-const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn', 'Void'];
+const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn', 'Void', 'OptionalCost', 'OptionalGenericCostPaid'];
 export const KNOWN_CONDITIONS = new Set([...FLAGS, 'PlayerTurn', 'NotPlayerTurn', 'Blessing', 'Monarch']);
 const ZONED = { ValidGraveyard: 'graveyard', ValidHand: 'hand', ValidLibrary: 'library', ValidExile: 'exile' } as const;
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -108,6 +110,7 @@ export function conditionTrue(name: string, env: CountEnv): boolean | undefined 
   const s = env.state;
   switch (name) {
     case 'Kicked': return !!env.kicked;
+    case 'OptionalCost': case 'OptionalGenericCostPaid': return !!env.optionalCost;
     case 'PlayerTurn': return s.activePlayer === env.controller;
     case 'NotPlayerTurn': return s.activePlayer !== env.controller;
     case 'Revolt': return !!s.turnInfo && s.turnInfo.turn === s.turn && s.turnInfo.leftBattlefield.includes(env.controller);
