@@ -7,10 +7,10 @@ import { getCard, registerCards } from '../src/cube.ts';
 import { abilitiesOfInstance, applyAction, castOptions, createGame, type CardData, type Ctx, evalCount, type GameAction, type GameState, effectivePT, moveCard } from '../src/index.ts';
 import { registerScripts } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
-import { REAL } from './fixtures/noncube-cards.ts';
+import { REAL, REAL_TOKENS } from './fixtures/noncube-cards.ts';
 
 registerCards(Object.values(REAL).map((r) => ({ tokens: [], keywords: [], producedMana: [], colorIdentity: [], supertypes: [], subtypes: [], image: '', rank: 9999, ...r.card }) as unknown as CardData));
-registerScripts(Object.fromEntries(Object.entries(REAL).map(([id, r]) => [id, r.script])) as never);
+registerScripts(Object.fromEntries(Object.entries(REAL).map(([id, r]) => [id, r.script])) as never, REAL_TOKENS as never);
 
 const deck = (extra: string[], fill = 'basic_forest') => [...extra, ...Array(40 - extra.length).fill(fill)];
 function setup(a: string[], b: string[] = []) {
@@ -235,6 +235,56 @@ describe('remove counters as an activated-ability cost', () => {
     expect(g.cards[angel].counters['+1/+1']).toBe(1);
     expect(g.cards[bear].counters['+1/+1']).toBe(1);
     expect(g.players[0].zones.hand.length).toBe(hand + 1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});
+
+describe('trigger conditions: Revolt$ (disappear), OpponentTurn$, ChosenType in trigger filters', () => {
+  it('Foot Mystic: the ninja only if a permanent left the battlefield under your control this turn', () => {
+    const { g, ctx } = setup(['foot_mystic', 'foot_mystic', 'grizzly_bears']);
+    pool(g, 'a', { B: 4 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'foot_mystic') });
+    resolveAll(g, ctx);
+    const ninjas = () => g.battlefield.filter((i) => g.cards[i].token?.name === 'Ninja').length;
+    expect(ninjas()).toBe(0);
+    const bear = put(g, ctx, 'grizzly_bears');
+    moveCard(g, ctx, bear, 'graveyard');
+    pool(g, 'a', { B: 4 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'foot_mystic') });
+    resolveAll(g, ctx);
+    expect(ninjas()).toBe(1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it("Brineborn Cutthroat: only spells cast during an opponent's turn", () => {
+    const { g, ctx } = setup(['brineborn_cutthroat', 'lightning_bolt', 'lightning_bolt']);
+    const cut = put(g, ctx, 'brineborn_cutthroat');
+    pool(g, 'a', { R: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[cut].counters['+1/+1'] ?? 0).toBe(0);
+    g.activePlayer = 'b';
+    pool(g, 'a', { R: 1 });
+    g.priority = 'a';
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[cut].counters['+1/+1']).toBe(1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Dawn-Blessed Pennant: a permanent of the chosen type entering gains 1 life (no "check by hand")', () => {
+    const { g, ctx } = setup(['dawn_blessed_pennant', 'llanowar_elves', 'grizzly_bears']);
+    const pen = put(g, ctx, 'dawn_blessed_pennant');
+    g.pending = [];
+    g.cards[pen].chosen = { type: 'Elf' };
+    const life = g.players[0].life;
+    pool(g, 'a', { G: 3 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'grizzly_bears') });
+    resolveAll(g, ctx);
+    expect(g.players[0].life).toBe(life);
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'llanowar_elves') });
+    resolveAll(g, ctx);
+    expect(g.players[0].life).toBe(life + 1);
     expect(logText(g)).not.toMatch(MANUAL);
   });
 });

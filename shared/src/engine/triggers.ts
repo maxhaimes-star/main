@@ -52,6 +52,9 @@ const KNOWN_PARAMS = new Set([
   'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA', 'CheckDefinedPlayer', 'FirstAttack', 'Delirium', 'ResolvedLimit',
   'ValidDefenders', 'ValidAttackingPlayer', 'ValidToken', 'CounterType', 'SearchOwnLibrary', 'ThisDoor', 'ValidAttacker', 'ValidBlocker',
   'TargetsValid', 'Attacked',
+  // Checked in detect() (extraParams): "during your / an opponent's turn", disappear / revolt, threshold, hellbent, valiant,
+  // the Nth counter, damage amounts, attacking with a <type>, "at the beginning of your second main phase".
+  'PlayerTurn', 'OpponentTurn', 'Revolt', 'Threshold', 'Hellbent', 'Valiant', 'CounterAmount', 'DamageAmount', 'ValidAttackers', 'PhaseCount', 'FirstCombat',
 ]);
 
 const PROWESS_LINE = 'DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Prowess: +1/+1 until end of turn.';
@@ -346,7 +349,9 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       return { mode, card: ev.iid, player: who, lki };
     }
     case 'Phase': {
-      if (ev.t !== 'phase' || PHASES[p.Phase ?? ''] !== ev.step) return null;
+      // Phase$ Main: each main phase; with PhaseCount$ 2 the second one ("your second main phase").
+      const step = p.Phase === 'Main' ? (p.PhaseCount === '2' ? 'main2' : p.PhaseCount === '1' ? 'main1' : ev.t === 'phase' && (ev.step === 'main1' || ev.step === 'main2') ? ev.step : 'main1') : PHASES[p.Phase ?? ''];
+      if (ev.t !== 'phase' || step !== ev.step) return null;
       r = matchP(ev.active, p.ValidPlayer, env);
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, player: ev.active };
@@ -389,6 +394,11 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
     case 'AttackersDeclared': {
       if (ev.t !== 'attackersDeclared') return null;
       r = matchP(ev.pid, p.AttackingPlayer, env);
+      // ValidAttackers$ Dragon.YouCtrl: "whenever you attack with one or more Dragons".
+      if (p.ValidAttackers && r !== false) {
+        const atk = state.battlefield.filter((x) => state.cards[x].attacking && state.cards[x].controller === ev.pid).map((x) => matchC(state.cards[x], p.ValidAttackers, env));
+        r = and(r, atk.includes(true) ? true : atk.includes('unknown') ? 'unknown' : false);
+      }
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, player: ev.pid };
     }
@@ -479,6 +489,30 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
     }
   }
   return null;
+}
+
+/** Trigger conditions in KNOWN_PARAMS that matchEvent doesn't check (see there). */
+function extraParams(state: GameState, ctx: Ctx, c: CardInstance, p: Record<string, string>, hit: TriggerContext | undefined, ev: GameEvent): Tri {
+  const cenv = { state, lookup: ctx.lookup, controller: c.controller, sourceIid: c.iid };
+  if (p.PlayerTurn === 'True' && state.activePlayer !== c.controller) return false;
+  if (p.OpponentTurn === 'True' && state.activePlayer === c.controller) return false;
+  for (const k of ['Revolt', 'Threshold', 'Hellbent'] as const) if (p[k] === 'True' && conditionTrue(k, cenv) === false) return false;
+  if (p.DamageAmount && ev.t === 'damage' && cmp(ev.amount, p.DamageAmount, () => undefined) === false) return false;
+  if (p.CounterAmount && ev.t === 'counterAdded') {
+    // "When the fourth plan counter is put on this": the count went past N with these counters.
+    const now = state.cards[ev.iid]?.counters[ev.kind] ?? 0;
+    const m = /^(LT|LE|EQ|NE|GE|GT)(\d+)$/.exec(p.CounterAmount);
+    if (!m) return 'unknown';
+    if (m[1] === 'EQ' ? !(now >= +m[2] && now - ev.n < +m[2]) : cmp(now, p.CounterAmount, () => undefined) === false) return false;
+  }
+  // Valiant: "becomes the target of a spell or ability you control for the first time each turn".
+  if (p.Valiant === 'True' && hit) {
+    const ti = turnInfo(state);
+    const key = `valiant|${c.iid}|${p.Execute ?? ''}`;
+    if ((ti.activations[key] ?? 0) > 0) return false;
+    ti.activations[key] = 1;
+  }
+  return true;
 }
 
 /** Static$ True state-maintenance triggers: only "forget what this card remembered" is applied (immediately). */
@@ -608,7 +642,7 @@ function detect(state: GameState, ctx: Ctx) {
       const c = host.c;
       if (!auto(c.controller)) continue;
       try {
-        const env: MatchEnv = { controller: c.controller, sourceIid: c.iid, lookup: ctx.lookup, attachedTo: c.attachedTo || lkiAttached.get(c.iid) || '', turnInfo: turnInfo(state), ...(host.effect ? { remembered: host.effect.remembered } : {}) };
+        const env: MatchEnv = { controller: c.controller, sourceIid: c.iid, lookup: ctx.lookup, attachedTo: c.attachedTo || lkiAttached.get(c.iid) || '', turnInfo: turnInfo(state), chosen: c.chosen ?? {}, ...(host.effect ? { remembered: host.effect.remembered } : {}) };
         // Prowess (keyword) as a synthesized trigger.
         if (ev.t === 'cast' && !host.lki && c.zone === 'battlefield' && hasKeyword(c, ctx.lookup, 'Prowess')) {
           const p = { Mode: 'SpellCast', ValidCard: 'Card.nonCreature', ValidActivatingPlayer: 'You', TriggerZones: 'Battlefield', TriggerDescription: 'Prowess (+1/+1 until end of turn)' };
@@ -643,7 +677,9 @@ function detect(state: GameState, ctx: Ctx) {
           if (!hostZoneOk(host, p, ev)) continue;
           const hit = matchEvent(state, ctx, host, p, ev, env);
           if (!hit) continue;
-          const unknownParam = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
+          const extra = extraParams(state, ctx, c, p, hit === 'unknown' ? undefined : hit, ev);
+          if (extra === false) continue;
+          const unknownParam = extra === 'unknown' ? 'condition' : Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
           const faceName = getScript(t.ref?.cardId ?? host.id ?? '')?.[t.ref?.face ?? host.face]?.name ?? hostLabel(host, ctx);
           const desc = describe(p.TriggerDescription ?? 'a triggered ability', faceName);
           if (hit === 'unknown' || unknownParam) {
