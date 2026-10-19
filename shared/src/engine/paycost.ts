@@ -16,6 +16,7 @@ import { manaOptionsFor } from './mana.ts';
 import { autoTapFor, planAutoPay } from './strict.ts';
 import { matchCard } from './targets.ts';
 import { parseManaSymbols } from '../cards.ts';
+import { blightCandidates } from './setmech.ts';
 
 // ------------------------------------------------------------------ mana
 
@@ -105,7 +106,7 @@ export function timesPayable(state: GameState, pid: string, cost: string, max: n
 
 export interface CostTok {
   kind: 'mana' | 'manaTimes' | 'life' | 'energy' | 'counter' | 'sacSelf' | 'exileSelf' | 'tapSelf' | 'untapSelf' | 'returnSelf' | 'draw' | 'mill'
-    | 'discard' | 'sac' | 'exileGrave' | 'exileHand' | 'return' | 'tapType' | 'discardHand';
+    | 'discard' | 'sac' | 'exileGrave' | 'exileHand' | 'return' | 'tapType' | 'discardHand' | 'blight';
   /** Count (number) or 'X'. */
   n: number | 'X';
   valid: string;
@@ -172,6 +173,7 @@ export function parseCostTokens(cost: string): { toks: CostTok[]; mandatory: boo
       case 'ExileFromGrave': toks.push({ kind: 'exileGrave', n, valid: valid.replace(/;/g, ','), text: `exile ${num(n)} ${desc ?? `card${n === 1 ? '' : 's'}`} from your graveyard` }); continue;
       case 'ExileFromHand': toks.push({ kind: 'exileHand', n, valid: valid.replace(/;/g, ','), text: `exile ${num(n)} ${what} from your hand` }); continue;
       case 'Return': toks.push(self ? { kind: 'returnSelf', n: 1, valid, text: 'return it to its owner\'s hand' } : { kind: 'return', n, valid: valid.replace(/;/g, ','), text: `return ${num(n)} ${what} you control to its owner's hand` }); continue;
+      case 'Blight': toks.push({ kind: 'blight', n, valid: 'Creature.YouCtrl', text: `blight ${rawN}` }); continue;
       case 'tapXType': toks.push({ kind: 'tapType', n, valid: valid.replace(/;/g, ','), text: `tap ${num(n)} untapped ${what} you control` }); continue;
     }
     if (Number.isNaN(n)) { unknown.push(tok); continue; }
@@ -196,6 +198,7 @@ export function costCandidates(state: GameState, ctx: Ctx, pid: string, srcIid: 
     case 'exileGrave': return me.zones.graveyard.filter(ok);
     case 'sac': case 'return': return state.battlefield.filter((iid) => state.cards[iid].controller === pid && ok(iid));
     case 'tapType': return state.battlefield.filter((iid) => state.cards[iid].controller === pid && !state.cards[iid].tapped && ok(iid));
+    case 'blight': return blightCandidates(state, ctx, pid); // the source itself may be blighted
   }
   return [];
 }
@@ -220,6 +223,7 @@ export function canPayCost(state: GameState, ctx: Ctx, pid: string, srcIid: stri
       case 'untapSelf': if (!src || !src.tapped) return false; break;
       case 'draw': case 'mill': case 'discardHand': break;
       case 'tapType': if (t.n !== 'X' && costCandidates(state, ctx, pid, srcIid, t).length < n) return false; break;
+      case 'blight': if (n > 0 && !costCandidates(state, ctx, pid, srcIid, t).length) return false; break;
       default: if (costCandidates(state, ctx, pid, srcIid, t).length < n) return false;
     }
   }
@@ -227,7 +231,7 @@ export function canPayCost(state: GameState, ctx: Ctx, pid: string, srcIid: stri
 }
 
 /** A choice the player still has to make to finish paying (resolve.ts turns it into a pick Pending). */
-export interface CostChoice { kind: 'discard' | 'sac' | 'exileGrave' | 'exileHand' | 'return' | 'tapType'; candidates: string[]; n: number; upTo: boolean; text: string }
+export interface CostChoice { kind: 'discard' | 'sac' | 'exileGrave' | 'exileHand' | 'return' | 'tapType' | 'blight'; candidates: string[]; n: number; upTo: boolean; text: string; /** blight: the number of -1/-1 counters. */ amount?: number }
 
 /**
  * Pay everything that needs no choice (mana, life, energy, counters, the source itself, draws) and return the
@@ -257,6 +261,7 @@ export function payCostNow(state: GameState, ctx: Ctx, pid: string, srcIid: stri
       case 'draw': { const got = drawCards(state, me, n); done.push(`drew ${got}`); break; }
       case 'mill': { let k = 0; for (; k < n && me.zones.library.length; k++) moveCard(state, ctx, me.zones.library[0], 'graveyard'); done.push(`milled ${k}`); break; }
       case 'discardHand': { const hand = [...me.zones.hand]; for (const iid of hand) moveCard(state, ctx, iid, 'graveyard', { cause: 'discard' }); done.push(`discarded ${hand.length}`); break; }
+      case 'blight': if (n > 0) choices.push({ kind: 'blight', candidates: costCandidates(state, ctx, pid, srcIid, t), n: 1, upTo: false, text: t.text, amount: n }); break;
       default: {
         const cands = costCandidates(state, ctx, pid, srcIid, t);
         choices.push({ kind: t.kind as CostChoice['kind'], candidates: cands, n: t.n === 'X' && t.kind === 'tapType' ? cands.length : Math.min(n, cands.length), upTo: t.n === 'X' && t.kind === 'tapType', text: t.text });

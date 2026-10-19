@@ -96,3 +96,42 @@ export function answerSetMechPending(state: GameState, ctx: Ctx, pend: Pending, 
   }
   return null;
 }
+
+// ------------------------------------------------------------------ remove counters as a cost
+
+/** Counters a permanent has that a "remove a counter" cost could take (`kind` undefined = any kind). */
+export function removableCounters(state: GameState, iid: string, kind?: string): number {
+  const c = state.cards[iid];
+  if (!c) return 0;
+  return kind ? c.counters[kind] ?? 0 : Object.values(c.counters).reduce((a, b) => a + (b > 0 ? b : 0), 0);
+}
+
+/**
+ * Remove `n` counters from `iid` to pay a cost (RemoveAnyCounter<N/Any/...>, SubCounter<N/type/valid>). With any kind
+ * allowed, -1/-1 counters go first, then other kinds, +1/+1 and loyalty counters last. Returns a description.
+ */
+export function removeCountersForCost(state: GameState, iid: string, n: number, kind?: string): string {
+  const c = state.cards[iid];
+  if (!c) return '';
+  const rank = (k: string) => (k === '-1/-1' ? 0 : k === '+1/+1' ? 2 : k === 'loyalty' ? 3 : 1);
+  const kinds = kind ? [kind] : Object.keys(c.counters).filter((k) => c.counters[k] > 0).sort((a, b) => rank(a) - rank(b));
+  const took: string[] = [];
+  let left = n;
+  for (const k of kinds) {
+    const m = Math.min(left, c.counters[k] ?? 0);
+    if (m <= 0) continue;
+    c.counters[k] -= m;
+    if (!c.counters[k] && k !== 'loyalty') delete c.counters[k];
+    took.push(`${m} ${k}`);
+    left -= m;
+    if (!left) break;
+  }
+  return took.length ? `${took.join(', ')} counter${n === 1 ? '' : 's'}` : 'no counters';
+}
+
+/** Forge counter type name -> engine counter kind (undefined for "Any"). */
+export function costCounterKind(forge: string): string | undefined {
+  const u = forge.toUpperCase();
+  if (u === 'ANY') return undefined;
+  return u === 'P1P1' ? '+1/+1' : u === 'M1M1' ? '-1/-1' : u === 'LOYALTY' ? 'loyalty' : forge.toLowerCase();
+}

@@ -22,6 +22,7 @@ import { castTimingError } from './timing.ts';
 import { applyPermissions } from './permissions.ts';
 import { applyCastKeywords, escalateParts } from './castkw.ts';
 import { autoTapFor } from './strict.ts';
+import { blightCandidates, blightOn, removableCounters, removeCountersForCost } from './setmech.ts';
 import type { AutoInfo, CastInfo, CastOption, TargetRef } from './types.ts';
 
 type CastAction = Extract<GameAction, { t: 'cast' }>;
@@ -29,7 +30,9 @@ type CastAction = Extract<GameAction, { t: 'cast' }>;
 // ------------------------------------------------------------------ Forge cost strings
 
 export interface CostPart {
-  kind: 'life' | 'exileHand' | 'exileGrave' | 'return' | 'sac' | 'sacSelf' | 'discard' | 'discardHand' | 'other';
+  kind: 'life' | 'exileHand' | 'exileGrave' | 'return' | 'sac' | 'sacSelf' | 'discard' | 'discardHand' | 'blight' | 'behold' | 'beholdExile' | 'removeCounter' | 'other';
+  /** blight: the number of -1/-1 counters (`n` is the one creature that gets them). */
+  amount?: number;
   /** Count: a number or "X". */
   n: string;
   valid: string;
@@ -63,6 +66,15 @@ export function parseCost(cost: string, selfName = 'it'): { mana: string; parts:
     if (/^[WUBRG]{2}$/.test(tok)) { mana += `{${tok[0]}/${tok[1]}}`; continue; } // hybrid ("GW")
     if (/^XMin\d+$/.test(tok)) continue; // "X can't be 0": not checked
     if (tok === 'T' || tok === 'Q') continue; // tap / untap symbols: handled by the caller
+    const bh = /^(Behold|BeholdExile)<(\d+)\/([A-Za-z]+)>$/.exec(tok);
+    if (bh) {
+      // Behold: choose a <type> you control or reveal a <type> card from your hand (BeholdExile: and exile it).
+      const w = plural(bh[2], bh[3]);
+      parts.push({ kind: bh[1] === 'Behold' ? 'behold' : 'beholdExile', n: bh[2], valid: bh[3], text: `Behold ${w}${bh[1] === 'Behold' ? '' : ' and exile it'} (a ${bh[3]} you control or from your hand)` });
+      continue;
+    }
+    const bl = /^Blight<(\d+)>$/.exec(tok);
+    if (bl) { parts.push({ kind: 'blight', n: '1', valid: 'Creature.YouCtrl', amount: parseInt(bl[1], 10), text: `Blight ${bl[1]} (put ${bl[1] === '1' ? 'a -1/-1 counter' : `${bl[1]} -1/-1 counters`} on a creature you control)` }); continue; }
     const m = /^(\w+)<([^/>]+)(?:\/([^/>]+))?(?:\/([^>]+))?>$/.exec(tok);
     if (!m) { parts.push({ kind: 'other', n: '1', valid: '', text: `${tok} (by hand)` }); continue; }
     const [, kind, n, valid = 'Card', desc] = m;
@@ -96,7 +108,7 @@ function count(n: string, x: number): number {
 }
 
 /** Cards that could pay a part (excluding the spell itself). */
-function candidates(state: GameState, pid: string, spellIid: string, part: Pick<CostPart, 'kind' | 'valid'>, lookup: Lookup): string[] {
+function candidates(state: GameState, pid: string, spellIid: string, part: Pick<CostPart, 'kind' | 'valid'> & { counter?: string }, lookup: Lookup): string[] {
   const me = state.players.find((p) => p.pid === pid);
   if (!me) return [];
   const env = { controller: pid, sourceIid: spellIid, lookup };
@@ -105,6 +117,9 @@ function candidates(state: GameState, pid: string, spellIid: string, part: Pick<
     case 'exileHand': case 'discard': return me.zones.hand.filter(ok);
     case 'exileGrave': return me.zones.graveyard.filter(ok);
     case 'return': case 'sac': return state.battlefield.filter((iid) => state.cards[iid].controller === pid && ok(iid));
+    case 'blight': return blightCandidates(state, { lookup }, pid).filter((iid) => iid !== spellIid);
+    case 'removeCounter': return state.battlefield.filter((iid) => state.cards[iid].controller === pid && matchCard(state.cards[iid], part.valid, env) !== false && removableCounters(state, iid, part.counter) > 0);
+    case 'behold': case 'beholdExile': return [...state.battlefield.filter((iid) => state.cards[iid].controller === pid && !state.cards[iid].faceDown), ...me.zones.hand].filter(ok);
   }
   return [];
 }
@@ -372,6 +387,10 @@ interface CostPick {
   optional: boolean;
   label: string;
   delve?: boolean;
+  /** blight: the number of -1/-1 counters. */
+  amount?: number;
+  /** removeCounter: the counter kind (undefined = any). */
+  counter?: string;
 }
 
 export interface CostData {
@@ -391,6 +410,18 @@ function doPick(state: GameState, ctx: Ctx, d: CostData, pk: CostPick, iid: stri
   if (!c) return;
   const nm = cardName(c, ctx.lookup);
   const who = player(state, d.pid).name;
+  if (pk.kind === 'removeCounter') { log(state, ctx, d.pid, `${who} removes ${removeCountersForCost(state, iid, 1, pk.counter)} from ${nm} to pay for ${d.spellName}.`); return; }
+  if (pk.kind === 'blight') { blightOn(state, ctx, iid, pk.amount ?? 1, `to pay for ${d.spellName}`); return; }
+  if (pk.kind === 'behold' || pk.kind === 'beholdExile') {
+    const from = c.zone === 'hand' ? ' (revealed from hand)' : '';
+    if (pk.kind === 'beholdExile') {
+      moveCard(state, ctx, iid, 'exile');
+      const key = `exiled|${d.spellIid}`; // "the exiled card" (Defined$ ExiledWith)
+      (state.remembered ??= {})[key] = [...(state.remembered[key] ?? []), iid];
+    }
+    log(state, ctx, d.pid, `${who} beholds ${nm}${from}${pk.kind === 'beholdExile' ? ' and exiles it' : ''} to pay for ${d.spellName}.`);
+    return;
+  }
   if (pk.kind === 'return') moveCard(state, ctx, iid, 'hand');
   else if (pk.kind === 'exileHand' || pk.kind === 'exileGrave') moveCard(state, ctx, iid, 'exile');
   else moveCard(state, ctx, iid, 'graveyard', pk.kind === 'sac' ? { cause: 'sacrifice' } : pk.kind === 'discard' ? { cause: 'discard' } : {});
@@ -421,7 +452,8 @@ function continueCosts(state: GameState, ctx: Ctx, d: CostData): void {
     const pk = d.picks[0];
     const cands = candidates(state, d.pid, d.spellIid, pk, ctx.lookup);
     if (pk.left <= 0 || !cands.length) { d.picks.shift(); continue; }
-    if (!pk.optional && cands.length <= pk.left) {
+    if (pk.kind === 'removeCounter' && cands.length === 1) { doPick(state, ctx, d, pk, cands[0]); pk.left--; continue; }
+    if (!pk.optional && cands.length <= pk.left && pk.kind !== 'removeCounter') {
       for (const iid of cands) doPick(state, ctx, d, pk, iid);
       d.picks.shift();
       continue;
@@ -487,8 +519,8 @@ export function finishCast(state: GameState, ctx: Ctx, pid: string, c: CardInsta
         log(state, ctx, pid, `${me.name} discards their hand (${hand.length}).`);
         break;
       }
-      case 'exileHand': case 'exileGrave': case 'return': case 'sac': case 'discard':
-        picks.push({ kind: part.kind, valid: part.valid, left: n, optional: false, label: `${part.text.charAt(0).toLowerCase()}${part.text.slice(1)}` });
+      case 'exileHand': case 'exileGrave': case 'return': case 'sac': case 'discard': case 'blight': case 'behold': case 'beholdExile':
+        picks.push({ kind: part.kind, valid: part.valid, left: n, optional: false, label: `${part.text.charAt(0).toLowerCase()}${part.text.slice(1)}`, ...(part.amount != null ? { amount: part.amount } : {}) });
         break;
       case 'sacSelf': break;
       case 'other': if (/\(by hand\)$/.test(part.text)) log(state, ctx, pid, `Pay by hand: ${part.text.replace(/ \(by hand\)$/, '')}.`); break;

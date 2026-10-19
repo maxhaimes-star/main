@@ -23,6 +23,7 @@ import type { CardInstance, GameAction, GameState, StackItem } from '../game/typ
 import { startCostPicks, type CostData } from './costs.ts';
 import { getScript, parseAbility, parseParams, triggersOf, scriptRef } from './script.ts';
 import { matchCard } from './targets.ts';
+import { blightCandidates, costCounterKind, removableCounters, removeCountersForCost } from './setmech.ts';
 import { conditionHolds } from './triggers.ts';
 import { oathApplies } from './unique.ts';
 import type { AutoInfo, ForgeFace, ParsedAbility, Pending, QueuedTrigger } from './types.ts';
@@ -269,12 +270,25 @@ function alwaysTriggers(state: GameState, ctx: Ctx) {
 
 /** Cost tokens of activated abilities this module pays (play.ts calls it for tokens it doesn't know). */
 export function isUniqueCost(tok: string): boolean {
-  return /^tapXType<\d+\/[^>]+>$/.test(tok) || /^(Sac|Discard|Return|ExileFromGrave|ExileFromHand)<\d+\/[^>]+>$/.test(tok);
+  return /^tapXType<\d+\/[^>]+>$/.test(tok) || /^(Sac|Discard|Return|ExileFromGrave|ExileFromHand)<\d+\/[^>]+>$/.test(tok) || /^Blight<\d+>$/.test(tok) || REMOVE_COUNTER.test(tok);
 }
 
-interface ParsedCost { kind: 'tap' | 'sac' | 'discard' | 'return' | 'exileGrave' | 'exileHand' | 'returnSelf' | 'discardHand'; n: number; valid: string; text: string }
+/** RemoveAnyCounter<N/Any|type/valid[/desc]> / SubCounter<N/type/valid[/desc]>: remove counters from the source or a permanent you control. */
+const REMOVE_COUNTER = /^(RemoveAnyCounter|SubCounter)<(\d+)\/([A-Za-z0-9]+)\/([^/>]+)(?:\/([^>]+))?>$/;
+
+interface ParsedCost { kind: 'tap' | 'sac' | 'discard' | 'return' | 'exileGrave' | 'exileHand' | 'returnSelf' | 'discardHand' | 'blight' | 'counterSelf' | 'removeCounter'; n: number; valid: string; text: string; amount?: number; counter?: string }
 
 function parseUniqueCost(tok: string, x: number): ParsedCost | undefined {
+  const rc = REMOVE_COUNTER.exec(tok);
+  if (rc) {
+    const n = parseInt(rc[2], 10);
+    const counter = costCounterKind(rc[3]);
+    const what = `${n === 1 ? 'a' : n} ${counter ? `${counter} ` : ''}counter${n === 1 ? '' : 's'}`;
+    if (/^(CARDNAME|Self|NICKNAME)$/.test(rc[4])) return { kind: 'counterSelf', n, valid: rc[4], text: `remove ${what} from it`, ...(counter ? { counter } : {}) };
+    return { kind: 'removeCounter', n, valid: rc[4].replace(/;/g, ','), text: `remove ${what} from ${rc[5] ?? `a ${rc[4].split('.')[0].toLowerCase()} you control`}`, ...(counter ? { counter } : {}) };
+  }
+  const bl = /^Blight<(\d+)>$/.exec(tok); // blight N: one creature you control gets N -1/-1 counters (it may be the source)
+  if (bl) return { kind: 'blight', n: 1, valid: 'Creature.YouCtrl', text: `blight ${bl[1]}`, amount: parseInt(bl[1], 10) };
   const m = /^(\w+)<(\d+|X)\/([^/>]+)(?:\/([^>]+))?>$/.exec(tok);
   if (!m) return undefined;
   const n = m[2] === 'X' ? x : parseInt(m[2], 10);
@@ -302,6 +316,8 @@ function costCandidates(state: GameState, ctx: Ctx, pid: string, src: CardInstan
     case 'sac': case 'return': return state.battlefield.filter((iid) => state.cards[iid].controller === pid && ok(iid));
     case 'discard': case 'exileHand': return me.zones.hand.filter(ok);
     case 'exileGrave': return me.zones.graveyard.filter(ok);
+    case 'blight': return blightCandidates(state, ctx, pid);
+    case 'removeCounter': return state.battlefield.filter((iid) => state.cards[iid].controller === pid && matchCard(state.cards[iid], pc.valid, env) !== false && removableCounters(state, iid, pc.counter) > 0);
   }
   return [];
 }
@@ -314,6 +330,11 @@ export function uniqueCostError(state: GameState, ctx: Ctx, pid: string, src: Ca
     if (!pc) return `${name}: can't pay ${tok}`;
     if (pc.kind === 'returnSelf') { if (src.zone !== 'battlefield') return `${name} must be on the battlefield`; continue; }
     if (pc.kind === 'discardHand') continue;
+    if (pc.kind === 'counterSelf' || pc.kind === 'removeCounter') {
+      const total = pc.kind === 'counterSelf' ? removableCounters(state, src.iid, pc.counter) : costCandidates(state, ctx, pid, src, pc).reduce((a, iid) => a + removableCounters(state, iid, pc.counter), 0);
+      if (total < pc.n) return `${name}: you can't ${pc.text} (${total}/${pc.n})`;
+      continue;
+    }
     const have = costCandidates(state, ctx, pid, src, pc).length;
     if (have < pc.n) return `${name}: you can't ${pc.text} (${have}/${pc.n})`;
   }
@@ -336,8 +357,13 @@ export function payUniqueCosts(state: GameState, ctx: Ctx, pid: string, src: Car
       const hand = [...player(state, pid).zones.hand];
       for (const iid of hand) moveCard(state, ctx, iid, 'graveyard', { cause: 'discard' });
       log(state, ctx, pid, `${pname(state, pid)} discards their hand (${hand.length} card${hand.length === 1 ? '' : 's'}) to pay for ${name}.`);
+    } else if (pc.kind === 'counterSelf') {
+      log(state, ctx, pid, `${pname(state, pid)} removes ${removeCountersForCost(state, src.iid, pc.n, pc.counter)} from ${name} (cost).`);
+    } else if (pc.kind === 'removeCounter' && costCandidates(state, ctx, pid, src, pc).length === 1) {
+      const only = costCandidates(state, ctx, pid, src, pc)[0];
+      log(state, ctx, pid, `${pname(state, pid)} removes ${removeCountersForCost(state, only, pc.n, pc.counter)} from ${cardName(state.cards[only], ctx.lookup)} to pay for ${name}.`);
     } else if (pc.kind === 'tap') taps.push(pc);
-    else picks.push({ kind: pc.kind, valid: pc.valid, left: pc.n, optional: false, label: pc.text });
+    else picks.push({ kind: pc.kind, valid: pc.valid, left: pc.n, optional: false, label: pc.text, ...(pc.amount != null ? { amount: pc.amount } : {}), ...(pc.counter ? { counter: pc.counter } : {}) });
   }
   for (const t of taps) askTapCost(state, ctx, { kind: 'tapCost', pid, src: src.iid, valid: t.valid, left: t.n, name });
   if (picks.length) startCostPicks(state, ctx, { kind: 'cost', pid, spellIid: src.iid, spellName: item.text, picks, delved: 0 });

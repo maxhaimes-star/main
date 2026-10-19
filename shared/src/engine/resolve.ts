@@ -20,6 +20,7 @@ import { execUniqueStep, type UniqueRun, uniqueVar, answerUniquePending, type Pi
 import { isSimpleAnimate, uniqueReason } from './unique-support.ts';
 import { answerTapCost } from './turns.ts';
 import { answerExtPending, execExtStep, EXT_APIS, type StepApi } from './ext.ts';
+import { blightOn } from './setmech.ts';
 import { canPayCost, costText, parseCostTokens, payCostNow, timesPayable } from './paycost.ts';
 import { answerMorePending, answerMoreTargets, execMoreStep, MORE_APIS, moreDefinedValue, moreVar, type MoreRun } from './more.ts';
 import { checkTargets } from './play.ts';
@@ -539,7 +540,7 @@ function openPeek(state: GameState, ctx: Ctx, r: Run, i: number, p: GamePlayer, 
 
 interface PickData {
   kind: 'pick';
-  action: 'move' | 'discard' | 'sacrifice' | 'tap';
+  action: 'move' | 'discard' | 'sacrifice' | 'tap' | 'blight';
   chooser: string;
   candidates: string[];
   left: number;
@@ -1627,11 +1628,7 @@ function payOptional(state: GameState, ctx: Ctx, d: OptCostData, times: number):
   if (d.times && d.cont.item.auto) d.cont.item.auto.extra = { ...(d.cont.item.auto.extra ?? {}), NumTimes: String(times) };
   if (choices.some((c) => c.kind === 'tapType' && c.upTo) && d.cont.item.auto) { d.cont.item.auto.x = 0; d.cont.item.x = 0; }
   const name = d.cont.item.text.split(':')[0];
-  const picks: Omit<PickData, 'queue' | 'cont'>[] = choices.map((c) => ({
-    kind: 'pick', chooser: pid, candidates: c.candidates, left: c.n, optional: c.upTo, label: `${name}: ${c.text} (cost)`,
-    ...(c.kind === 'discard' ? { action: 'discard' as const } : c.kind === 'sac' ? { action: 'sacrifice' as const }
-      : c.kind === 'tapType' ? { action: 'tap' as const, countX: c.upTo } : { action: 'move' as const, dest: (c.kind === 'return' ? 'hand' : 'exile') as Zone }),
-  }));
+  const picks = costPicks(choices, pid, name);
   if (startPicks(state, ctx, picks, d.cont)) return true;
   runFrom(state, ctx, d.cont);
   return false;
@@ -1812,6 +1809,7 @@ function costPicks(choices: ReturnType<typeof payCostNow>, pid: string, name: st
   return choices.map((c) => ({
     kind: 'pick', chooser: pid, candidates: c.candidates, left: c.n, optional: c.upTo, label: `${name}: ${c.text} (cost)`,
     ...(c.kind === 'discard' ? { action: 'discard' as const } : c.kind === 'sac' ? { action: 'sacrifice' as const }
+      : c.kind === 'blight' ? { action: 'blight' as const, params: { Num: String(c.amount ?? 1) } }
       : c.kind === 'tapType' ? { action: 'tap' as const, countX: c.upTo } : { action: 'move' as const, dest: (c.kind === 'return' ? 'hand' : 'exile') as Zone }),
   }));
 }
@@ -2078,6 +2076,8 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
       } else if (data.action === 'sacrifice') {
         moveCard(state, ctx, value, 'graveyard', { cause: 'sacrifice' });
         log(state, ctx, pid, `${who.name} sacrifices ${nm}.`);
+      } else if (data.action === 'blight') {
+        blightOn(state, ctx, value, parseInt(data.params?.Num ?? '1', 10) || 1, data.label.replace(/:.*/, ''));
       } else if (data.action === 'tap') {
         c.tapped = true;
         log(state, ctx, pid, `${who.name} taps ${nm}.`);

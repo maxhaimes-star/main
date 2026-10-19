@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { getCard, registerCards } from '../src/cube.ts';
-import { applyAction, createGame, type CardData, type Ctx, evalCount, type GameAction, type GameState, effectivePT, moveCard } from '../src/index.ts';
+import { abilitiesOfInstance, applyAction, castOptions, createGame, type CardData, type Ctx, evalCount, type GameAction, type GameState, effectivePT, moveCard } from '../src/index.ts';
 import { registerScripts } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
 import { REAL } from './fixtures/noncube-cards.ts';
@@ -119,5 +119,122 @@ describe('Count$ aggregates: $Colors (Vivid), ThisTurnCast_...$CardTypes', () =>
     expect(evalCount('Count$ThisTurnCast_Card.YouCtrl$GreatestCardManaCost', env)).toBe(2);
     expect(evalCount('Count$Valid Creature.YouCtrl$CardPower', env)).toBe(4); // 2/2 + 2/1
     expect(evalCount('Count$Valid Creature.YouCtrl$Colors', env)).toBe(2);
+  });
+});
+
+describe('Blight (Lorwyn Eclipsed): -1/-1 counters on a creature you control', () => {
+  it("Dream Seizer: 'you may blight 1. If you do, each opponent discards a card' (optional trigger cost)", () => {
+    const { g, ctx } = setup(['dream_seizer', 'serra_angel'], ['grizzly_bears']);
+    const angel = put(g, ctx, 'serra_angel');
+    toHand(g, ctx, 'grizzly_bears', 'b');
+    const oppHand = g.players[1].zones.hand.length;
+    pool(g, 'a', { B: 4 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'dream_seizer') });
+    resolveAll(g, ctx, (labels) => { const i = labels.findIndex((l) => /^(Pay|Yes)|Serra Angel/i.test(l)); return i; });
+    expect(g.cards[angel].counters['-1/-1']).toBe(1);
+    expect(g.players[1].zones.hand.length).toBe(oppHand - 1);
+    expect(logText(g)).toMatch(/blights 1/);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Gristle Glutton: {T}, Blight 1 as an activated-ability cost', () => {
+    const { g, ctx } = setup(['gristle_glutton', 'serra_angel', 'grizzly_bears']);
+    const glutton = put(g, ctx, 'gristle_glutton');
+    const angel = put(g, ctx, 'serra_angel');
+    toHand(g, ctx, 'grizzly_bears');
+    const ab = abilitiesOfInstance(g.cards[glutton], g, getCard).find((e) => e.ability.api === 'Discard')!;
+    act(g, ctx, 'a', { t: 'activate', iid: glutton, ability: ab.index, text: '' });
+    resolveAll(g, ctx, (labels) => labels.findIndex((l) => /Serra Angel|Grizzly Bears/.test(l)));
+    expect(g.cards[angel].counters['-1/-1']).toBe(1);
+    expect(g.cards[glutton].tapped).toBe(true);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it("Bogslither's Embrace: blight 1 or pay {3} as the additional cost", () => {
+    const { g, ctx } = setup(['bogslithers_embrace', 'grizzly_bears'], ['serra_angel']);
+    const bear = put(g, ctx, 'grizzly_bears');
+    const angel = put(g, ctx, 'serra_angel', 'b');
+    const iid = toHand(g, ctx, 'bogslithers_embrace');
+    const opts = castOptions(g, iid);
+    expect(opts.map((o) => o.label).join('|')).toMatch(/Blight 1/);
+    pool(g, 'a', { B: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid, targets: [[{ kind: 'card', iid: angel }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[angel].zone).toBe('exile');
+    expect(g.cards[bear].counters['-1/-1']).toBe(1); // blighted to pay
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('High Perfect Morcant: each opponent blights 1 (effect, the opponent chooses)', () => {
+    const { g, ctx } = setup(['high_perfect_morcant'], ['serra_angel', 'grizzly_bears']);
+    const angel = put(g, ctx, 'serra_angel', 'b');
+    const bear = put(g, ctx, 'grizzly_bears', 'b');
+    pool(g, 'a', { B: 2, G: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'high_perfect_morcant') });
+    resolveAll(g, ctx, (labels) => labels.findIndex((l) => /Serra Angel/.test(l)));
+    expect(g.cards[angel].counters['-1/-1']).toBe(1);
+    expect(g.cards[bear].counters['-1/-1'] ?? 0).toBe(0);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});
+
+describe('Behold as an additional cost (AlternateAdditionalCost:Behold<1/Goblin>:2)', () => {
+  it('Mudbutton Cursetosser: behold a Goblin from the battlefield or the hand, or pay {2}', () => {
+    const { g, ctx } = setup(['mudbutton_cursetosser', 'goblin_guide']);
+    const guide = toHand(g, ctx, 'goblin_guide');
+    const iid = toHand(g, ctx, 'mudbutton_cursetosser');
+    const labels = castOptions(g, iid).map((o) => o.label);
+    expect(labels.join('|')).toMatch(/Behold a Goblin/);
+    pool(g, 'a', { B: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid });
+    resolveAll(g, ctx);
+    expect(g.cards[iid].zone).toBe('battlefield');
+    expect(g.cards[guide].zone).toBe('hand');
+    expect(logText(g)).toMatch(/beholds Goblin Guide \(revealed from hand\)/);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('without a Goblin the behold option is unpayable', () => {
+    const { g, ctx } = setup(['mudbutton_cursetosser']);
+    const iid = toHand(g, ctx, 'mudbutton_cursetosser');
+    const o = castOptions(g, iid).find((x) => /Behold/.test(x.label))!;
+    expect(o.unavailable ?? (o as { error?: string }).error ?? '').toMatch(/not enough/);
+  });
+});
+
+describe('remove counters as an activated-ability cost', () => {
+  it('Gnarlbark Elm: RemoveAnyCounter<2/Any/CARDNAME> — removes its -1/-1 counters', () => {
+    const { g, ctx } = setup(['gnarlbark_elm'], ['grizzly_bears']);
+    const elm = put(g, ctx, 'gnarlbark_elm');
+    g.cards[elm].counters['-1/-1'] = 2;
+    const bear = put(g, ctx, 'grizzly_bears', 'b');
+    pool(g, 'a', { B: 3 });
+    const ab = abilitiesOfInstance(g.cards[elm], g, getCard).find((e) => e.ability.api === 'Pump')!;
+    act(g, ctx, 'a', { t: 'activate', iid: elm, ability: ab.index, text: '', targets: [[{ kind: 'card', iid: bear }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[elm].counters['-1/-1'] ?? 0).toBe(0);
+    expect(g.cards[bear].zone).toBe('graveyard');
+    expect(logText(g)).not.toMatch(MANUAL);
+    // No counters left: can't activate again.
+    pool(g, 'a', { B: 3 });
+    expect(applyAction(g, 'a', { t: 'activate', iid: elm, ability: ab.index, text: '', targets: [[{ kind: 'card', iid: elm }]] }, ctx)).toMatch(/counter/);
+  });
+
+  it('Ray Fillet: SubCounter<1/P1P1/Creature.YouCtrl> — a +1/+1 counter from a creature you control', () => {
+    const { g, ctx } = setup(['ray_fillet_man_ray', 'grizzly_bears', 'serra_angel']);
+    const ray = put(g, ctx, 'ray_fillet_man_ray');
+    const bear = put(g, ctx, 'grizzly_bears');
+    const angel = put(g, ctx, 'serra_angel');
+    g.cards[bear].counters['+1/+1'] = 1;
+    g.cards[angel].counters['+1/+1'] = 2;
+    const hand = g.players[0].zones.hand.length;
+    pool(g, 'a', { U: 2 });
+    const ab = abilitiesOfInstance(g.cards[ray], g, getCard).find((e) => e.ability.api === 'Draw')!;
+    act(g, ctx, 'a', { t: 'activate', iid: ray, ability: ab.index, text: '' });
+    resolveAll(g, ctx, (labels) => labels.findIndex((l) => /Serra Angel/.test(l)));
+    expect(g.cards[angel].counters['+1/+1']).toBe(1);
+    expect(g.cards[bear].counters['+1/+1']).toBe(1);
+    expect(g.players[0].zones.hand.length).toBe(hand + 1);
+    expect(logText(g)).not.toMatch(MANUAL);
   });
 });
