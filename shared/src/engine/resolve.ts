@@ -424,6 +424,8 @@ function env(state: GameState, ctx: Ctx, r: Run): MatchEnv {
     controller: r.controller, sourceIid: r.sourceIid, lookup: ctx.lookup, num: (name) => amount(state, ctx, r, name, 0),
     turnInfo: turnInfo(state), remembered: r.remembered, defender: r.trig?.defender, attachedTo: src?.attachedTo ?? '',
     ...(src?.chosen ? { chosen: src.chosen } : {}), ...(r.chosen?.cards ? { chosenCards: r.chosen.cards } : {}), exiledWith: exiledWithSource(state, r.sourceIid),
+    targetedPlayers: [...new Set(r.targets.flat().map((t) => (t.kind === 'player' ? t.pid : '')).filter(Boolean))], imprinted: r.chosen?.imprinted ?? [],
+    libraries: Object.fromEntries(state.players.map((pl) => [pl.pid, pl.zones.library])),
   };
 }
 
@@ -1173,7 +1175,8 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const origin of origins as Zone[]) {
         if (origin === 'battlefield') { pool.push(...state.battlefield); continue; }
         const own = ownTargets(r, i);
-        const ps = own ? split(state, own).players : p.Defined ? defined(state, r, i, p.Defined)?.players : state.players.filter((x) => !x.conceded).map((x) => x.pid);
+        const dp = p.Defined ?? p.DefinedPlayer; // DefinedPlayer$ Targeted (Strategic Betrayal)
+        const ps = own ? split(state, own).players : dp ? defined(state, r, i, dp)?.players : state.players.filter((x) => !x.conceded).map((x) => x.pid);
         if (!ps) return bad();
         pool.push(...ps.flatMap((pid) => [...player(state, pid).zones[origin as 'hand']]));
       }

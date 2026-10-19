@@ -34,6 +34,12 @@ export interface MatchEnv {
   turnInfo?: { turn: number; activations: Record<string, number> };
   /** The trigger's defending player (DefenderCtrl). */
   defender?: string;
+  /** Players the resolving spell / ability targets (TargetedPlayerCtrl / TargetedPlayerOwn); absent = unknown. */
+  targetedPlayers?: string[];
+  /** Cards the resolution imprinted (IsImprinted); absent = unknown. */
+  imprinted?: string[];
+  /** Library order by player (TopLibrary / BottomLibrary); absent = unknown. */
+  libraries?: Record<string, string[]>;
 }
 
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -132,6 +138,15 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'NamedCard': return env.chosen === undefined ? 'unknown' : !!env.chosen.name && fx.name === env.chosen.name;
     case 'ChosenColor': return env.chosen === undefined ? 'unknown' : !!env.chosen.color && fx.colors.includes(COLOR_WORDS[env.chosen.color] ?? env.chosen.color);
     case 'IsRemembered': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.iid);
+    case 'IsImprinted': return env.imprinted === undefined ? 'unknown' : env.imprinted.includes(c.iid);
+    case 'TargetedPlayerCtrl': return env.targetedPlayers === undefined ? 'unknown' : env.targetedPlayers.includes(c.controller);
+    case 'TargetedPlayerOwn': return env.targetedPlayers === undefined ? 'unknown' : env.targetedPlayers.includes(c.owner);
+    case 'TopLibrary': case 'BottomLibrary': {
+      if (c.zone !== 'library') return false;
+      const lib = env.libraries?.[c.owner];
+      if (!lib) return 'unknown';
+      return prop === 'TopLibrary' ? lib[0] === c.iid : lib[lib.length - 1] === c.iid;
+    }
     case 'ChosenCard': return env.chosenCards === undefined ? 'unknown' : env.chosenCards.includes(c.iid);
     case 'ExiledWithSource': case 'ExiledWithSourceLKI': return env.exiledWith === undefined ? 'unknown' : env.exiledWith.includes(c.iid);
     // How / where it was cast (CastInfo.from is set when not cast from the hand).

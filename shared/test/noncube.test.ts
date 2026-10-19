@@ -503,3 +503,20 @@ describe('effect replacements: extra ETB counters, "can\'t be countered"; etbCou
     expect(cantBeCountered(g, ctx, item)).toMatch(/can't be countered/);
   });
 });
+
+describe('TargetedPlayerCtrl / TargetedPlayerOwn, DefinedPlayer$ in ChangeZoneAll', () => {
+  it('Strategic Betrayal: target opponent exiles a creature they control and their graveyard', () => {
+    const { g, ctx } = setup(['strategic_betrayal'], ['grizzly_bears', 'serra_angel', 'savannah_lions']);
+    const bear = put(g, ctx, 'grizzly_bears', 'b');
+    const angel = put(g, ctx, 'serra_angel', 'b');
+    const lions = find(g, 'b', 'savannah_lions');
+    moveCard(g, ctx, lions, 'graveyard');
+    pool(g, 'a', { B: 3 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'strategic_betrayal'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx, (labels) => labels.findIndex((l) => /Serra Angel/.test(l)));
+    expect(g.cards[angel].zone).toBe('exile');
+    expect(g.cards[bear].zone).toBe('battlefield');
+    expect(g.cards[lions].zone).toBe('exile');
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});
