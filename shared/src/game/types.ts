@@ -192,6 +192,8 @@ export interface GameState {
   delayedTriggers?: DelayedTrigger[];
   /** Stage 2, engine-internal: objects a permanent's abilities remembered (source iid -> iids). */
   remembered?: Record<string, string[]>;
+  /** Stage 2, engine-internal: life totals at the last trigger detection (LifeGained / LifeLost events). */
+  lifeSeen?: Record<string, number>;
   /** Stage 2, engine-internal: per-turn counters (spells cast / cards drawn per player). */
   turnStats?: {
     cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number>;
@@ -249,7 +251,13 @@ export type GameEvent =
   /** Counters were put on a permanent (Mode$ CounterAdded / CounterAddedOnce). */
   | { t: 'counterAdded'; iid: string; kind: string; n: number }
   /** Blockers are declared: these attackers of `attackingPlayer` attacking `defender` weren't blocked (Mode$ AttackerUnblocked(Once)). */
-  | { t: 'unblocked'; attackers: string[]; attackingPlayer: string; defender: string };
+  | { t: 'unblocked'; attackers: string[]; attackingPlayer: string; defender: string }
+  /** A player's life total changed (Mode$ LifeGained / LifeLost; from life-total differences, engine/triggers.ts). */
+  | { t: 'life'; pid: string; amount: number }
+  /** An activated ability (not a mana ability) was activated (Mode$ AbilityCast; Cycled when Keyword$ Cycling). */
+  | { t: 'activated'; iid: string; pid: string; item: string; keyword?: string; loyalty?: boolean; exhaust?: boolean; tapCost?: boolean }
+  /** A player scried / surveilled N (Mode$ Scry / Surveil). */
+  | { t: 'scry'; pid: string; mode: 'scry' | 'surveil'; n: number };
 
 /**
  * Actions a player can send. All are validated in the reducer.

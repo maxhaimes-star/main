@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { getCard, registerCards } from '../src/cube.ts';
-import { abilitiesOfInstance, applyAction, castOptions, createGame, type CardData, type Ctx, evalCount, type GameAction, type GameState, effectivePT, moveCard } from '../src/index.ts';
+import { abilitiesOfInstance, applyAction, castOptions, createGame, type CardData, type Ctx, evalCount, type GameAction, type GameState, type TargetRef, effectivePT, moveCard } from '../src/index.ts';
 import { registerScripts } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
 import { REAL, REAL_TOKENS } from './fixtures/noncube-cards.ts';
@@ -46,10 +46,13 @@ function put(g: GameState, ctx: Ctx, cardId: string, pid = 'a'): string {
   return iid;
 }
 /** Resolve the stack, answering questions with the option matching `pick` (else the first). */
-function resolveAll(g: GameState, ctx: Ctx, pick?: (labels: string[]) => number) {
-  for (let i = 0; i < 60 && (g.stack.length || g.pending.length); i++) {
+function resolveAll(g: GameState, ctx: Ctx, pick?: (labels: string[]) => number, targets?: TargetRef[][]) {
+  for (let i = 0; i < 60 && (g.stack.length || g.pending.length || g.players.some((p) => p.peek)); i++) {
     const q = g.pending[0];
-    if (q?.options.length) act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[Math.max(0, pick ? pick(q.options.map((o) => o.label)) : 0)].value });
+    const peeker = g.players.find((p) => p.peek);
+    if (peeker && !q) act(g, ctx, peeker.pid, { t: 'resolvePeek', top: [...peeker.peek!.iids], bottom: [], graveyard: [], hand: [], battlefield: [], exile: [], shuffle: false });
+    else if (q?.targets && targets) act(g, ctx, q.pid, { t: 'chooseTargets', id: q.id, targets });
+    else if (q?.options.length) act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[Math.max(0, pick ? pick(q.options.map((o) => o.label)) : 0)].value });
     else if (q) throw new Error(`unanswerable: ${q.prompt}`);
     else act(g, ctx, g.priority, { t: 'pass' });
   }
@@ -334,5 +337,71 @@ describe('tokens / animate / mana / remove counters details', () => {
     resolveAll(g, ctx);
     expect(g.cards[bear].counters['+1/+1']).toBe(1);
     expect(logText(g)).not.toMatch(MANUAL);
+  });
+});
+
+describe('trigger modes: LifeGained / LifeLost, CommitCrime, Cycled / AbilityCast, Scry, AttackerBlocked', () => {
+  it('Exquisite Blood (an opponent loses life -> gain that much) and Vanguard Seraph (first life gain each turn -> surveil 1)', () => {
+    const { g, ctx } = setup(['exquisite_blood', 'vanguard_seraph', 'lightning_bolt', 'lightning_bolt']);
+    put(g, ctx, 'exquisite_blood');
+    put(g, ctx, 'vanguard_seraph');
+    const life = g.players[0].life;
+    pool(g, 'a', { R: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.players[0].life).toBe(life + 3);
+    expect(logText(g).match(/surveils 1/g)?.length).toBe(1);
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.players[0].life).toBe(life + 6);
+    expect(logText(g).match(/surveils 1/g)?.length).toBe(1); // only the first time each turn
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Overzealous Muscle: targeting an opponent is a crime', () => {
+    const { g, ctx } = setup(['overzealous_muscle', 'lightning_bolt']);
+    const m = put(g, ctx, 'overzealous_muscle');
+    pool(g, 'a', { R: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[m].tempKeywords).toContain('Indestructible');
+    expect(evalCount('Count$CommittedCrimeThisTurn.1.0', { state: g, lookup: getCard, controller: 'a' })).toBe(1);
+  });
+
+  it('Prickly Marmoset (whenever you cycle a card) and Windcaller Aven (when you cycle this)', () => {
+    const { g, ctx } = setup(['prickly_marmoset', 'windcaller_aven']);
+    const pm = put(g, ctx, 'prickly_marmoset');
+    const aven = toHand(g, ctx, 'windcaller_aven');
+    pool(g, 'a', { U: 2, C: 1 });
+    const cyc = abilitiesOfInstance(g.cards[aven], g, getCard).find((e) => /Cycling/.test(e.ability.params.Keyword ?? ''))!;
+    act(g, ctx, 'a', { t: 'activate', iid: aven, ability: cyc.index, text: '' });
+    resolveAll(g, ctx, undefined, [[{ kind: 'card', iid: pm }]]);
+    expect(effectivePT(g.cards[pm], getCard, g)[0]).toBe(2 + 2);
+    expect(g.cards[pm].tempKeywords).toContain('Flying');
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Flamespeaker Adept: whenever you scry', () => {
+    const { g, ctx } = setup(['flamespeaker_adept', 'opt']);
+    const fa = put(g, ctx, 'flamespeaker_adept');
+    pool(g, 'a', { U: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'opt') });
+    resolveAll(g, ctx);
+    expect(effectivePT(g.cards[fa], getCard, g)[0]).toBe(2 + 2);
+  });
+
+  it('Silkenfist Fighter: whenever it becomes blocked, untap it', () => {
+    const { g, ctx } = setup(['silkenfist_fighter'], ['grizzly_bears']);
+    const sf = put(g, ctx, 'silkenfist_fighter');
+    const bear = put(g, ctx, 'grizzly_bears', 'b');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: sf, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 20 && g.step !== 'blockers'; i++) act(g, ctx, g.priority, { t: 'pass' });
+    expect(g.cards[sf].tapped).toBe(true);
+    act(g, ctx, 'b', { t: 'declareBlocker', iid: bear, attacker: sf });
+    act(g, ctx, 'b', { t: 'confirmBlockers' });
+    resolveAll(g, ctx);
+    expect(g.cards[sf].tapped).toBe(false);
   });
 });

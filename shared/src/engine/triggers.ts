@@ -42,6 +42,7 @@ export const SUPPORTED_MODES = new Set([
   'DamageDoneOnce', 'DamageDealtOnce', 'Sacrificed', 'Discarded', 'DiscardedAll', 'LandPlayed', 'Exiled',
   'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch', 'SearchedLibrary', 'DamageAll',
   'TokenCreated', 'TokenCreatedOnce', 'CounterAdded', 'CounterAddedOnce', 'AttackerUnblocked', 'AttackerUnblockedOnce',
+  'LifeGained', 'LifeLost', 'CommitCrime', 'AttackerBlocked', 'AbilityCast', 'Cycled', 'Scry', 'Surveil',
 ]);
 
 /** Trigger parameters the engine understands; a trigger with any other parameter is left to the players. */
@@ -54,7 +55,7 @@ const KNOWN_PARAMS = new Set([
   'TargetsValid', 'Attacked',
   // Checked in detect() (extraParams): "during your / an opponent's turn", disappear / revolt, threshold, hellbent, valiant,
   // the Nth counter, damage amounts, attacking with a <type>, "at the beginning of your second main phase".
-  'PlayerTurn', 'OpponentTurn', 'Revolt', 'Threshold', 'Hellbent', 'Valiant', 'CounterAmount', 'DamageAmount', 'ValidAttackers', 'PhaseCount', 'FirstCombat',
+  'FirstTime', 'PlayerTurn', 'OpponentTurn', 'Revolt', 'Threshold', 'Hellbent', 'Valiant', 'CounterAmount', 'DamageAmount', 'ValidAttackers', 'PhaseCount', 'FirstCombat',
 ]);
 
 const PROWESS_LINE = 'DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Prowess: +1/+1 until end of turn.';
@@ -204,6 +205,11 @@ function trackTurnEvents(state: GameState, ctx: Ctx) {
     } else if (ev.t === 'zone' && ev.to === 'battlefield') ti.activations[`entered|${ev.iid}`] = 1;
     if (ev.t === 'zone' && ev.cause === 'sacrifice') (state.remembered ??= {})[`sacrificed|${ev.snap.controller}`] = [ev.iid];
     if (ev.t === 'zone' && ev.cause === 'discard') ti.activations[`discarded|${ev.iid}`] = 1; // mayhem (engine/castkw.ts)
+    // Crimes committed this turn (Count$CommittedCrimeThisTurn): once per spell / ability.
+    if (ev.t === 'targeted' && isCrime(state, ev.pid, ev.target) && !ti.activations[`crimeItem|${ev.item}`]) {
+      ti.activations[`crimeItem|${ev.item}`] = 1;
+      ti.activations[`crime|${ev.pid}`] = (ti.activations[`crime|${ev.pid}`] ?? 0) + 1;
+    }
   }
   // Ascend: ten or more permanents -> the city's blessing (for the rest of the game).
   for (const p of state.players) {
@@ -480,6 +486,43 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: ev.pid, ...(ev.forMana ? { produced: ev.forMana } : {}) };
     }
+    case 'Scry': case 'Surveil': {
+      if (ev.t !== 'scry' || ev.mode !== mode.toLowerCase()) return null;
+      r = matchP(ev.pid, p.ValidPlayer, env);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, player: ev.pid, amount: ev.n };
+    }
+    case 'AbilityCast': case 'Cycled': {
+      if (ev.t !== 'activated') return null;
+      if (mode === 'Cycled' && ev.keyword !== 'Cycling' && ev.keyword !== 'TypeCycling') return null;
+      const c = state.cards[ev.iid];
+      r = and(matchC(c, p.ValidCard ?? 'Card', env), matchP(ev.pid, mode === 'Cycled' ? p.ValidPlayer : p.ValidActivatingPlayer, env));
+      if (mode === 'AbilityCast' && p.ValidSA) r = and(r, activatedSA(p.ValidSA, ev));
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: ev.pid, source: ev.item };
+    }
+    case 'CommitCrime': {
+      // A crime: a spell or ability that targets an opponent, anything an opponent controls, or a card in an opponent's graveyard.
+      if (ev.t !== 'targeted' || !isCrime(state, ev.pid, ev.target)) return null;
+      r = matchP(ev.pid, p.ValidPlayer, env);
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, player: ev.pid, source: ev.item };
+    }
+    case 'AttackerBlocked': {
+      if (ev.t !== 'blocks') return null;
+      r = and(matchC(state.cards[ev.attacker], p.ValidCard, env), matchC(state.cards[ev.iid], p.ValidBlocker, env));
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.attacker, player: state.cards[ev.attacker]?.controller, target: ev.iid, defender: state.cards[ev.iid]?.controller };
+    }
+    case 'LifeGained': case 'LifeLost': {
+      if (ev.t !== 'life' || (mode === 'LifeGained') !== (ev.amount > 0)) return null;
+      r = matchP(ev.pid, p.ValidPlayer, env);
+      if (p.ValidSource) r = and(r, 'unknown'); // which source caused it isn't known here
+      // FirstTime$ True: "for the first time each turn" (this event is counted already).
+      if (p.FirstTime === 'True' && (turnInfo(state).activations[`lifeEvents${ev.amount > 0 ? '+' : '-'}|${ev.pid}`] ?? 0) > 1) r = false;
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, player: ev.pid, amount: Math.abs(ev.amount) };
+    }
     case 'LandPlayed': {
       if (ev.t !== 'landPlayed') return null;
       r = matchC(state.cards[ev.iid], p.ValidCard, env);
@@ -529,6 +572,8 @@ function onceKey(mode: string, hit: TriggerContext): string | null {
   switch (mode) {
     case 'ChangesZoneAll': case 'DiscardedAll': case 'AttackersDeclared': case 'DamageAll': case 'TokenCreatedOnce': case 'AttackerUnblockedOnce': return '';
     case 'CounterAddedOnce': return `c:${hit.card}`;
+    case 'CommitCrime': return `s:${hit.source}`; // once per spell / ability
+    case 'AttackerBlocked': return `a:${hit.card}`; // once per attacker, however many blockers
     case 'DamageDoneOnce': return `t:${hit.target}`;
     case 'DamageDealtOnce': return `s:${hit.source}`;
   }
@@ -547,7 +592,7 @@ function hostsFor(state: GameState, ev: GameEvent, leftSnaps: Map<string, CardIn
   const leaveEvent = ev.t === 'zone' && ev.from === 'battlefield';
   if (leaveEvent) for (const snap of leftSnaps.values()) add(snap, true);
   if (ev.t === 'zone') add(ev.from === 'battlefield' ? ev.snap : state.cards[ev.iid] ?? ev.snap, ev.from === 'battlefield' || !state.cards[ev.iid]);
-  if (ev.t === 'cast') add(state.cards[ev.iid], false);
+  if (ev.t === 'cast' || ev.t === 'activated') add(state.cards[ev.iid], false);
   for (const iid of state.battlefield) add(state.cards[iid], false);
   for (const p of state.players) for (const iid of p.zones.graveyard) {
     const c = state.cards[iid];
@@ -561,7 +606,7 @@ function hostZoneOk(host: Host, p: Record<string, string>, ev: GameEvent): boole
   if (host.effect) return true;
   const zone: Zone = host.lki ? 'battlefield' : host.c.zone;
   if (zone === 'hand' || zone === 'library' || zone === 'sideboard') return false; // hidden zones: never (logs are public)
-  const isEventCard = (ev.t === 'zone' || ev.t === 'cast') && ev.iid === host.c.iid;
+  const isEventCard = (ev.t === 'zone' || ev.t === 'cast' || ev.t === 'activated') && ev.iid === host.c.iid;
   if (p.TriggerZones) {
     const zs = p.TriggerZones.split(',').map((z) => ZONE_NAMES[z.trim()]);
     if (zs.includes(zone)) return true;
@@ -617,10 +662,59 @@ function attackedMatches(state: GameState, target: string, spec: string, env: Ma
   return res;
 }
 
+/**
+ * Life gained / lost since the last detection, as events (Mode$ LifeGained / LifeLost): life totals are compared
+ * instead of hooking every place that changes them. Gains and losses of one batch net out.
+ */
+function lifeEvents(state: GameState) {
+  const seen = (state.lifeSeen ??= {});
+  for (const p of state.players) {
+    const was = seen[p.pid];
+    seen[p.pid] = p.life;
+    if (was === undefined || was === p.life || state.phase !== 'playing') continue;
+    (state.events ??= []).push({ t: 'life', pid: p.pid, amount: p.life - was });
+    const ti = turnInfo(state);
+    const k = `lifeEvents${p.life > was ? '+' : '-'}|${p.pid}`;
+    ti.activations[k] = (ti.activations[k] ?? 0) + 1;
+  }
+}
+
+/** ValidSA$ of an AbilityCast trigger against an activation ("SpellAbility.!ManaAbility", "Activated.Loyalty", "Activated.Exhaust", "Activated.!hasTapCost"). */
+function activatedSA(valid: string, ev: Extract<GameEvent, { t: 'activated' }>): Tri {
+  let res: Tri = false;
+  for (const alt of valid.split(',')) {
+    const [head, ...props] = alt.trim().split('.');
+    if (!/^(SpellAbility|Activated|Ability)$/.test(head)) { if (head === 'Spell') continue; return 'unknown'; }
+    let ok: Tri = true;
+    for (const prop of props.join('.').split('+').filter(Boolean)) {
+      if (prop === '!ManaAbility' || prop === 'nonManaAbility') continue;
+      else if (prop === 'Loyalty') ok = and(ok, !!ev.loyalty);
+      else if (prop === '!Loyalty') ok = and(ok, !ev.loyalty);
+      else if (prop === 'Exhaust') ok = and(ok, !!ev.exhaust);
+      else if (prop === 'hasTapCost') ok = and(ok, !!ev.tapCost);
+      else if (prop === '!hasTapCost') ok = and(ok, !ev.tapCost);
+      else ok = 'unknown';
+    }
+    if (ok === true) return true;
+    if (ok === 'unknown') res = 'unknown';
+  }
+  return res;
+}
+
+/** Does targeting `target` with a spell / ability controlled by `pid` commit a crime? */
+export function isCrime(state: GameState, pid: string, target: string): boolean {
+  if (state.players.some((p) => p.pid === target)) return target !== pid;
+  const c = state.cards[target];
+  if (!c) return false;
+  if (c.zone === 'graveyard') return c.owner !== pid;
+  return (c.zone === 'battlefield' || c.zone === 'stack') && c.controller !== pid;
+}
+
 /** Find the triggered abilities that the events in state.events trigger, and queue them (APNAP). */
 function detect(state: GameState, ctx: Ctx) {
   // No-blockers shortcut (strict: the defender couldn't block): the attackers are unblocked all the same.
   if ((state.events ?? []).some((e) => e.t === 'phase' && e.step === 'blockers') && state.combat.blockersDeclared) emitUnblocked(state);
+  lifeEvents(state);
   const events = state.events ?? [];
   state.events = [];
   if (!events.length) return;

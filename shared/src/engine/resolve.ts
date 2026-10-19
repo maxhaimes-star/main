@@ -224,6 +224,7 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
       case 'TriggeredCardOwner': return { cards: [], players: players(t.card ? (r.lki[t.card]?.owner ?? state.cards[t.card]?.owner) : undefined) };
       case 'TriggeredPlayer': case 'TriggeredActivator': case 'TriggeredAttackingPlayer': return { cards: [], players: players(t.player) };
       case 'TriggeredDefendingPlayer': return { cards: [], players: players(t.defender) };
+      case 'TriggeredBlocker': case 'TriggeredBlockerLKICopy': return t.mode === 'AttackerBlocked' ? { cards: cardIds(t.target).filter((x) => state.cards[x]), players: [] } : undefined;
       case 'TriggeredSourceController': return { cards: [], players: players(ctrl(t.source)) };
       case 'TriggeredTarget': return isPlayer(t.target) ? { cards: [], players: players(t.target) } : { cards: cardIds(t.target), players: [] };
     }
@@ -769,6 +770,7 @@ function peekStep(state: GameState, ctx: Ctx, r: Run, i: number, me: GamePlayer)
   if (n == null || !o || o.players.length !== 1 || o.players[0] !== r.controller) { manual(state, ctx, r, step); return 'ok'; }
   const mode = step.api === 'Scry' ? 'scry' : step.api === 'Surveil' ? 'surveil' : 'look';
   openPeek(state, ctx, r, i, me, mode, n);
+  if (mode !== 'look' && n > 0) emit(state, { t: 'scry', pid: r.controller, mode, n });
   const verb = mode === 'scry' ? `scries ${n}` : mode === 'surveil' ? `surveils ${n}` : `looks at the top ${n}`;
   log(state, ctx, r.controller, `${me.name} ${verb} (${r.sourceName}${mode === 'look' ? `: ${step.description}` : ''}).`);
   return 'wait';

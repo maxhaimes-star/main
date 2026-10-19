@@ -2,7 +2,7 @@ import { anyColorCost } from './permissions.ts';
 import { keptAbility } from './copy.ts';
 /** Casting / activating with the engine: target validation and cost payment. */
 import { cardName, payFromPool } from '../game/rules.ts';
-import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
+import { type Ctx, emit, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, StackItem } from '../game/types.ts';
 import { abilityAt, abilityLine, castSpellAbility, getScript, GRANT_BASE, scriptRef, targetSpecs } from './script.ts';
 import { FOREIGN_BASE, foreignAbility } from './grants.ts';
@@ -200,6 +200,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const item: StackItem = { id: randomId(ctx.rng), kind: 'ability', sourceIid: c.iid, controller: pid, text: `${src}: ${ab.description}`, auto };
   if (a.x != null) item.x = a.x;
   state.stack.push(item);
+  emit(state, { t: 'activated', iid: c.iid, pid, item: item.id, ...(ab.params.Keyword ? { keyword: ab.params.Keyword } : {}), ...(counterDelta.loyalty != null ? { loyalty: true } : {}), ...(ab.params.Exhaust === 'True' ? { exhaust: true } : {}), ...(tap ? { tapCost: true } : {}) });
   const loy = counterDelta.loyalty;
   log(state, ctx, pid, `${me.name} activates ${src}${loy != null ? ` [${loy > 0 ? '+' : ''}${loy}]` : ''}: ${ab.description}${notes.length ? ` (${notes.join(', ')})` : ''}`);
   if (byHand.length) log(state, ctx, pid, `Pay by hand: ${byHand.join(' ')}.`);

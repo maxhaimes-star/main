@@ -26,7 +26,7 @@ export interface CountEnv {
   colorsSpent?: string[];
 }
 
-const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent'];
+const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn'];
 export const KNOWN_CONDITIONS = new Set([...FLAGS, 'PlayerTurn', 'NotPlayerTurn', 'Blessing', 'Monarch']);
 const ZONED = { ValidGraveyard: 'graveyard', ValidHand: 'hand', ValidLibrary: 'library', ValidExile: 'exile' } as const;
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -112,6 +112,7 @@ export function conditionTrue(name: string, env: CountEnv): boolean | undefined 
     case 'NotPlayerTurn': return s.activePlayer !== env.controller;
     case 'Revolt': return !!s.turnInfo && s.turnInfo.turn === s.turn && s.turnInfo.leftBattlefield.includes(env.controller);
     case 'Threshold': return zoneCards(s, env.controller, 'graveyard').length >= 7;
+    case 'CommittedCrimeThisTurn': return !!s.turnInfo && s.turnInfo.turn === s.turn && (s.turnInfo.activations[`crime|${env.controller}`] ?? 0) > 0; // triggers.ts trackTurnEvents
     case 'Hellbent': return zoneCards(s, env.controller, 'hand').length === 0;
     case 'Blessing': case 'Monarch': {
       const p = s.players.find((x) => x.pid === env.controller) as { designations?: string[] } | undefined;
