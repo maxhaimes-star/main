@@ -161,6 +161,7 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'dashed': return !!c.castInfo?.dashed;
     case 'DefenderCtrl': return env.defender === undefined ? 'unknown' : c.controller === env.defender;
     case 'RememberedPlayerCtrl': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.controller);
+    case 'RememberedPlayerOwn': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.owner);
     case 'inRealZoneGraveyard': return c.zone === 'graveyard';
     case 'inRealZoneBattlefield': return c.zone === 'battlefield';
     case 'inRealZoneExile': return c.zone === 'exile';

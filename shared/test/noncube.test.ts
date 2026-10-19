@@ -618,3 +618,14 @@ describe('OriginalHost: abilities an Equipment grants', () => {
     expect(logText(g)).not.toMatch(MANUAL);
   });
 });
+
+describe('Count$ with remembered objects (IsRemembered, RememberedPlayerOwn)', () => {
+  it('counts remembered library cards not owned by the remembered player, summing mana values', () => {
+    const { g } = setup(['serra_angel'], ['grizzly_bears']);
+    const angel = find(g, 'a', 'serra_angel');
+    const bear = find(g, 'b', 'grizzly_bears');
+    const env = { state: g, lookup: getCard, controller: 'a', remembered: [angel, bear, 'b'] };
+    expect(evalCount('Count$ValidLibrary Card.IsRemembered+!RememberedPlayerOwn$CardManaCost', env)).toBe(5); // Bob is remembered: Alice's Serra Angel
+    expect(evalCount('Count$ValidLibrary Card.IsRemembered$CardManaCost', env)).toBe(7);
+  });
+});

@@ -26,6 +26,8 @@ export interface CountEnv {
   colorsSpent?: string[];
   /** The spell's optional additional cost was paid (S:Mode$ OptionalCost). */
   optionalCost?: boolean;
+  /** Objects the resolution remembered (IsRemembered / RememberedPlayerOwn in Count$Valid...). */
+  remembered?: string[];
 }
 
 const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn', 'Void', 'OptionalCost', 'OptionalGenericCostPaid'];
@@ -176,7 +178,7 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     const to = left ? undefined : m[1].toLowerCase();
     const from = left ? 'graveyard' : m[2]?.toLowerCase();
     const valid = left ? m[1] : m[3];
-    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
+    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup, ...(env.remembered ? { remembered: env.remembered } : {}) };
     let count = 0;
     for (const mv of moves ?? []) {
       if ((to && mv.to !== to) || (from && mv.from !== from) || (left && mv.to === 'graveyard')) continue;
@@ -191,7 +193,7 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     n = src && !isHidden(src) ? src.counters[kind] ?? 0 : 0;
   } else if ((m = CAST_RE.exec(body))) {
     if (!('history' in s)) return undefined; // a GameView: no move history
-    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
+    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup, ...(env.remembered ? { remembered: env.remembered } : {}) };
     const hits: CardInstance[] = [];
     for (const c of s.turnStats?.castCards ?? []) {
       const r = matchCard(c, m[1], menv);
@@ -200,7 +202,7 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     }
     n = m[2] ? aggregate(hits, m[2], env) : hits.length;
   } else if ((m = VALID_RE.exec(body))) {
-    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
+    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup, ...(env.remembered ? { remembered: env.remembered } : {}) };
     // Valid = battlefield; ValidGraveyard / ValidBattlefield,Graveyard ...: those zones (all players').
     const zones = m[1] === 'Valid' ? ['Battlefield'] : m[1].slice('Valid'.length).split(',');
     const pool: CardInstance[] = [];
