@@ -10,7 +10,7 @@
  *    gated by Condition$ / IsPresent$ / CheckSVar$.
  *  - RaiseCost / ReduceCost for spells (applied when casting) and activated abilities.
  *  - Restrictions: CantBeCast, CantAttack, CantBlock, CantBlockBy (enforced; overridable with `force`).
- *  - Reminders only: MustAttack, MinMaxBlocker, CantDraw, and anything else (listed by activeStatics).
+ *  - Reminders only: MustAttack, MinMaxBlocker, and anything else (listed by activeStatics). CantDraw: drawHooks (game/hooks.ts).
  */
 import { parseManaSymbols } from '../cards.ts';
 import { effectivePT, faceOf, hasKeyword, type Lookup } from '../game/rules.ts';
@@ -20,6 +20,8 @@ import type { EffectRecord, TimedEffect } from './types.ts';
 import { type MatchEnv, type Tri, matchCard } from './targets.ts';
 import { evasionRestriction } from './protection.ts';
 import { bestPermission } from './permissions.ts';
+import { getCard } from '../cube.ts';
+import { drawHooks } from '../game/hooks.ts';
 
 // ------------------------------------------------------------------ types
 
@@ -492,7 +494,7 @@ const CONT_HANDLED_KEYS = new Set([
   'GainsAbilitiesOf', 'GainsAbilitiesOfZones',
 ]);
 const ENFORCED_MODES = new Set(['CantBeCast', 'CantAttack', 'CantBlock', 'CantBlockBy', 'RaiseCost', 'ReduceCost', 'CantPreventDamage', 'CantBeActivated', 'CantGainLife', 'CastWithFlash',
-  // combat-rules.ts (attack requirements, minimum blockers), resolve.ts (draw limits), costs.ts (alternative costs)
+  // combat-rules.ts (attack requirements, minimum blockers), drawHooks below (draw limits), costs.ts (alternative costs)
   'MustAttack', 'MinMaxBlocker', 'CantDraw', 'AlternativeCost',
   // triggers.ts exertOffer (Exert as it attacks), extraTriggerCount (Panharmonicon: Sanctum of All)
   'OptionalAttackCost', 'Panharmonicon',
@@ -596,6 +598,20 @@ export function lifeGainPrevented(st: StaticsState, pid: string, lookup: Lookup)
   }
   return null;
 }
+
+/** Most cards `pid` may draw each turn (CantDraw statics: Narset, Parter of Veils' DrawLimit$ 1; no DrawLimit$ = none). */
+export function drawLimit(st: StaticsState, pid: string, lookup: Lookup): { max: number; reason: string } | undefined {
+  let out: { max: number; reason: string } | undefined;
+  for (const { s } of active(st, lookup, 'CantDraw')) {
+    const v = s.params.ValidPlayer ?? 'Player';
+    const hit = /^You/.test(v) ? s.controller === pid : /^Opponent/.test(v) ? s.controller !== pid : true;
+    if (!hit) continue;
+    const max = parseInt(s.params.DrawLimit ?? '0', 10) || 0;
+    if (!out || max < out.max) out = { max, reason: `${srcName(st, s, lookup)}: ${s.description}` };
+  }
+  return out;
+}
+drawHooks.limit = (state, pid) => drawLimit(state, pid, getCard);
 
 /** "You may cast <spells> as though they had flash" from effects (Teferi, Time Raveler's +1) and permanents. */
 export function grantsFlash(st: StaticsState, c: CardInstance, pid: string, lookup: Lookup): boolean {

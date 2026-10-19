@@ -2,7 +2,7 @@ import type { TokenData } from '../cards.ts';
 import type { Rng } from '../draft.ts';
 import { afterMove, beforeMove } from '../engine/durations.ts';
 import { faceOf, type Lookup } from './rules.ts';
-import { moveHooks, type MoveOpts } from './hooks.ts';
+import { drawHooks, moveHooks, type MoveOpts } from './hooks.ts';
 import type { CardInstance, GameEvent, GamePlayer, GameState, PlayerZone, Zone } from './types.ts';
 
 /** Low-level state helpers shared by the reducer and the card-effects engine. */
@@ -70,7 +70,12 @@ export function shuffleLibrary(state: GameState, p: GamePlayer, rng: Rng) {
 
 export function drawCards(state: GameState, p: GamePlayer, n: number): number {
   let drawn = 0;
+  const limit = state.phase === 'playing' && n > 0 ? drawHooks.limit?.(state, p.pid) : undefined;
   for (let i = 0; i < n; i++) {
+    if (limit && (turnStats(state).drawn[p.pid] ?? 0) >= limit.max) {
+      state.log.push({ at: state.log[state.log.length - 1]?.at ?? 0, pid: p.pid, text: `${p.name} can't draw ${n - i === 1 ? 'that card' : `${n - i} more cards`} (${limit.reason}).` });
+      break;
+    }
     const iid = p.zones.library.shift();
     if (!iid) { if (state.phase === 'playing') p.drewFromEmpty = true; break; }
     const c = state.cards[iid];

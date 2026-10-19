@@ -185,7 +185,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       } else if (skip) {
         log(state, ctx, active.pid, `${active.name} skips their draw step (${skip}).`);
       } else if (drawCards(state, active, 1) === 0) {
-        log(state, ctx, active.pid, `${active.name} can't draw — library is empty!`);
+        if (!active.zones.library.length) log(state, ctx, active.pid, `${active.name} can't draw — library is empty!`);
       } else {
         const ev = state.events?.[state.events.length - 1];
         if (ev?.t === 'drawn' && ev.pid === active.pid) ev.firstInDrawStep = true;

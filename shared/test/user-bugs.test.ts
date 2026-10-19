@@ -895,3 +895,45 @@ describe('18: Cloak and Dagger, Entwined — exile a nonland card from their han
     expect(g.cards[nadu].zone).toBe('battlefield');
   });
 });
+
+describe("19: Narset, Parter of Veils — each opponent can't draw more than one card each turn", () => {
+  const drawn = (g: GameState, pid: string) => g.turnStats?.drawn?.[pid] ?? 0;
+  function brainstorm(narsetFor: 'a' | 'b') {
+    const { g, ctx } = setup(['brainstorm', 'narset_parter_of_veils'], ['narset_parter_of_veils'], 'basic_island', 'basic_island');
+    put(g, ctx, narsetFor, 'narset_parter_of_veils');
+    put(g, ctx, 'a', 'basic_island');
+    g.events = [];
+    const bs = toZone(g, ctx, 'a', 'brainstorm', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: bs });
+    drain(g, ctx);
+    for (let i = 0; i < 5 && g.players[0].needsBottom; i++) answer(g, ctx);
+    drain(g, ctx);
+    return { g, ctx };
+  }
+
+  it("an opponent's Narset: Brainstorm draws only one card", () => {
+    const { g } = brainstorm('b');
+    expect(drawn(g, 'a'), logTail(g)).toBe(1);
+  });
+
+  it('your own Narset does not limit you', () => {
+    const { g } = brainstorm('a');
+    expect(drawn(g, 'a'), logTail(g)).toBe(3);
+  });
+
+  it('the limit counts the draw for the turn and resets next turn', () => {
+    const { g, ctx } = setup(['narset_parter_of_veils'], ['brainstorm'], 'basic_island', 'basic_island');
+    put(g, ctx, 'a', 'narset_parter_of_veils');
+    for (let i = 0; i < 40 && !(g.activePlayer === 'b' && g.step === 'main1'); i++) {
+      if (g.pending.length) answer(g, ctx); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(drawn(g, 'b'), logTail(g)).toBe(1);
+    put(g, ctx, 'b', 'basic_island');
+    const bs = toZone(g, ctx, 'b', 'brainstorm', 'hand');
+    act(g, ctx, 'b', { t: 'cast', iid: bs });
+    drain(g, ctx);
+    for (let i = 0; i < 5 && g.players[1].needsBottom; i++) answer(g, ctx);
+    drain(g, ctx);
+    expect(drawn(g, 'b'), logTail(g)).toBe(1);
+  });
+});

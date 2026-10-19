@@ -12,3 +12,12 @@ export interface MoveOpts { position?: 'top' | 'bottom' | number; faceDown?: boo
 export const moveHooks: {
   before?: (state: GameState, ctx: Ctx, iid: string, to: Zone, opts: MoveOpts) => { to: Zone; opts: MoveOpts; after?: () => void } | undefined;
 } = {};
+
+/**
+ * Draw-limit hook ("each opponent can't draw more than one card each turn": Narset, Parter of Veils), installed by
+ * engine/statics.ts. state.ts drawCards asks it before each draw while the game is played: the most cards `pid` may
+ * have drawn this turn, with the reason, or undefined when unlimited.
+ */
+export const drawHooks: {
+  limit?: (state: GameState, pid: string) => { max: number; reason: string } | undefined;
+} = {};
