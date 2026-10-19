@@ -8,6 +8,10 @@ import { TRIGGER_KEYWORDS } from './kwtriggers.ts';
 export const HANDLED_KEYWORDS = new Set([
   'Flying', 'Flash', 'Haste', 'Trample', 'Lifelink', 'Deathtouch', 'Vigilance', 'First Strike', 'Double Strike', 'Indestructible',
   'Reach', 'Shroud', 'Hexproof', 'Defender', 'Infect', 'Prowess', 'Menace', 'Shadow', 'Landwalk', 'Protection', 'Ward', 'Ascend',
+  // Changeling: every creature type (game/rules.ts printedFace -> allCreatureTypes).
+  'Changeling',
+  // Affinity for <type> (statics.ts adjustCost); Convoke (strict.ts auto-pay taps creatures).
+  'Affinity', 'Convoke',
   'Cycling', 'TypeCycling', 'Equip', 'Reconfigure', 'Level up', 'Crew', 'Ninjutsu', 'Chapter', 'Hideaway',
   'ETBReplacement', 'etbCounter', 'Enchant',
   'Flashback', 'Evoke', 'Overload', 'Kicker', 'Escape', 'Dash', 'Buyback', 'Delve', 'Surge',

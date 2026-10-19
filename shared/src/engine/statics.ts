@@ -830,6 +830,17 @@ export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, co
     if (p.MinMana) minMana = Math.max(minMana, parseInt(p.MinMana, 10) || 0);
     notes.push(`${srcName(st, s, lookup)} ${raise ? '+' : '-'}{${n}}`);
   }
+  // Affinity for <type>: this spell costs {1} less for each <type> you control (K:Affinity:Artifact).
+  if (kind === 'Spell' && inst.cardId && inst.zone !== 'battlefield') {
+    const ref = scriptRef(inst);
+    for (const k of getScript(ref?.cardId ?? inst.cardId)?.[ref?.face ?? 0]?.keywords ?? []) {
+      const m = /^Affinity:([^:]+)/.exec(k);
+      if (!m) continue;
+      const env = { controller: pid, lookup };
+      const n = st.battlefield.filter((iid) => { const x = st.cards[iid]; return !!x && x.controller === pid && !isHidden(x) && matchCard(x as CardInstance, m[1], env) === true; }).length;
+      if (n) { delta -= n; notes.push(`affinity -{${n}}`); }
+    }
+  }
   if (!delta) return { cost, notes: [] };
   return { cost: changeGeneric(cost, delta, minMana), notes };
 }

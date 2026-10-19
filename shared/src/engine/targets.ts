@@ -57,7 +57,7 @@ function facts(c: CardInstance, lookup: Lookup, pt?: MatchEnv['pt']): CardFacts 
   const id = (c.zone === 'battlefield' ? c.copyOf : undefined) ?? c.cardId;
   const data = id ? lookup(id) : undefined;
   const colors = f.colors ?? (c.token && !c.cardId ? c.token.colors : data?.colors ?? []);
-  const allTypes = f.allCreatureTypes && f.types.includes('Creature');
+  const allTypes = f.allCreatureTypes && (f.types.includes('Creature') || f.types.includes('Kindred') || f.types.includes('Tribal'));
   const plus = (c.counters['+1/+1'] ?? 0) - (c.counters['-1/-1'] ?? 0);
   const n = (v?: string) => { const x = parseInt(v ?? '', 10); return Number.isNaN(x) ? 0 : x; };
   const onBf = c.zone === 'battlefield';

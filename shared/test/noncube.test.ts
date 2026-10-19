@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { getCard, registerCards } from '../src/cube.ts';
-import { abilitiesOfInstance, applyAction, castOptions, createGame, type CardData, type Ctx, evalCount, type GameAction, type GameState, type TargetRef, effectivePT, moveCard } from '../src/index.ts';
+import { abilitiesOfInstance, applyAction, castOptions, createGame, type CardData, type Ctx, effectiveCost, evalCount, type GameAction, type GameState, type TargetRef, effectivePT, moveCard } from '../src/index.ts';
 import { registerScripts } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
 import { REAL, REAL_TOKENS } from './fixtures/noncube-cards.ts';
@@ -403,5 +403,23 @@ describe('trigger modes: LifeGained / LifeLost, CommitCrime, Cycled / AbilityCas
     act(g, ctx, 'b', { t: 'confirmBlockers' });
     resolveAll(g, ctx);
     expect(g.cards[sf].tapped).toBe(false);
+  });
+});
+
+describe('keywords: Affinity, Changeling', () => {
+  it('Frogmite (affinity for artifacts) costs {1} less for each artifact you control', () => {
+    const { g, ctx } = setup(['frogmite', 'boros_signet', 'mox_diamond']);
+    put(g, ctx, 'boros_signet');
+    put(g, ctx, 'mox_diamond');
+    const fm = toHand(g, ctx, 'frogmite');
+    expect(effectiveCost(g, fm, 0, getCard, 'a')).toBe('{2}');
+  });
+
+  it('Changeling: Universal Automaton is a Goblin (beholds for Mudbutton Cursetosser)', () => {
+    const { g, ctx } = setup(['universal_automaton', 'mudbutton_cursetosser']);
+    put(g, ctx, 'universal_automaton');
+    const iid = toHand(g, ctx, 'mudbutton_cursetosser');
+    const o = castOptions(g, iid).find((x) => /Behold/.test(x.label))!;
+    expect(o.unavailable ?? '').toBe('');
   });
 });

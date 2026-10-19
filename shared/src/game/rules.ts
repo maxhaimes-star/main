@@ -96,6 +96,7 @@ function printedFace(inst: CardInstance, lookup: Lookup, isToken: boolean): Face
       name: f.name, manaCost: f.manaCost, typeLine: f.typeLine, oracle: f.oracle, power: f.power, toughness: f.toughness,
       loyalty: f.loyalty, types: typesOf(f.typeLine), keywords: parseKeywords(f.oracle), isToken,
       image: back ? card.backImage : card.image, localImage: back ? undefined : card.localImage, colors: [...card.colors],
+      ...(/^Changeling\b/m.test(f.oracle) ? { allCreatureTypes: true } : {}), // rule 702.73: every creature type, in every zone
     };
   }
   return {
@@ -103,6 +104,7 @@ function printedFace(inst: CardInstance, lookup: Lookup, isToken: boolean): Face
     toughness: card.toughness, loyalty: card.loyalty, types: card.types,
     keywords: card.keywords.length ? [...new Set([...card.keywords, ...parseKeywords(card.oracle)])] : parseKeywords(card.oracle),
     isToken, image: card.image, localImage: card.localImage, colors: [...card.colors],
+    ...(card.keywords.includes('Changeling') || /^Changeling\b/m.test(card.oracle) ? { allCreatureTypes: true } : {}),
   };
 }
 
