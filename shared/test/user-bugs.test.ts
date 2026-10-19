@@ -850,3 +850,48 @@ describe('17: Ocelot Pride — end-step Cat after combat lifelink or a manual li
     expect(cats(g), logTail(g)).toBe(1);
   });
 });
+
+describe('18: Cloak and Dagger, Entwined — exile a nonland card from their hand or the targeted creature', () => {
+  function enter(withCreature: boolean) {
+    const { g, ctx } = setup(['cloak_and_dagger_entwined'], ['lightning_bolt', 'nadu_winged_wisdom']);
+    const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    g.events = [];
+    const cd = put(g, ctx, 'a', 'cloak_and_dagger_entwined');
+    processTriggers(g, ctx);
+    const q = g.pending[0];
+    expect(q?.targets, logTail(g)).toBeTruthy();
+    act(g, ctx, 'a', { t: 'chooseTargets', id: q.id, targets: [[{ kind: 'player', pid: 'b' }], withCreature ? [{ kind: 'card', iid: nadu }] : []] });
+    return { g, ctx, bolt, nadu, cd };
+  }
+
+  it('targeting only the opponent: the chosen hand card is exiled (lands not offered) and returns when C&D leaves', () => {
+    const { g, ctx, bolt, cd } = enter(false);
+    let offered: string[] = [];
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => o.value === bolt)?.value ?? q.options[0].value; });
+    expect(offered, logTail(g)).toContain(bolt);
+    expect(offered.some((v) => g.cards[v]?.cardId === 'basic_mountain')).toBe(false);
+    expect(g.cards[bolt].zone, logTail(g)).toBe('exile');
+    moveCard(g, ctx, cd, 'graveyard');
+    drain(g, ctx);
+    expect(g.cards[bolt].zone, logTail(g)).toBe('hand');
+  });
+
+  it('with a targeted creature: the creature can be exiled instead', () => {
+    const { g, ctx, nadu } = enter(true);
+    let offered: string[] = [];
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => o.value === nadu)?.value ?? q.options[0].value; });
+    expect(offered, logTail(g)).toContain(nadu);
+    expect(g.cards[nadu].zone, logTail(g)).toBe('exile');
+  });
+
+  it('"you may": choosing nothing is allowed', () => {
+    const { g, ctx, bolt, nadu } = enter(true);
+    let offered: string[] = [];
+    const skip = (v: string) => v === 'done' || v === 'none';
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => skip(o.value))?.value ?? q.options[q.options.length - 1].value; });
+    expect(offered.some(skip), logTail(g)).toBe(true);
+    expect(g.cards[bolt].zone).toBe('hand');
+    expect(g.cards[nadu].zone).toBe('battlefield');
+  });
+});

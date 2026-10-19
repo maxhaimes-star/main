@@ -1030,7 +1030,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       }
       if (!cards) {
         // Hidden choice: search a library, or pick from hand / graveyard / exile / battlefield (one or more zones).
-        const ownerPid = p.DefinedPlayer ? defined(state, r, i, p.DefinedPlayer)?.players[0] : pickFromPlayer ? targetPlayers!.players[0] : r.controller;
+        let ownerPid = p.DefinedPlayer ? defined(state, r, i, p.DefinedPlayer)?.players[0] : pickFromPlayer ? targetPlayers!.players[0] : r.controller;
+        // "DefinedPlayer$ Targeted" after a creature-target step (Cloak and Dagger): the player targeted earlier in the chain.
+        if (!ownerPid && p.DefinedPlayer === 'Targeted') ownerPid = r.targets.flat().find((t) => t.kind === 'player')?.pid;
         if (!ownerPid) { log(state, ctx, r.controller, `${r.sourceName}: no player to choose from.`); return 'ok'; }
         const chooser = player(state, ownerPid);
         const chooserPid = p.Chooser === 'You' ? r.controller : ownerPid;
@@ -1067,7 +1069,9 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         }
         const where = dest === 'library' ? (p.LibraryPosition === '-1' ? `on the bottom of ${yours} library` : `on top of ${yours} library`) : `to ${dest === 'battlefield' ? 'the battlefield' : dest === 'exile' ? 'exile' : `${yours} ${dest}`}`;
         const optional = search ? p.Mandatory !== 'True' && (p.ChangeType ?? 'Card') !== 'Card' || p.Optional === 'True'
-          : p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True' || !/^\d+$/.test(p.ChangeNum ?? '1'));
+          : p.Mandatory !== 'True' && (origin !== 'hand' || p.Optional === 'True' || !/^\d+$/.test(p.ChangeNum ?? '1')
+            // "You may exile a nonland card from their hand or the chosen creature" (Cloak and Dagger).
+            || alts.some((a) => a.targetedBy));
         const created = startPicks(state, ctx, [{
           kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional,
           dest, params: p, ...(host ? { untilHost: host } : {}), ...(origin === 'hand' && ownerPid !== chooserPid ? { reveal: ownerPid } : {}),
