@@ -814,3 +814,39 @@ describe('16: Atraxa, Grand Unifier — one revealed card of each card type to h
     expect(new Set(g.players[0].zones.library.slice(-10))).toEqual(new Set(top));
   });
 });
+
+describe('17: Ocelot Pride — end-step Cat after combat lifelink or a manual life gain', () => {
+  const cats = (g: GameState) => g.battlefield.filter((i) => g.cards[i].token?.name === 'Cat' && g.cards[i].controller === 'a').length;
+  function toNextTurn(g: GameState, ctx: Ctx) {
+    for (let i = 0; i < 60 && g.activePlayer === 'a'; i++) {
+      if (g.pending.length) answer(g, ctx); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+  }
+
+  it('Ocelot Pride deals combat damage (lifelink): one Cat at the end step', () => {
+    const { g, ctx } = setup(['ocelot_pride']);
+    const ocelot = put(g, ctx, 'a', 'ocelot_pride');
+    g.events = [];
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: ocelot, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    toNextTurn(g, ctx);
+    expect(g.players[0].life, logTail(g)).toBe(21);
+    expect(cats(g), logTail(g)).toBe(1);
+  });
+
+  it('no life gained: no Cat; a manual +1 life: one Cat', () => {
+    const s1 = setup(['ocelot_pride']);
+    put(s1.g, s1.ctx, 'a', 'ocelot_pride');
+    toNextTurn(s1.g, s1.ctx);
+    expect(cats(s1.g)).toBe(0);
+    const { g, ctx } = setup(['ocelot_pride']);
+    put(g, ctx, 'a', 'ocelot_pride');
+    act(g, ctx, 'a', { t: 'requestFixMode' });
+    act(g, ctx, 'b', { t: 'answerFixMode', accept: true });
+    act(g, ctx, 'a', { t: 'life', pid: 'a', delta: 1 });
+    act(g, ctx, 'b', { t: 'endFixMode' });
+    toNextTurn(g, ctx);
+    expect(cats(g), logTail(g)).toBe(1);
+  });
+});
