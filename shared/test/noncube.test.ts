@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { getCard, registerCards } from '../src/cube.ts';
 import { abilitiesOfInstance, applyAction, castOptions, createGame, type CardData, type Ctx, effectiveCost, evalCount, type GameAction, type GameState, type TargetRef, effectivePT, moveCard } from '../src/index.ts';
 import { registerScripts } from '../src/engine/script.ts';
+import { cantBeCountered } from '../src/engine/replacements.ts';
 import { seeded } from './helpers.ts';
 import { REAL, REAL_TOKENS } from './fixtures/noncube-cards.ts';
 
@@ -465,5 +466,40 @@ describe('Opus: mana spent to cast the triggering spell (CastInfo.manaSpent)', (
     resolveAll(g, ctx);
     expect(g.players[1].life).toBe(life - 4 - 4 - 3);
     expect(logText(g)).not.toMatch(MANUAL);
+  });
+});
+
+describe('effect replacements: extra ETB counters, "can\'t be countered"; etbCounter with Converge', () => {
+  it('Wildgrowth Archaic: converge counters on itself; the next creature spell enters with X more +1/+1 counters', () => {
+    const { g, ctx } = setup(['wildgrowth_archaic', 'savannah_lions']);
+    pool(g, 'a', { G: 1, W: 2 }); // {2/G}{2/G}: {G} + {W}{W}
+    const wa = toHand(g, ctx, 'wildgrowth_archaic');
+    act(g, ctx, 'a', { t: 'cast', iid: wa });
+    resolveAll(g, ctx);
+    expect(g.cards[wa].counters['+1/+1']).toBe(2); // green and white mana spent
+    pool(g, 'a', { W: 1 });
+    const lions = toHand(g, ctx, 'savannah_lions');
+    act(g, ctx, 'a', { t: 'cast', iid: lions });
+    resolveAll(g, ctx);
+    console.log(logText(g).split('\n').slice(-10).join('\n'), JSON.stringify(g.effects));
+    expect(g.cards[lions].counters['+1/+1']).toBe(1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it("Mistrise Village: the next spell you cast this turn can't be countered", () => {
+    const { g, ctx } = setup(['mistrise_village', 'lightning_bolt'], ['counterspell']);
+    const mv = put(g, ctx, 'mistrise_village');
+    g.cards[mv].tapped = false;
+    pool(g, 'a', { U: 1 });
+    const ab = abilitiesOfInstance(g.cards[mv], g, getCard).find((e) => e.ability.api === 'DelayedTrigger')!;
+    act(g, ctx, 'a', { t: 'activate', iid: mv, ability: ab.index, text: '' });
+    resolveAll(g, ctx);
+    pool(g, 'a', { R: 1 });
+    const bolt = toHand(g, ctx, 'lightning_bolt');
+    act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: [[{ kind: 'player', pid: 'b' }]] });
+    for (let i = 0; i < 10 && g.stack.at(-1)?.iid !== bolt; i++) { if (g.pending.length) act(g, ctx, g.pending[0].pid, { t: 'choose', id: g.pending[0].id, value: g.pending[0].options[0].value }); else act(g, ctx, g.priority, { t: 'pass' }); }
+    const item = g.stack.find((s) => s.iid === bolt)!;
+    console.log(logText(g).split('\n').slice(-8).join('\n'), JSON.stringify(g.effects), JSON.stringify(g.delayedTriggers));
+    expect(cantBeCountered(g, ctx, item)).toMatch(/can't be countered/);
   });
 });

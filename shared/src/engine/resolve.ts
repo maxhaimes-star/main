@@ -308,10 +308,12 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
   }
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
   // The triggering spell: its mana value (LKI), or the mana spent to cast it (approximated as mana value + X paid).
-  const ts = /^(TriggeredCard|TriggeredSpellAbility)\$(CastTotalManaSpent|CardManaCostLKI)$/.exec(v);
+  const ts = /^(TriggeredCard|TriggeredSpellAbility)\$(CastTotalManaSpent|CardManaCostLKI|Converge)$/.exec(v);
   if (ts) {
     const iid = r.trig?.card;
     const c = iid ? state.cards[iid] : undefined;
+    // Converge: the number of colors of mana spent to cast it.
+    if (ts[2] === 'Converge') return new Set((c?.castInfo?.colorsSpent ?? state.stack.find((s) => s.iid === iid)?.castInfo?.colorsSpent ?? []).filter((x) => 'WUBRG'.includes(x))).size;
     const mv = (iid ? r.lki[iid]?.mv : undefined) ?? (c?.cardId ? ctx.lookup(c.cardId)?.cmc ?? 0 : 0);
     if (ts[2] === 'CardManaCostLKI') return mv;
     const spent = c?.castInfo?.manaSpent ?? state.stack.find((s) => s.iid === iid)?.castInfo?.manaSpent;

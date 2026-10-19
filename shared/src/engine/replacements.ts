@@ -27,6 +27,7 @@ import { playerProtectedFrom, protectedFrom } from './protection.ts';
 import { untapLimits } from './statics.ts';
 import { turnInfo } from './durations.ts';
 import type { EffectRecord, Pending } from './types.ts';
+import { evalCount } from './counts.ts';
 
 interface RLine { params: Record<string, string>; svars: Record<string, string>; name: string }
 
@@ -302,6 +303,14 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
     }
   }
 
+  // Effects: "that creature enters with N additional +1/+1 counters on it" (Wildgrowth Archaic; RememberObjects$ TriggeredCard).
+  for (const { e, r } of effectReplacements(state, 'Moved')) {
+    if (r.params.Destination !== 'Battlefield' || !/IsRemembered/.test(r.params.ValidCard ?? '') || !e.remembered.includes(c.iid)) continue;
+    const sv = svarParams(r, r.params.ReplaceWith);
+    if (sv?.api !== 'PutCounter' || sv.params.ETB !== 'True') continue;
+    const n = sv.params.CounterNum === 'Count$ChosenNumber' ? e.chosenNumber ?? 0 : parseInt(sv.params.CounterNum ?? '1', 10) || 0;
+    if (n > 0) counters.push([counterKind(sv.params.CounterType ?? 'P1P1'), n]);
+  }
   // K:etbCounter:<type>:<number>
   const f = c.cardId && !c.faceDown ? getScript(c.cardId)?.[faceIndex(c)] : undefined;
   for (const k of f?.keywords ?? []) {
@@ -312,6 +321,7 @@ function toBattlefield(state: GameState, ctx: Ctx, c: CardInstance, opts: MoveOp
       const sv = n == null ? f?.svars[m[2]] : undefined;
       if (sv === 'Count$TimesKicked') n = c.castInfo?.timesKicked ?? (c.castInfo?.kicked ? 1 : 0);
       else if (sv === 'Count$xPaid') n = c.castInfo?.x ?? 0;
+      else if (sv) n = evalCount(sv, { state, lookup: ctx.lookup, controller, sourceIid: c.iid, x: c.castInfo?.x, kicked: c.castInfo?.kicked, timesKicked: c.castInfo?.timesKicked, colorsSpent: c.castInfo?.colorsSpent }); // Converge ...
       if (n) counters.push([counterKind(m[1]), n]);
     }
     // Compleated: two fewer loyalty counters for each {P} paid with life (2 life each).
@@ -411,6 +421,9 @@ export function cantBeCountered(state: GameState, ctx: Ctx, item: StackItem): st
   if (item.kind !== 'spell' || !item.iid) return undefined;
   const c = state.cards[item.iid];
   if (!c) return undefined;
+  for (const { e, r } of effectReplacements(state, 'Counter')) {
+    if (r.params.Layer === 'CantHappen' && /IsRemembered/.test(r.params.ValidCard ?? '') && e.remembered.includes(c.iid)) return `${cardName(c, ctx.lookup)} can't be countered (${e.name}).`;
+  }
   for (const r of own(c, 'Counter')) {
     const p = r.params;
     if (p.Layer !== 'CantHappen' || !/Self/.test(p.ValidCard ?? 'Card.Self')) continue;

@@ -22,7 +22,7 @@ const DURATIONS: Record<string, EffectDuration> = {
   UntilYourNextEndStep: 'yourNextEndStep', UntilTheEndOfYourNextTurn: 'endOfYourNextTurn', AsLongAsInPlay: 'hostLeaves',
   UntilHostLeavesPlayOrEOT: 'eot',
 };
-const ZONES: Record<string, Zone> = { Battlefield: 'battlefield', Exile: 'exile', Graveyard: 'graveyard', Hand: 'hand', Library: 'library' };
+const ZONES: Record<string, Zone> = { Battlefield: 'battlefield', Exile: 'exile', Graveyard: 'graveyard', Hand: 'hand', Library: 'library', Stack: 'stack' };
 
 /** "You may play / cast that card" statics (MayPlay$ True): a permission (engine/permissions.ts). */
 const isPermission = (params: Record<string, string>) => params.MayPlay === 'True';
@@ -49,7 +49,11 @@ export function effectUnsupported(step: ParsedAbility): string | null {
       const prevent = rp.Event === 'DamageDone' && rp.Prevent === 'True';
       // "it deals double that damage instead" (replacements.ts modifiedDamage)
       const doubled = rp.Event === 'DamageDone' && rw?.api === 'ReplaceEffect' && rw.params.VarName === 'DamageAmount' && /^ReplaceCount\$DamageAmount\/Twice$/.test(sv[rw.params.VarValue ?? ''] ?? '');
-      if (!moved && !prevent && !doubled) return 'Effect (replacement)';
+      // "That spell can't be countered" (Mistrise Village); "that creature enters with N additional +1/+1 counters" (Wildgrowth Archaic).
+      const uncounterable = rp.Event === 'Counter' && rp.Layer === 'CantHappen' && /IsRemembered/.test(rp.ValidCard ?? '');
+      const etbCounters = rp.Event === 'Moved' && rp.Destination === 'Battlefield' && /^Card\.IsRemembered$/.test(rp.ValidCard ?? '') && rw?.api === 'PutCounter' && rw.params.ETB === 'True'
+        && (/^\d+$/.test(rw.params.CounterNum ?? '1') || rw.params.CounterNum === 'Count$ChosenNumber');
+      if (!moved && !prevent && !doubled && !uncounterable && !etbCounters) return 'Effect (replacement)';
     }
   }
   if (p.Duration && !DURATIONS[p.Duration]) return `Effect (Duration$ ${p.Duration})`;
@@ -103,6 +107,7 @@ export function execEffect(state: GameState, ctx: Ctx, step: ParsedAbility, api:
     statics: list(p.StaticAbilities), triggers: list(p.Triggers), remembered: [...new Set(remembered)], turn: state.turn,
   };
   if (p.ReplacementEffects) rec.replacements = list(p.ReplacementEffects);
+  if (p.SetChosenNumber) rec.chosenNumber = api.amount(p.SetChosenNumber, 0) ?? 0;
   if (api.sourceIid && state.cards[api.sourceIid]) rec.source = api.sourceIid;
   if (emblem) rec.emblem = true;
   if (p.Image) rec.image = p.Image;

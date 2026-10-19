@@ -306,6 +306,8 @@ export interface EffectRecord {
   watchZone?: string;
   /** ReplacementEffects$ SVar names (replacements.ts applies them like a permanent's R: lines, e.g. Yawgmoth's Will). */
   replacements?: string[];
+  /** SetChosenNumber$ (Count$ChosenNumber in its replacements: Wildgrowth Archaic's counters). */
+  chosenNumber?: number;
   turn: number;
 }
 
