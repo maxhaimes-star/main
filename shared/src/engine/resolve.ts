@@ -241,6 +241,12 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     const ps = t.map((ref) => (ref.kind === 'player' ? ref.pid : ref.kind === 'card' ? state.cards[ref.iid]?.controller : undefined)).filter((x): x is string => !!x);
     return { cards: [], players: ps.length ? [...new Set(ps)] : [r.controller] };
   }
+  // Self.nonCreature (Iron Man Armor: "if this Equipment isn't a creature, it becomes ..."): the source if it matches.
+  if (value?.startsWith('Self.')) {
+    const src = r.sourceIid ? state.cards[r.sourceIid] : undefined;
+    const E: MatchEnv = { controller: r.controller, sourceIid: r.sourceIid, lookup: getCard };
+    return { cards: src && matchCard(src, `Card.${value.slice(5)}`, E) === true ? [src.iid] : [], players: [] };
+  }
   if (value?.startsWith('Targeted.')) {
     const E: MatchEnv = { controller: r.controller, sourceIid: r.sourceIid, lookup: getCard };
     return { cards: tgt().cards.filter((x) => state.cards[x] && matchCard(state.cards[x], value.slice(9), E) === true), players: [] };

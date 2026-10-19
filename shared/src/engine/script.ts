@@ -558,7 +558,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   const ext = EXT_APIS.has(api); // Animate, Effect, Clone ... (engine/ext.ts)
   if (!SUPPORTED_APIS.has(api) && !KEYWORD_APIS.has(api) && !ext) return api;
   if (api === 'Charm') return step.choices?.length ? null : api;
-  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined) && !MORE_DEFINED.has(p.Defined) && !/^Valid [A-Za-z.+,!]+$/.test(p.Defined) && !/^Targeted\.[!A-Za-z.+]+$/.test(p.Defined) && !(ext && extDefinedOk(p.Defined))) return `${api} (Defined$ ${p.Defined})`;
+  if (p.Defined && !SUPPORTED_DEFINED.has(p.Defined) && !MORE_DEFINED.has(p.Defined) && !/^Valid [A-Za-z.+,!]+$/.test(p.Defined) && !/^(Targeted|Self)\.[!A-Za-z.+]+$/.test(p.Defined) && !(ext && extDefinedOk(p.Defined))) return `${api} (Defined$ ${p.Defined})`;
   if (p.UnlessCost && api !== 'Counter' && !unlessCostSupported(p.UnlessCost)) return `${api} (UnlessCost)`;
   if (p.Condition && !KNOWN_CONDITIONS.has(p.Condition)) return `${api} (Condition$ ${p.Condition})`;
   for (const k of AMOUNT_PARAMS) {

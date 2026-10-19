@@ -520,3 +520,40 @@ describe('TargetedPlayerCtrl / TargetedPlayerOwn, DefinedPlayer$ in ChangeZoneAl
     expect(logText(g)).not.toMatch(MANUAL);
   });
 });
+
+describe('MoveCounter, Defined$ Self.nonCreature, Firebending', () => {
+  it('Simic Fluxmage: move a +1/+1 counter from it onto target creature', () => {
+    const { g, ctx } = setup(['simic_fluxmage', 'grizzly_bears']);
+    const fm = put(g, ctx, 'simic_fluxmage');
+    g.cards[fm].counters['+1/+1'] = 2;
+    const bear = put(g, ctx, 'grizzly_bears');
+    pool(g, 'a', { U: 2 });
+    const ab = abilitiesOfInstance(g.cards[fm], g, getCard).find((e) => e.ability.api === 'MoveCounter')!;
+    act(g, ctx, 'a', { t: 'activate', iid: fm, ability: ab.index, text: '', targets: [[{ kind: 'card', iid: bear }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[fm].counters['+1/+1']).toBe(1);
+    expect(g.cards[bear].counters['+1/+1']).toBe(1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it("Iron Man Armor: if this Equipment isn't a creature, it becomes a 0/0 Construct Hero artifact creature", () => {
+    const { g, ctx } = setup(['iron_man_armor']);
+    const arm = put(g, ctx, 'iron_man_armor');
+    pool(g, 'a', { C: 2 });
+    const ab = abilitiesOfInstance(g.cards[arm], g, getCard).find((e) => e.ability.api === 'Animate')!;
+    act(g, ctx, 'a', { t: 'activate', iid: arm, ability: ab.index, text: '' });
+    resolveAll(g, ctx);
+    expect(g.cards[arm].animations?.some((a) => a.addTypes?.includes('Creature'))).toBe(true);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Rough Rhino Cavalry: firebending 2 adds {R}{R} when it attacks', () => {
+    const { g, ctx } = setup(['rough_rhino_cavalry']);
+    const rr = put(g, ctx, 'rough_rhino_cavalry');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: rr, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 6 && !(g.players[0].manaPool.R > 0) && (g.stack.length || g.pending.length); i++) act(g, ctx, g.priority, { t: 'pass' });
+    expect(logText(g)).toMatch(/adds \{R\}\{R\}/);
+  });
+});

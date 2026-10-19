@@ -12,7 +12,7 @@ import type { StepApi } from './ext.ts';
 import type { AutoCont, ParsedAbility, Pending } from './types.ts';
 import { resumeAuto } from './resolve.ts';
 
-export const SET_APIS = new Set(['Blight']);
+export const SET_APIS = new Set(['Blight', 'MoveCounter']);
 
 // ------------------------------------------------------------------ blight
 
@@ -62,6 +62,11 @@ export function setMechUnsupported(step: ParsedAbility): string | null {
     case 'Blight':
       if (p.Num && !/^\d+$/.test(p.Num) && !step.svars?.[p.Num]) return 'Blight (Num$)';
       return null;
+    case 'MoveCounter':
+      // Move N counters of one type from a permanent (Source$ Self / ParentTarget / Targeted) onto another.
+      if (!p.CounterType || /^(Any|All)$/.test(p.CounterType) || !/^(Self|ParentTarget|Targeted)$/.test(p.Source ?? 'Self')) return 'MoveCounter';
+      if (p.CounterNum && !/^(\d+|All)$/.test(p.CounterNum) && !step.svars?.[p.CounterNum]) return 'MoveCounter (CounterNum$)';
+      return null;
   }
   return step.api;
 }
@@ -79,6 +84,23 @@ export function execSetMech(state: GameState, ctx: Ctx, step: ParsedAbility, api
       const players = [...new Set(o.players)].sort((a, b) => ((order.indexOf(a) - ai + order.length) % order.length) - ((order.indexOf(b) - ai + order.length) % order.length));
       const d: BlightData = { kind: 'setmech', sub: 'blight', players, n, label: api.sourceName, cont: api.cont() };
       return nextBlight(state, ctx, d);
+    }
+    case 'MoveCounter': {
+      const from = api.defined(p.Source ?? 'Self')?.cards.map((x) => state.cards[x]).find((c) => c?.zone === 'battlefield');
+      const to = api.objects('Self')?.cards.map((x) => state.cards[x]).find((c) => c?.zone === 'battlefield' && c.iid !== from?.iid);
+      const kind = costCounterKind(p.CounterType ?? 'P1P1') ?? '+1/+1';
+      const have = from?.counters[kind] ?? 0;
+      const want = p.CounterNum === 'All' ? have : api.amount(p.CounterNum, 1);
+      if (want == null) { api.manual(); return 'ok'; }
+      const n = Math.min(have, want);
+      if (!from || !to || n <= 0) { log(state, ctx, api.controller, `${api.sourceName}: no counters moved.`); return 'ok'; }
+      from.counters[kind] = have - n;
+      if (!from.counters[kind] && kind !== 'loyalty') delete from.counters[kind];
+      const m = counterAmount(state, ctx, to, kind, n);
+      to.counters[kind] = (to.counters[kind] ?? 0) + m;
+      if (m > 0) emit(state, { t: 'counterAdded', iid: to.iid, kind, n: m });
+      log(state, ctx, api.controller, `${api.sourceName}: moves ${n} ${kind} counter${n === 1 ? '' : 's'} from ${cardName(from, ctx.lookup)} onto ${cardName(to, ctx.lookup)}.`);
+      return 'ok';
     }
   }
   api.manual();

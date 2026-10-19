@@ -40,6 +40,7 @@ const COPY_PERMANENT_KEYS = new Set([
   'NonLegendary', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'AILogic', 'Planeswalker', 'Ultimate', 'Condition', 'ConditionPresent',
   'ConditionCompare', 'ConditionDefined', 'ConditionCheckSVar', 'ConditionSVarCompare', 'ConditionDescription', 'ActivationLimit', 'SorcerySpeed',
   'UnlessCost', 'UnlessPayer', 'UnlessSwitched', 'UnlessResolveSubs', 'RememberLKI',
+  'ValidTgtsDesc', 'RememberTokens', 'PumpKeywords', 'PumpDuration', 'AtEOTTrig',
 ]);
 const CLONE_KEYS = new Set(['GainThisAbility', 
   'Choices', 'ChoiceZone', 'ChoiceTitle', 'AddTypes', 'SetPower', 'SetToughness', 'NewName', 'AddKeywords', 'CloneTarget', 'Defined', 'ValidTgts', 'TgtPrompt',
@@ -61,6 +62,7 @@ export function copyUnsupported(step: ParsedAbility): string | null {
       const extra = Object.keys(p).find((k) => !COPY_PERMANENT_KEYS.has(k));
       if (extra) return `CopyPermanent (${extra})`;
       if (p.AtEOT && !['Sacrifice', 'Exile'].includes(p.AtEOT)) return 'CopyPermanent (AtEOT)';
+      if (p.AtEOTTrig && !['Sacrifice', 'Exile'].includes(p.AtEOTTrig)) return 'CopyPermanent (AtEOTTrig)';
       if (p.Defined && !definedOk(p.Defined)) return `CopyPermanent (Defined$ ${p.Defined})`;
       if (p.Controller && !definedOk(p.Controller)) return `CopyPermanent (Controller$ ${p.Controller})`;
       for (const k of ['NumCopies', 'SetPower', 'SetToughness']) if (!amountSupported(p[k], sv)) return `CopyPermanent (${k}$ ${p[k]})`;
@@ -206,9 +208,19 @@ export function execCopyStep(state: GameState, ctx: Ctx, step: ParsedAbility, ap
         }
       }
       api.remember(made);
-      if (p.AtEOT && made.length) {
-        const dest = p.AtEOT === 'Sacrifice' ? 'Graveyard' : 'Exile';
-        const verb = p.AtEOT === 'Sacrifice' ? 'sacrifice' : 'exile';
+      // PumpKeywords$ Haste (| PumpDuration$ EOT): "it gains haste (until end of turn)".
+      if (p.PumpKeywords) for (const iid of made) {
+        const t = state.cards[iid];
+        const kws = list(p.PumpKeywords, '&');
+        if (!t) continue;
+        if (/^(EOT|EndOfTurn)$/.test(p.PumpDuration ?? '')) t.tempKeywords = [...new Set([...(t.tempKeywords ?? []), ...kws])];
+        else (t.animations ??= []).push({ id: randomId(ctx.rng), controller: api.controller, until: 'permanent', turn: state.turn, keywords: kws });
+      }
+      // AtEOTTrig$ Sacrifice: the token has "at the beginning of the end step, sacrifice this token" (the next end step).
+      const atEot = p.AtEOT ?? p.AtEOTTrig;
+      if (atEot && made.length) {
+        const dest = atEot === 'Sacrifice' ? 'Graveyard' : 'Exile';
+        const verb = atEot === 'Sacrifice' ? 'sacrifice' : 'exile';
         api.delayed('end', `DB$ ChangeZone | Defined$ DelayTriggerRemembered | Origin$ Battlefield | Destination$ ${dest} | SpellDescription$ ${verb === 'sacrifice' ? 'Sacrifice' : 'Exile'} the token${made.length === 1 ? '' : 's'}.`, made, `${verb} the token${made.length === 1 ? '' : 's'} at the beginning of the next end step`);
       }
       return 'ok';

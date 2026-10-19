@@ -27,7 +27,7 @@ const DURATIONS: Record<string, EffectDuration> = {
 
 /** Params an Animate step may have (anything else: not automated). */
 const KNOWN = new Set([
-  'Defined', 'ValidTgts', 'TgtPrompt', 'TargetMin', 'TargetMax', 'TgtZone', 'ValidCards', 'Power', 'Toughness', 'Types', 'RemoveTypes', 'Colors', 'OverwriteColors',
+  'Defined', 'ValidTgts', 'ValidTgtsDesc', 'TgtPrompt', 'TargetMin', 'TargetMax', 'TgtZone', 'ValidCards', 'Power', 'Toughness', 'Types', 'RemoveTypes', 'Colors', 'OverwriteColors',
   'Keywords', 'RemoveKeywords', 'RemoveAllAbilities', 'RemoveCardTypes', 'RemoveCreatureTypes', 'AddAllCreatureTypes', 'Abilities', 'Triggers',
   'staticAbilities', 'StaticAbilities', 'Duration', 'AtEOT', 'sVars', 'SpellDescription', 'StackDescription', 'Cost', 'SubAbility', 'Planeswalker', 'Ultimate',
   'AILogic', 'ConditionPresent', 'ConditionCompare', 'ConditionDefined', 'ConditionCheckSVar', 'ConditionSVarCompare', 'ConditionDescription', 'Condition',
@@ -48,7 +48,7 @@ export function animateUnsupported(step: ParsedAbility): string | null {
   if (list(p.Keywords, '&').some((k) => k.includes(':') && !/^(Protection|Enchant):/.test(k))) return `${step.api} (Keywords$ ${p.Keywords})`;
   for (const k of ['Power', 'Toughness']) if (p[k] != null && !/^-?\d+$/.test(p[k]) && !step.svars?.[p[k]]) return `${step.api} (${k}$ ${p[k]})`;
   if (step.api === 'AnimateAll' && !p.ValidCards) return 'AnimateAll (ValidCards)';
-  if (p.Defined && /\./.test(p.Defined) && !/^Targeted\.[!A-Za-z+]+$/.test(p.Defined)) return `Animate (Defined$ ${p.Defined})`;
+  if (p.Defined && /\./.test(p.Defined) && !/^(Targeted|Self)\.[!A-Za-z+]+$/.test(p.Defined)) return `Animate (Defined$ ${p.Defined})`;
   for (const name of [...list(p.Abilities), ...list(p.Triggers), ...list(p.staticAbilities ?? p.StaticAbilities)]) if (!step.svars?.[name]) return `${step.api} (missing SVar ${name})`;
   return null;
 }
@@ -61,7 +61,7 @@ export function execAnimate(state: GameState, ctx: Ctx, step: ParsedAbility, api
     cards = state.battlefield.filter((iid) => matchCard(state.cards[iid], p.ValidCards ?? 'Card', api.env) === true);
   } else {
     const def = p.Defined?.startsWith('Targeted.') ? 'Targeted' : undefined;
-    const o = def ? api.defined(def) : api.objects('Self');
+    const o = def ? api.defined(def) : p.Defined?.startsWith('Self.') ? api.defined(p.Defined) : api.objects('Self');
     if (!o) { api.manual(); return; }
     cards = o.cards;
     // "Targeted.!Creature" (Tezzeret): only the targets that match.

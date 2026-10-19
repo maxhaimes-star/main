@@ -33,6 +33,14 @@ export function keywordTriggers(keywords: readonly string[]): KeywordTrigger[] {
           line: `DB$ Sacrifice | Defined$ TriggeredDefendingPlayer | SacValid$ Permanent | Amount$ ${n} | SpellDescription$ Annihilator ${n}.` });
         break;
       }
+      case 'Firebending': {
+        // Firebending N: whenever it attacks, add N {R} (Forge: until end of combat; here it empties with the step like any mana).
+        const n = /^\d+$/.test(arg) ? arg : /^[A-Z]\w*$/.test(arg) ? arg : '1'; // a number or an SVar (Firebending:X:, where X is ...)
+        const what = /^\d+$/.test(n) ? '{R}'.repeat(parseInt(n, 10)) : `X {R}${parts[2] ?? ''}`;
+        out.push({ kw: head, params: { Mode: 'Attacks', ValidCard: 'Card.Self', TriggerZones: 'Battlefield', TriggerDescription: `Firebending ${n} — add ${what}.` },
+          line: `DB$ Mana | Produced$ R | Amount$ ${n} | SpellDescription$ Firebending ${n}.` });
+        break;
+      }
       case 'Exalted':
         out.push({ kw: head, params: { Mode: 'Attacks', ValidCard: 'Creature.YouCtrl', Alone: 'True', TriggerZones: 'Battlefield', TriggerDescription: 'Exalted — the creature attacking alone gets +1/+1 until end of turn.' },
           line: 'DB$ Pump | Defined$ TriggeredCard | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Exalted.' });
@@ -87,4 +95,4 @@ export function keywordTriggers(keywords: readonly string[]): KeywordTrigger[] {
 }
 
 /** K: keywords keywordTriggers synthesizes. */
-export const TRIGGER_KEYWORDS = ['Foretell', 'Replicate', 'MayFlashSac', 'Madness', 'Spectacle', 'Surge', 'AlternateAdditionalCost', 'Multikicker', 'Mayhem', 'Escalate', 'Annihilator', 'Exalted', 'Persist', 'Undying', 'Living Weapon', 'Fading', 'Vanishing', 'Cumulative upkeep', 'Cascade', 'Storm', 'Ravenous', 'Backup', 'Miracle', 'Rebound'];
+export const TRIGGER_KEYWORDS = ['Foretell', 'Replicate', 'MayFlashSac', 'Madness', 'Spectacle', 'Surge', 'AlternateAdditionalCost', 'Multikicker', 'Mayhem', 'Escalate', 'Annihilator', 'Firebending', 'Exalted', 'Persist', 'Undying', 'Living Weapon', 'Fading', 'Vanishing', 'Cumulative upkeep', 'Cascade', 'Storm', 'Ravenous', 'Backup', 'Miracle', 'Rebound'];
