@@ -450,3 +450,20 @@ describe('more variables: names with spaces, Count$Void', () => {
     expect(logText(g)).not.toMatch(MANUAL);
   });
 });
+
+describe('Opus: mana spent to cast the triggering spell (CastInfo.manaSpent)', () => {
+  it('Thunderdrum Soloist: 1 damage to each opponent, 3 if five or more mana was spent', () => {
+    const { g, ctx } = setup(['thunderdrum_soloist', 'lightning_bolt', 'fireball']);
+    put(g, ctx, 'thunderdrum_soloist');
+    const life = g.players[1].life;
+    pool(g, 'a', { R: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.players[1].life).toBe(life - 3 - 1);
+    pool(g, 'a', { R: 5 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'fireball'), x: 4, targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.players[1].life).toBe(life - 4 - 4 - 3);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});

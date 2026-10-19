@@ -356,7 +356,7 @@ function spentColors(before: Record<string, number>, after: Record<string, numbe
 }
 
 /** Pay the mana part of a planned cast from the pool. Returns a note for the log (or ''). */
-export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, plan: CastPlan, lookup: Lookup = getCard): { note: string; colors: string[]; deferred: boolean; lifePaid?: number } {
+export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, plan: CastPlan, lookup: Lookup = getCard): { note: string; colors: string[]; deferred: boolean; lifePaid?: number; spent?: number } {
   // Static cost increases / reductions (Thalia, Sphere ...) apply to whichever cost was chosen.
   let note = '';
   if (plan.def.id !== 'faceDown') {
@@ -371,7 +371,8 @@ export function payCastMana(state: GameState, me: GamePlayer, c: CardInstance, p
   if (res) {
     me.manaPool = res.pool;
     if (res.lifePaid) { me.life -= res.lifePaid; note += ` (paid ${res.lifePaid} life)`; }
-    return { note, colors: spentColors(before, me.manaPool), deferred: false, ...(res.lifePaid ? { lifePaid: res.lifePaid } : {}) };
+    const sum = (p: Record<string, number>) => Object.values(p).reduce((a, b) => a + (b > 0 ? b : 0), 0);
+    return { note, colors: spentColors(before, me.manaPool), deferred: false, spent: Math.max(0, sum(before) - sum(me.manaPool)), ...(res.lifePaid ? { lifePaid: res.lifePaid } : {}) };
   }
   if (plan.def.id === 'faceDown') return { note, colors: [], deferred: false };
   if (Object.values(me.manaPool).some((v) => v > 0)) return { note: `${note} (mana pool did not cover the cost — not deducted)`, colors: [], deferred: false };
@@ -491,13 +492,14 @@ export function answerCostPending(state: GameState, ctx: Ctx, _pid: string, d: C
 /**
  * After the spell is on the stack: record how it was cast, pay life / other costs, ask for choices.
  */
-export function finishCast(state: GameState, ctx: Ctx, pid: string, c: CardInstance, item: StackItem, plan: CastPlan, paid: { colors: string[]; deferred: boolean; lifePaid?: number }, a: CastAction) {
+export function finishCast(state: GameState, ctx: Ctx, pid: string, c: CardInstance, item: StackItem, plan: CastPlan, paid: { colors: string[]; deferred: boolean; lifePaid?: number; spent?: number }, a: CastAction) {
   const me = player(state, pid);
   const info: CastInfo = { option: plan.def.id, ...plan.def.flags };
   if (paid.lifePaid) info.phyrexianLife = paid.lifePaid;
   if (plan.kicked) info.kicked = true;
   if (plan.x) info.x = plan.x;
   if (paid.colors.length) info.colorsSpent = paid.colors;
+  if (paid.spent != null) info.manaSpent = paid.spent;
   if (plan.def.id !== 'faceDown') { c.castInfo = info; item.castInfo = { ...info }; }
   if (item.auto) {
     item.auto.costOption = plan.def.id;

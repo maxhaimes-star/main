@@ -314,6 +314,8 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
     const c = iid ? state.cards[iid] : undefined;
     const mv = (iid ? r.lki[iid]?.mv : undefined) ?? (c?.cardId ? ctx.lookup(c.cardId)?.cmc ?? 0 : 0);
     if (ts[2] === 'CardManaCostLKI') return mv;
+    const spent = c?.castInfo?.manaSpent ?? state.stack.find((s) => s.iid === iid)?.castInfo?.manaSpent;
+    if (spent != null) return spent;
     const x = c?.castInfo?.x ?? state.stack.find((s) => s.iid === iid)?.x ?? 0;
     const xs = c?.cardId ? (ctx.lookup(c.cardId)?.manaCost.match(/\{X\}/g) ?? []).length : 0;
     return mv + x * xs;
