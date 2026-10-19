@@ -601,3 +601,20 @@ describe('Adamant-style "if {W}{W} was spent" (CastSA>Count$Adamant), HasCounter
     expect(logText(g)).toMatch(/Ambitious Augmenter's trigger/);
   });
 });
+
+describe('OriginalHost: abilities an Equipment grants', () => {
+  it('Blazing Torch: the equipped creature taps and sacrifices the Torch; the Torch deals 2 damage', () => {
+    const { g, ctx } = setup(['blazing_torch', 'grizzly_bears']);
+    const torch = put(g, ctx, 'blazing_torch');
+    const bear = put(g, ctx, 'grizzly_bears');
+    g.cards[torch].attachedTo = bear;
+    const ab = abilitiesOfInstance(g.cards[bear], g, getCard).find((e) => e.ability.api === 'DealDamage');
+    expect(ab).toBeTruthy();
+    const life = g.players[1].life;
+    act(g, ctx, 'a', { t: 'activate', iid: bear, ability: ab!.index, text: '', targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[torch].zone).toBe('graveyard');
+    expect(g.players[1].life).toBe(life - 2);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});

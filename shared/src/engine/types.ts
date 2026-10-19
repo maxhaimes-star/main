@@ -79,6 +79,8 @@ export interface TargetSpec {
 /** Attached to a stack item that the engine will resolve automatically. */
 export interface AutoInfo {
   cardId: string;
+  /** An ability another object grants (engine/grants.ts): that object (Defined$ OriginalHost, Sac<1/OriginalHost>). */
+  originalHost?: string;
   /** Script face index (0 front, 1 back / adventure / second split half). */
   face: number;
   /**

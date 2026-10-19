@@ -251,6 +251,7 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
     const E: MatchEnv = { controller: r.controller, sourceIid: r.sourceIid, lookup: getCard };
     return { cards: tgt().cards.filter((x) => state.cards[x] && matchCard(state.cards[x], value.slice(9), E) === true), players: [] };
   }
+  if (value === 'OriginalHost') { const h = r.item.auto?.originalHost; return { cards: h && state.cards[h] ? [h] : [], players: [] }; }
   if (value === 'TopOfLibrary') { const top = player(state, r.controller).zones.library[0]; return { cards: top ? [top] : [], players: [] }; }
   if (value === 'ThisTargetedCard' || value === 'ThisTargetedPlayer') { const t = split(state, ownTargets(r, i) ?? []); return value === 'ThisTargetedCard' ? { cards: t.cards, players: [] } : { cards: [], players: t.players }; }
   if (value?.startsWith('Valid ')) {

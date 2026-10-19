@@ -139,6 +139,9 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const tokens = cost.match(/\S+<[^>]*>|\S+/g) ?? [];
   let mana = '';
   let tap = false, untap = false, life = 0, sacSelf = false, exileSelf = false, discardSelf = false;
+  // The granting Equipment / Aura of a granted ability: "Sacrifice <it>" / "Unattach <it>" (ORIGINALHOST).
+  const host = foreign && !foreign.grantor.startsWith('effect:') ? state.cards[foreign.grantor] : undefined;
+  let sacHost = false, unattachHost = false;
   const counterDelta: Record<string, number> = {};
   const byHand: string[] = [];
   const extraCosts: string[] = []; // choices paid by turns.ts (tapXType, Sac<1/Creature>, Return<1/CARDNAME> ...)
@@ -150,6 +153,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
     else if (tok === 'Q') untap = true;
     else if ((m = /^PayLife<(\d+|X)>$/.exec(tok))) life += num(m[1]);
     else if (/^Sac<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) sacSelf = true;
+    else if (host && /^Sac<1\/OriginalHost(\/[^>]*)?>$/.test(tok)) sacHost = true;
+    else if (host && /^Unattach<OriginalHost(\/[^>]*)?>$/.test(tok)) unattachHost = true;
     else if (/^Exile(FromGrave)?<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) exileSelf = true;
     else if (/^Discard<1\/(CARDNAME|Self|NICKNAME)>$/.test(tok)) discardSelf = true;
     else if ((m = /^(Add|Sub)Counter<(\d+|X)\/([A-Za-z0-9]+)(\/[^>]*)?>$/.exec(tok)) && !m[4]) {
@@ -161,6 +166,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   if (tap && c.tapped) return `${src} is already tapped`;
   if (untap && !c.tapped) return `${src} is not tapped`;
   if (discardSelf && c.zone !== 'hand') return `${src} must be in your hand`;
+  if ((sacHost || unattachHost) && host?.zone !== 'battlefield') return `${src}: the granting permanent is gone`;
+  if (unattachHost && host?.attachedTo !== c.iid) return `${src}: it isn't attached`;
   for (const [k, d] of Object.entries(counterDelta)) if (d < 0 && (c.counters[k] ?? 0) < -d) return `${src} doesn't have enough ${k} counters`;
   const extraErr = extraCosts.length ? uniqueCostError(state, ctx, pid, c, extraCosts, x) : null;
   if (extraErr) return extraErr;
@@ -196,6 +203,7 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const auto: AutoInfo = { cardId, face, source: 'ability', index: scriptIndex, targets: res.targets, targetZones: res.targetZones };
   if (a.x != null) auto.x = a.x;
   if (a.division) auto.division = { ...a.division };
+  if (host) auto.originalHost = host.iid;
   recordActivation(state, c, ab, a.ability!, counterDelta.loyalty != null);
   const item: StackItem = { id: randomId(ctx.rng), kind: 'ability', sourceIid: c.iid, controller: pid, text: `${src}: ${ab.description}`, auto };
   if (a.x != null) item.x = a.x;
@@ -204,6 +212,8 @@ export function activateAuto(state: GameState, ctx: Ctx, pid: string, c: CardIns
   const loy = counterDelta.loyalty;
   log(state, ctx, pid, `${me.name} activates ${src}${loy != null ? ` [${loy > 0 ? '+' : ''}${loy}]` : ''}: ${ab.description}${notes.length ? ` (${notes.join(', ')})` : ''}`);
   if (byHand.length) log(state, ctx, pid, `Pay by hand: ${byHand.join(' ')}.`);
+  if (sacHost && host?.zone === 'battlefield') { moveCard(state, ctx, host.iid, 'graveyard', { cause: 'sacrifice' }); log(state, ctx, pid, `${me.name} sacrifices ${cardName(host, ctx.lookup)}.`); }
+  if (unattachHost && host) { host.attachedTo = undefined; log(state, ctx, pid, `${me.name} unattaches ${cardName(host, ctx.lookup)}.`); }
   if (sacSelf && c.zone === 'battlefield') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'sacrifice' }); log(state, ctx, pid, `${me.name} sacrifices ${src}.`); }
   if (exileSelf) { moveCard(state, ctx, c.iid, 'exile'); log(state, ctx, pid, `${me.name} exiles ${src}.`); }
   if (discardSelf && c.zone === 'hand') { moveCard(state, ctx, c.iid, 'graveyard', { cause: 'discard' }); log(state, ctx, pid, `${me.name} discards ${src}.`); }
