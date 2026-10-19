@@ -8,7 +8,7 @@ import { afterSpellResolved, finishCast, payCastMana, planCast } from '../engine
 import { durationsAtCleanup, durationsAtTurnStart } from '../engine/durations.ts';
 import { activateMana } from '../engine/mana.ts';
 import { loyaltyError, recordActivation } from '../engine/timing.ts';
-import { answerPending, createTokenInstance, resolveAuto, resumeAuto } from '../engine/resolve.ts';
+import { answerPending, createTokenInstance, noteLife, resolveAuto, resumeAuto } from '../engine/resolve.ts';
 import { answerTriggerChoice, answerTriggerTargets, beginAction, processTriggers, triggerStillApplies } from '../engine/triggers.ts';
 import { activateRestriction, attackRestriction, blockRestriction, combatReminders } from '../engine/statics.ts';
 import { tokenCopy } from '../engine/copy.ts';
@@ -185,7 +185,7 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       } else if (skip) {
         log(state, ctx, active.pid, `${active.name} skips their draw step (${skip}).`);
       } else if (drawCards(state, active, 1) === 0) {
-        log(state, ctx, active.pid, `${active.name} can't draw — library is empty!`);
+        if (!active.zones.library.length) log(state, ctx, active.pid, `${active.name} can't draw — library is empty!`);
       } else {
         const ev = state.events?.[state.events.length - 1];
         if (ev?.t === 'drawn' && ev.pid === active.pid) ev.firstInDrawStep = true;
@@ -406,6 +406,7 @@ function applyCombat(state: GameState, ctx: Ctx) {
       p.counters.poison = (p.counters.poison ?? 0) + delta;
     } else {
       player(state, key).life += delta;
+      noteLife(state, key, delta); // combat lifelink counts as life gained this turn (Ocelot Pride)
     }
   }
   for (const [iid, dmg] of Object.entries(prop.damage)) {
@@ -918,6 +919,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     case 'life': {
       const p = player(state, a.pid);
       p.life += a.delta;
+      noteLife(state, a.pid, a.delta);
       log(state, ctx, pid, `${p.name} ${a.delta >= 0 ? 'gains' : 'loses'} ${Math.abs(a.delta)} life (${p.life}).`);
       return null;
     }

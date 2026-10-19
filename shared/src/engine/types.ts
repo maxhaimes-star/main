@@ -422,5 +422,5 @@ export interface AutoCont {
   /** "Unless" costs already decided this resolution: step index -> the step runs. */
   unless?: Record<number, boolean>;
   /** ChooseCard / ChooseNumber / ChooseType results of this resolution (Defined$ ChosenCard ...), imprinted cards. */
-  chosen?: { cards?: string[]; number?: number; players?: string[]; type?: string; color?: string; imprinted?: string[] };
+  chosen?: { cards?: string[]; number?: number; players?: string[]; type?: string; color?: string; imprinted?: string[]; /** RepeatEach accumulates RememberChosen picks (Chaos Defiler, Atraxa) */ accumulate?: boolean };
 }

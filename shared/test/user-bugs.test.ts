@@ -5,6 +5,7 @@ import {
   activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard, viewFor,
 } from '../src/index.ts';
 import { createTokenInstance } from '../src/engine/resolve.ts';
+import { processTriggers } from '../src/engine/triggers.ts';
 import { effectivePT } from '../src/game/rules.ts';
 import { SCRIPTS } from '../src/engine/script.ts';
 import { seeded } from './helpers.ts';
@@ -724,5 +725,215 @@ describe('14: exile, then return transformed (Ajani, Kytheon, Tamiyo)', () => {
     expect(g.log.some((l) => /by hand/i.test(l.text)), logTail(g)).toBe(false);
     expect(effectivePT(g.cards[nadu], getCard, g)[0], logTail(g)).toBe(2); // 3/4 -> 2/4
     expect(effectivePT(g.cards[sentinel], getCard, g)[0]).toBe(0);
+  });
+});
+
+describe('15: Chaos Defiler — for each opponent choose a nonland permanent, destroy one at random', () => {
+  it('ETB: the chosen permanent of the opponent is destroyed', () => {
+    const { g, ctx } = setup(['chaos_defiler'], ['nadu_winged_wisdom', 'skullclamp']);
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    const clamp = put(g, ctx, 'b', 'skullclamp');
+    const land = put(g, ctx, 'b', 'basic_mountain');
+    g.events = [];
+    put(g, ctx, 'a', 'chaos_defiler');
+    processTriggers(g, ctx);
+    let offered: string[] = [];
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => o.value === clamp)?.value ?? q.options[0].value; });
+    expect(offered, logTail(g)).toContain(nadu);
+    expect(offered).not.toContain(land);
+    expect(g.cards[clamp].zone, logTail(g)).toBe('graveyard');
+    expect(g.cards[nadu].zone).toBe('battlefield');
+  });
+
+  it('dies: the trigger also destroys the chosen permanent', () => {
+    const { g, ctx } = setup(['chaos_defiler'], ['nadu_winged_wisdom']);
+    const chaos = put(g, ctx, 'a', 'chaos_defiler');
+    g.events = [];
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    g.events = [];
+    moveCard(g, ctx, chaos, 'graveyard');
+    processTriggers(g, ctx);
+    drain(g, ctx);
+    expect(g.cards[nadu].zone, logTail(g)).toBe('graveyard');
+  });
+
+  it('no nonland permanent: nothing to choose, no question left over', () => {
+    const { g, ctx } = setup(['chaos_defiler']);
+    put(g, ctx, 'b', 'basic_mountain');
+    g.events = [];
+    put(g, ctx, 'a', 'chaos_defiler');
+    processTriggers(g, ctx);
+    drain(g, ctx);
+    expect(g.pending).toHaveLength(0);
+    expect(g.stack).toHaveLength(0);
+  });
+});
+
+describe('16: Atraxa, Grand Unifier — one revealed card of each card type to hand', () => {
+  function stacked() {
+    const ids = ['esper_sentinel', 'nadu_winged_wisdom', 'lightning_bolt', 'ponder', 'sylvan_library', 'skullclamp'];
+    const { g, ctx } = setup(['atraxa_grand_unifier', ...ids]);
+    const top: string[] = ids.map((id) => find(g, 'a', id));
+    const lands = g.players[0].zones.library.filter((i) => g.cards[i].cardId === 'basic_mountain').slice(0, 4);
+    top.push(...lands);
+    for (const iid of [...top].reverse()) moveCard(g, ctx, iid, 'library', { position: 'top' });
+    expect(g.players[0].zones.library.slice(0, 10)).toEqual(top);
+    return { g, ctx, top };
+  }
+
+  it('ETB: one pick per type, a multi-type card only once, chosen cards revealed into hand, the rest on the bottom', () => {
+    const { g, ctx, top } = stacked();
+    const hand = g.players[0].zones.hand.length;
+    put(g, ctx, 'a', 'atraxa_grand_unifier');
+    processTriggers(g, ctx);
+    const asked: string[][] = [];
+    drain(g, ctx, (q) => {
+      const opts = q.options.map((o) => o.value).filter((v) => v !== 'done');
+      asked.push(opts);
+      return opts[0] ?? q.options[0].value;
+    });
+    expect(g.log.some((l) => /by hand|Not automated/i.test(l.text)), logTail(g)).toBe(false);
+    expect(asked.length, logTail(g)).toBe(6);
+    expect(asked.filter((o) => o.includes(top[0])).length, 'Esper Sentinel offered again after it was chosen').toBe(1);
+    const chosen = [top[0], top[1], top[2], top[3], top[4], top[6]];
+    for (const iid of chosen) {
+      expect(g.cards[iid].zone, logTail(g)).toBe('hand');
+      expect(g.cards[iid].revealedTo).toContain('b');
+    }
+    expect(g.players[0].zones.hand.length).toBe(hand + 6);
+    const lib = g.players[0].zones.library;
+    expect(new Set(lib.slice(-4))).toEqual(new Set([top[5], ...top.slice(7)]));
+  });
+
+  it('the picks are optional ("you may")', () => {
+    const { g, ctx, top } = stacked();
+    put(g, ctx, 'a', 'atraxa_grand_unifier');
+    processTriggers(g, ctx);
+    drain(g, ctx, (q) => (q.options.some((o) => o.value === 'done') ? 'done' : q.options[0].value));
+    expect(top.filter((x) => g.cards[x].zone === 'hand'), logTail(g)).toHaveLength(0);
+    expect(new Set(g.players[0].zones.library.slice(-10))).toEqual(new Set(top));
+  });
+});
+
+describe('17: Ocelot Pride — end-step Cat after combat lifelink or a manual life gain', () => {
+  const cats = (g: GameState) => g.battlefield.filter((i) => g.cards[i].token?.name === 'Cat' && g.cards[i].controller === 'a').length;
+  function toNextTurn(g: GameState, ctx: Ctx) {
+    for (let i = 0; i < 60 && g.activePlayer === 'a'; i++) {
+      if (g.pending.length) answer(g, ctx); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+  }
+
+  it('Ocelot Pride deals combat damage (lifelink): one Cat at the end step', () => {
+    const { g, ctx } = setup(['ocelot_pride']);
+    const ocelot = put(g, ctx, 'a', 'ocelot_pride');
+    g.events = [];
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: ocelot, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    toNextTurn(g, ctx);
+    expect(g.players[0].life, logTail(g)).toBe(21);
+    expect(cats(g), logTail(g)).toBe(1);
+  });
+
+  it('no life gained: no Cat; a manual +1 life: one Cat', () => {
+    const s1 = setup(['ocelot_pride']);
+    put(s1.g, s1.ctx, 'a', 'ocelot_pride');
+    toNextTurn(s1.g, s1.ctx);
+    expect(cats(s1.g)).toBe(0);
+    const { g, ctx } = setup(['ocelot_pride']);
+    put(g, ctx, 'a', 'ocelot_pride');
+    act(g, ctx, 'a', { t: 'requestFixMode' });
+    act(g, ctx, 'b', { t: 'answerFixMode', accept: true });
+    act(g, ctx, 'a', { t: 'life', pid: 'a', delta: 1 });
+    act(g, ctx, 'b', { t: 'endFixMode' });
+    toNextTurn(g, ctx);
+    expect(cats(g), logTail(g)).toBe(1);
+  });
+});
+
+describe('18: Cloak and Dagger, Entwined — exile a nonland card from their hand or the targeted creature', () => {
+  function enter(withCreature: boolean) {
+    const { g, ctx } = setup(['cloak_and_dagger_entwined'], ['lightning_bolt', 'nadu_winged_wisdom']);
+    const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+    const nadu = put(g, ctx, 'b', 'nadu_winged_wisdom');
+    g.events = [];
+    const cd = put(g, ctx, 'a', 'cloak_and_dagger_entwined');
+    processTriggers(g, ctx);
+    const q = g.pending[0];
+    expect(q?.targets, logTail(g)).toBeTruthy();
+    act(g, ctx, 'a', { t: 'chooseTargets', id: q.id, targets: [[{ kind: 'player', pid: 'b' }], withCreature ? [{ kind: 'card', iid: nadu }] : []] });
+    return { g, ctx, bolt, nadu, cd };
+  }
+
+  it('targeting only the opponent: the chosen hand card is exiled (lands not offered) and returns when C&D leaves', () => {
+    const { g, ctx, bolt, cd } = enter(false);
+    let offered: string[] = [];
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => o.value === bolt)?.value ?? q.options[0].value; });
+    expect(offered, logTail(g)).toContain(bolt);
+    expect(offered.some((v) => g.cards[v]?.cardId === 'basic_mountain')).toBe(false);
+    expect(g.cards[bolt].zone, logTail(g)).toBe('exile');
+    moveCard(g, ctx, cd, 'graveyard');
+    drain(g, ctx);
+    expect(g.cards[bolt].zone, logTail(g)).toBe('hand');
+  });
+
+  it('with a targeted creature: the creature can be exiled instead', () => {
+    const { g, ctx, nadu } = enter(true);
+    let offered: string[] = [];
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => o.value === nadu)?.value ?? q.options[0].value; });
+    expect(offered, logTail(g)).toContain(nadu);
+    expect(g.cards[nadu].zone, logTail(g)).toBe('exile');
+  });
+
+  it('"you may": choosing nothing is allowed', () => {
+    const { g, ctx, bolt, nadu } = enter(true);
+    let offered: string[] = [];
+    const skip = (v: string) => v === 'done' || v === 'none';
+    drain(g, ctx, (q) => { offered = q.options.map((o) => o.value); return q.options.find((o) => skip(o.value))?.value ?? q.options[q.options.length - 1].value; });
+    expect(offered.some(skip), logTail(g)).toBe(true);
+    expect(g.cards[bolt].zone).toBe('hand');
+    expect(g.cards[nadu].zone).toBe('battlefield');
+  });
+});
+
+describe("19: Narset, Parter of Veils — each opponent can't draw more than one card each turn", () => {
+  const drawn = (g: GameState, pid: string) => g.turnStats?.drawn?.[pid] ?? 0;
+  function brainstorm(narsetFor: 'a' | 'b') {
+    const { g, ctx } = setup(['brainstorm', 'narset_parter_of_veils'], ['narset_parter_of_veils'], 'basic_island', 'basic_island');
+    put(g, ctx, narsetFor, 'narset_parter_of_veils');
+    put(g, ctx, 'a', 'basic_island');
+    g.events = [];
+    const bs = toZone(g, ctx, 'a', 'brainstorm', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: bs });
+    drain(g, ctx);
+    for (let i = 0; i < 5 && g.players[0].needsBottom; i++) answer(g, ctx);
+    drain(g, ctx);
+    return { g, ctx };
+  }
+
+  it("an opponent's Narset: Brainstorm draws only one card", () => {
+    const { g } = brainstorm('b');
+    expect(drawn(g, 'a'), logTail(g)).toBe(1);
+  });
+
+  it('your own Narset does not limit you', () => {
+    const { g } = brainstorm('a');
+    expect(drawn(g, 'a'), logTail(g)).toBe(3);
+  });
+
+  it('the limit counts the draw for the turn and resets next turn', () => {
+    const { g, ctx } = setup(['narset_parter_of_veils'], ['brainstorm'], 'basic_island', 'basic_island');
+    put(g, ctx, 'a', 'narset_parter_of_veils');
+    for (let i = 0; i < 40 && !(g.activePlayer === 'b' && g.step === 'main1'); i++) {
+      if (g.pending.length) answer(g, ctx); else act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(drawn(g, 'b'), logTail(g)).toBe(1);
+    put(g, ctx, 'b', 'basic_island');
+    const bs = toZone(g, ctx, 'b', 'brainstorm', 'hand');
+    act(g, ctx, 'b', { t: 'cast', iid: bs });
+    drain(g, ctx);
+    for (let i = 0; i < 5 && g.players[1].needsBottom; i++) answer(g, ctx);
+    drain(g, ctx);
+    expect(drawn(g, 'b'), logTail(g)).toBe(1);
   });
 });

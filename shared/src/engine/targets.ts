@@ -30,14 +30,14 @@ export interface MatchEnv {
   exiledWith?: string[];
   /** Cards chosen during this resolution (ChosenCard). */
   chosenCards?: string[];
+  /** Cards imprinted during this resolution (IsImprinted: Atraxa's revealed cards); absent = unknown. */
+  imprinted?: string[];
   /** This turn's bookkeeping (attackedThisCombat / attackedThisTurn / ThisTurnEntered); absent = unknown. */
   turnInfo?: { turn: number; activations: Record<string, number> };
   /** The trigger's defending player (DefenderCtrl). */
   defender?: string;
   /** Players the resolving spell / ability targets (TargetedPlayerCtrl / TargetedPlayerOwn); absent = unknown. */
   targetedPlayers?: string[];
-  /** Cards the resolution imprinted (IsImprinted); absent = unknown. */
-  imprinted?: string[];
   /** Library order by player (TopLibrary / BottomLibrary); absent = unknown. */
   libraries?: Record<string, string[]>;
 }

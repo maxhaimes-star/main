@@ -124,7 +124,10 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
     case '_Remember': {
       const objs = (p.Objects ?? '').split(',').filter(Boolean);
       for (const iid of objs) if (state.cards[iid] && !r.lki[iid]) r.lki[iid] = lkiOf(state.cards[iid], ctx, state);
-      r.remembered.splice(0, r.remembered.length, ...objs);
+      // Mode$ Add / Remove: RepeatEach's per-pass object (Forge adds it before the sub-ability and removes it after).
+      if (p.Mode === 'Add') { for (const o of objs) if (!r.remembered.includes(o)) r.remembered.push(o); }
+      else if (p.Mode === 'Remove') { const keep = r.remembered.filter((o) => !objs.includes(o)); r.remembered.splice(0, r.remembered.length, ...keep); }
+      else r.remembered.splice(0, r.remembered.length, ...objs);
       return 'ok';
     }
     case 'Charm': return askModes(state, ctx, r);
@@ -488,14 +491,36 @@ function repeatEach(state: GameState, ctx: Ctx, r: MoreRun): Result {
     const types = new Set<string>();
     for (const iid of pool) for (const t of state.cards[iid] ? faceOf(state.cards[iid], ctx.lookup).types : []) types.add(t);
     const prev = [...r.remembered];
+    const acc = subRemembers(r.svars, p.RepeatSubAbility);
+    if (acc) r.chosen.accumulate = true;
     for (const t of types) { r.splice('', { line: `DB$ _SetChosenType | Type$ ${t}` }); r.splice(p.RepeatSubAbility); }
-    r.splice('', { remember: prev });
+    if (!acc) r.splice('', { remember: prev });
+    return 'ok';
+  }
+  if (subRemembers(r.svars, p.RepeatSubAbility)) {
+    // The sub-ability remembers what it chooses (Chaos Defiler): keep the chosen objects across passes, Forge style.
+    r.chosen.accumulate = true;
+    for (const o of objs) {
+      r.splice('', { line: `DB$ _Remember | Mode$ Add | Objects$ ${o}` });
+      r.splice(p.RepeatSubAbility);
+      r.splice('', { line: `DB$ _Remember | Mode$ Remove | Objects$ ${o}` });
+    }
     return 'ok';
   }
   const prev = [...r.remembered];
   for (const o of objs) r.splice(p.RepeatSubAbility, { remember: [o] });
   r.splice('', { remember: prev });
   return 'ok';
+}
+
+/** Does the RepeatEach sub-ability chain remember what it chooses (RememberChosen ...)? */
+function subRemembers(svars: Record<string, string>, svar: string | undefined): boolean {
+  const seen = new Set<string>();
+  for (let k = svar; k && !seen.has(k) && svars[k]; k = /\|\s*SubAbility\$\s*([^|]+)/.exec(svars[k])?.[1]?.trim()) {
+    seen.add(k);
+    if (/\|\s*RememberChosen\$\s*True/.test(svars[k])) return true;
+  }
+  return false;
 }
 
 // ------------------------------------------------------------------ ChooseCard
@@ -509,12 +534,16 @@ function chooseCard(state: GameState, ctx: Ctx, r: MoreRun): Result {
   const all = zoneCards(state, zone).filter((x) => state.cards[x] && f(state.cards[x]));
   const choosers = r.defined(p.Defined ?? 'You')?.players ?? [r.controller];
   const n = r.amount(p.Amount, 1) ?? 1;
-  const optional = p.MinAmount ? (r.amount(p.MinAmount, 0) ?? 0) : p.Mandatory === 'True' ? n : /\bmay\b/i.test(p.ChoiceTitle ?? '') ? 0 : n;
+  const accumulate = !!(r.chosen.accumulate && p.RememberChosen);
+  // Atraxa: "for each card type, you MAY put a card of that type ..." (a per-type choice without Mandatory$).
+  const optional = p.MinAmount ? (r.amount(p.MinAmount, 0) ?? 0) : p.Mandatory === 'True' ? n : /\bmay\b/i.test(p.ChoiceTitle ?? '') || (accumulate && r.chosen.type) ? 0 : n;
   const title = p.ChoiceTitle ?? `choose ${n === 1 ? 'a card' : `${n} cards`}`;
   const specs: ChoiceSpec[] = [];
   for (const chooser of choosers) {
     let cands = all;
     if (p.ControlledByPlayer === 'Chooser') cands = cands.filter((x) => state.cards[x].controller === chooser);
+    // Accumulating RepeatEach (Chaos Defiler, Atraxa): a card already chosen in an earlier pass can't be chosen again.
+    if (accumulate) cands = cands.filter((x) => !r.remembered.includes(x));
     if (p.EachBasicType === 'True') {
       for (const t of ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest']) {
         const c = cands.filter((x) => faceOf(state.cards[x], ctx.lookup).typeLine.includes(t));
@@ -540,10 +569,10 @@ function chooseCard(state: GameState, ctx: Ctx, r: MoreRun): Result {
       for (let k = 0; k < s.n && pool.length; k++) r.chosen.cards.push(pool.splice(Math.floor(ctx.rng() * pool.length), 1)[0]);
     }
     log(state, ctx, r.controller, `${r.sourceName}: ${names(state, ctx, r.chosen.cards)} chosen at random.`);
-    if (p.RememberChosen) r.remember([...r.chosen.cards]);
+    if (p.RememberChosen) r.remember(accumulate ? [...r.remembered, ...r.chosen.cards] : [...r.chosen.cards]);
     return 'ok';
   }
-  const d: MData = { kind: 'more', m: 'chooseCard', cont: r.contAt(r.index + 1), pid: live[0].chooser, specs: live, idx: 0, picked: [], left: live[0].n, remember: !!p.RememberChosen, reveal: p.Reveal === 'True', source: r.sourceName };
+  const d: MData = { kind: 'more', m: 'chooseCard', cont: r.contAt(r.index + 1), pid: live[0].chooser, specs: live, idx: 0, picked: [], left: live[0].n, remember: !!p.RememberChosen, accumulate, reveal: p.Reveal === 'True', source: r.sourceName };
   askChooseCard(state, ctx, d);
   return 'wait';
 }
@@ -1193,7 +1222,7 @@ export function answerMorePending(state: GameState, ctx: Ctx, pend: Pending, val
       log(state, ctx, pend.pid, `${d.source}: ${shown ? names(state, ctx, picked) : `${picked.length} card${picked.length === 1 ? '' : 's'}`} chosen.`);
       d.cont.chosen = { ...(d.cont.chosen ?? {}), cards: [...picked] };
       if (d.remember) {
-        d.cont.remembered = [...picked];
+        d.cont.remembered = d.accumulate ? [...new Set([...d.cont.remembered, ...picked])] : [...picked];
         for (const iid of picked) if (state.cards[iid] && !d.cont.lki[iid]) d.cont.lki[iid] = lkiOf(state.cards[iid], ctx, state);
       }
       resumeAuto(state, ctx, d.cont);
