@@ -288,3 +288,51 @@ describe('trigger conditions: Revolt$ (disappear), OpponentTurn$, ChosenType in 
     expect(logText(g)).not.toMatch(MANUAL);
   });
 });
+
+describe('tokens / animate / mana / remove counters details', () => {
+  it('Harried Dronesmith: the Thopter gains haste and is sacrificed at the beginning of your next end step', () => {
+    const { g, ctx } = setup(['harried_dronesmith']);
+    put(g, ctx, 'harried_dronesmith');
+    const thopterNow = () => g.battlefield.find((i) => g.cards[i].token?.name === 'Thopter');
+    for (let i = 0; i < 40 && !thopterNow(); i++) { if (g.pending.length) resolveAll(g, ctx); else act(g, ctx, g.priority, { t: 'pass' }); }
+    const thopter = thopterNow();
+    expect(thopter).toBeTruthy();
+    expect(g.cards[thopter!].tempKeywords).toContain('Haste');
+    expect(g.delayedTriggers?.some((d) => d.pid === 'a' && d.step === 'end')).toBe(true);
+    for (let i = 0; i < 40 && g.turn === 1; i++) { if (g.pending.length || g.stack.length) resolveAll(g, ctx); else act(g, ctx, g.priority, { t: 'pass' }); }
+    expect(g.cards[thopter!]?.zone ?? 'gone').not.toBe('battlefield');
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it("Puca's Eye: becomes the chosen color", () => {
+    const { g, ctx } = setup(['pucas_eye']);
+    pool(g, 'a', { C: 2 });
+    const eye = toHand(g, ctx, 'pucas_eye');
+    act(g, ctx, 'a', { t: 'cast', iid: eye });
+    resolveAll(g, ctx, (labels) => labels.indexOf('Red'));
+    expect(g.cards[eye].animations?.some((a) => a.colors?.includes('R') && a.overwriteColors)).toBe(true);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Foraging Wickermaw: adds one mana of the chosen color', () => {
+    const { g, ctx } = setup(['foraging_wickermaw']);
+    const w = put(g, ctx, 'foraging_wickermaw');
+    pool(g, 'a', { C: 1 });
+    const ab = abilitiesOfInstance(g.cards[w], g, getCard).find((e) => e.ability.api === 'ChooseColor')!;
+    act(g, ctx, 'a', { t: 'activate', iid: w, ability: ab.index, text: '' });
+    resolveAll(g, ctx, (labels) => labels.indexOf('Blue'));
+    expect(g.players[0].manaPool.U).toBe(1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it("Heartless Act: remove up to three counters — an opponent's +1/+1 counters", () => {
+    const { g, ctx } = setup(['heartless_act'], ['grizzly_bears']);
+    const bear = put(g, ctx, 'grizzly_bears', 'b');
+    g.cards[bear].counters['+1/+1'] = 4;
+    pool(g, 'a', { B: 2 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'heartless_act'), modes: ['Remove'], targets: [[{ kind: 'card', iid: bear }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[bear].counters['+1/+1']).toBe(1);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});

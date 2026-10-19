@@ -65,7 +65,8 @@ export function execExtStep(state: GameState, ctx: Ctx, step: ParsedAbility, api
 
 /** Answer an extension Pending (Clone / choose type / color / name / player). undefined = not ours. */
 export function answerExtPending(state: GameState, ctx: Ctx, pend: Pending, value: string): string | null | undefined {
-  return answerCopyPending(state, ctx, pend, value) ?? answerSetMechPending(state, ctx, pend, value);
+  const copy = answerCopyPending(state, ctx, pend, value); // null = answered
+  return copy !== undefined ? copy : answerSetMechPending(state, ctx, pend, value);
 }
 
 // ------------------------------------------------------------------ duration hooks (durations.ts)

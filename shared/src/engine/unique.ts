@@ -121,6 +121,30 @@ export function execUniqueStep(state: GameState, ctx: Ctx, r: UniqueRun): Result
     case 'RemoveCounter': {
       const o = r.objects('Self');
       if (!o) { r.manual(); return 'ok'; }
+      if (!p.CounterType || p.CounterType === 'Any') {
+        // "Remove (up to) N / any number of counters": the kinds are picked for the controller of the effect —
+        // from their own permanent the harmful ones (-1/-1, stun ...), from another player's the useful ones first.
+        const good = (k: string) => ['+1/+1', 'loyalty', 'shield', 'lore', 'charge', 'oil', 'flying', 'indestructible', 'lifelink', 'deathtouch', 'trample', 'vigilance', 'hexproof', 'menace', 'reach', 'first strike', 'double strike'].includes(k);
+        for (const iid of o.cards) {
+          const c = state.cards[iid];
+          if (!c || c.zone !== 'battlefield') continue;
+          const mine = c.controller === r.controller;
+          const kinds = Object.keys(c.counters).filter((k) => c.counters[k] > 0 && (!mine || !good(k))).sort((a, b) => Number(mine ? good(a) : !good(a)) - Number(mine ? good(b) : !good(b)));
+          const total = kinds.reduce((a, k) => a + c.counters[k], 0);
+          let left = p.CounterNum === 'All' || p.CounterNum === 'Any' ? total : Math.min(total, r.amount(p.CounterNum, 1) ?? 1);
+          const took: string[] = [];
+          for (const k of kinds) {
+            const m = Math.min(left, c.counters[k]);
+            if (m <= 0) continue;
+            c.counters[k] -= m;
+            if (!c.counters[k] && k !== 'loyalty') delete c.counters[k];
+            took.push(`${m} ${k}`);
+            left -= m;
+          }
+          log(state, ctx, r.controller, `${r.sourceName}: removes ${took.length ? `${took.join(', ')} counter(s)` : 'no counters'} from ${cardName(c, ctx.lookup)}.`);
+        }
+        return 'ok';
+      }
       const kind = counterKind(p.CounterType);
       for (const iid of o.cards) {
         const c = state.cards[iid];

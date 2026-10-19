@@ -568,7 +568,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   switch (api) {
     case 'Discard': if (p.Mode && !['Random', 'TgtChoose', 'RevealYouChoose', 'Hand', 'Defined'].includes(p.Mode)) return `Discard (Mode$ ${p.Mode})`;
       if (p.Mode === 'Defined' && !(SUPPORTED_DEFINED.has(p.DefinedCards ?? '') || MORE_DEFINED.has(p.DefinedCards ?? ''))) return 'Discard (DefinedCards)'; break;
-    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any' && !/^Combo (Any|[WUBRGC]( [WUBRGC])*)$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
+    case 'Mana': if (!/^[WUBRGC]( [WUBRGC])*$/.test(p.Produced ?? '') && p.Produced !== 'Any' && !(p.Produced === 'Chosen' && step.kind === 'DB') && !/^Combo (Any|[WUBRGC]( [WUBRGC])*)$/.test(p.Produced ?? '')) return 'Mana (choice)'; break;
     case 'DelayedTrigger':
       if (!p.Execute || !step.svars?.[p.Execute]) return 'DelayedTrigger';
       if (p.Mode === 'Phase' ? (step.kind !== 'DB' && p.Planeswalker !== 'True') || !PHASES[(p.Phase ?? '').replace(/->$/, '')] : !['SpellCast', 'ChangesZone'].includes(p.Mode ?? '')) return 'DelayedTrigger';
@@ -579,7 +579,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     case 'Investigate': if (p.Num && !amountSupported(p.Num, step.svars)) return 'Investigate'; break;
     case 'Tap': case 'Untap': if (p.UntapType || p.TapType) return `${api} (choice)`; break;
     case 'Counter': if (p.UnlessCost && !unlessCostSupported(p.UnlessCost)) return 'Counter (UnlessCost)'; break;
-    case 'Token': if (p.AtEOT && !['Sacrifice', 'Exile', 'ExileCombat'].includes(p.AtEOT)) return 'Token (AtEOT)';
+    case 'Token': if (p.AtEOT && !/^(Your)?(Sacrifice|Exile|Destroy|Hand|Library)(Combat|Upkeep|Ctrl)?$/.test(p.AtEOT)) return 'Token (AtEOT)'; // resolve.ts AT_EOT_RE
       if (!p.TokenScript || p.TokenScript.split(',').some((t) => !SCRIPTS.tokens[t.trim()])) return 'Token (unknown token)'; break;
     case 'ChangeZone': {
       if (p.Destination && !['Battlefield', 'Hand', 'Graveyard', 'Exile', 'Library'].includes(p.Destination)) return `ChangeZone (to ${p.Destination})`;

@@ -76,7 +76,7 @@ export function uniqueReason(step: ParsedAbility): string | null | undefined {
     case 'Balance': return p.Zone && p.Zone !== 'Hand' ? `Balance (${p.Zone})` : null;
     case 'Vote': return p.VoteCard && p.VoteSubAbility ? null : 'Vote (choices)';
     case 'TwoPiles': return p.Zone && p.Zone !== 'Battlefield' ? 'TwoPiles (zone)' : null;
-    case 'RemoveCounter': return p.CounterType && p.CounterType !== 'Any' ? null : 'RemoveCounter (choice of counter)';
+    case 'RemoveCounter': return p.CounterType && p.CounterType !== 'Any' ? null : p.RememberRemoved ? 'RemoveCounter (choice of counter)' : null; // Any: unique.ts picks the kinds
     case 'Play': return p.Defined === 'ExiledWith' || p.Defined === 'Remembered' ? (p.PlayCost ? 'Play (cost)' : null) : 'Play';
     case 'WinsGame': return !p.Defined || p.Defined === 'You' ? null : 'WinsGame';
   }

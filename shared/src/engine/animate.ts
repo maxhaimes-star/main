@@ -43,7 +43,7 @@ export function animateUnsupported(step: ParsedAbility): string | null {
   if (extra) return `${step.api} (${extra})`;
   if (p.Duration && !DURATIONS[p.Duration]) return `${step.api} (Duration$ ${p.Duration})`;
   if (p.AtEOT && !['Sacrifice', 'Exile', 'Hand'].includes(p.AtEOT)) return `${step.api} (AtEOT$ ${p.AtEOT})`;
-  if (list(p.Colors).some((c) => !COLOR_LETTER[c] && c !== 'Colorless')) return `${step.api} (Colors$ ${p.Colors})`;
+  if (list(p.Colors).some((c) => !COLOR_LETTER[c] && c !== 'Colorless' && c !== 'ChosenColor')) return `${step.api} (Colors$ ${p.Colors})`;
   if (list(p.Types).some((t) => /Chosen|Remembered/.test(t))) return `${step.api} (Types$ ${p.Types})`;
   if (list(p.Keywords, '&').some((k) => k.includes(':') && !/^(Protection|Enchant):/.test(k))) return `${step.api} (Keywords$ ${p.Keywords})`;
   for (const k of ['Power', 'Toughness']) if (p[k] != null && !/^-?\d+$/.test(p[k]) && !step.svars?.[p[k]]) return `${step.api} (${k}$ ${p[k]})`;
@@ -71,7 +71,9 @@ export function execAnimate(state: GameState, ctx: Ctx, step: ParsedAbility, api
   const until = DURATIONS[p.Duration ?? 'UntilEndOfTurn'] ?? 'eot';
   const num = (k: string) => (p[k] != null ? api.amount(p[k], 0) : undefined);
   const types = list(p.Types);
-  const colors = list(p.Colors).filter((c) => c !== 'Colorless').map((c) => COLOR_LETTER[c]);
+  // Colors$ ChosenColor: the color chosen for the source (ChooseColor earlier in the chain).
+  const chosenColor = api.sourceIid ? state.cards[api.sourceIid]?.chosen?.color : undefined;
+  const colors = list(p.Colors).filter((c) => c !== 'Colorless').map((c) => (c === 'ChosenColor' ? COLOR_LETTER[chosenColor ?? ''] ?? chosenColor ?? '' : COLOR_LETTER[c])).filter(Boolean);
   const a: Omit<Animation, 'id'> = { controller: api.controller, until, turn: state.turn };
   if (until === 'hostLeaves') {
     if (!api.sourceIid || state.cards[api.sourceIid]?.zone !== 'battlefield') { log(state, ctx, api.controller, `${api.sourceName} already left the battlefield — the effect ends at once.`); return; }

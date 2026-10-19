@@ -835,11 +835,19 @@ function addDelayed(state: GameState, ctx: Ctx, r: Run, at: Step, chain: { svar?
   log(state, ctx, r.controller, `${r.sourceName}: delayed trigger set up (${text}).`);
 }
 
-/** AtEOT$ Sacrifice / Exile / ExileCombat: "sacrifice it at the beginning of the next end step". */
+/** AtEOT$ values: [Your](Sacrifice|Exile|Destroy|Hand|Library)[Combat|Upkeep|Ctrl] (script.ts checks them). */
+export const AT_EOT_RE = /^(Your)?(Sacrifice|Exile|Destroy|Hand|Library)(Combat|Upkeep|Ctrl)?$/;
+
+/** AtEOT$ Sacrifice / Exile / YourSacrifice / ExileCombat ...: "sacrifice it at the beginning of the (your) next end step". */
 function atEndOf(state: GameState, ctx: Ctx, r: Run, iids: string[], what: string) {
-  const dest = what === 'Sacrifice' ? 'Graveyard' : 'Exile';
-  const line = `DB$ ChangeZone | Defined$ DelayTriggerRemembered | Origin$ Battlefield | Destination$ ${dest} | SpellDescription$ ${what === 'Sacrifice' ? 'Sacrifice' : 'Exile'} the token${iids.length === 1 ? '' : 's'}.`;
-  addDelayed(state, ctx, r, what === 'ExileCombat' ? 'endCombat' : 'end', { line }, iids, `${what === 'Sacrifice' ? 'sacrifice' : 'exile'} ${names(state, ctx, iids)} at ${what === 'ExileCombat' ? 'end of combat' : 'the beginning of the next end step'}`);
+  const m = AT_EOT_RE.exec(what) ?? [what, undefined, 'Exile', undefined];
+  const verb = { Sacrifice: 'sacrifice', Exile: 'exile', Destroy: 'destroy', Hand: 'return to hand', Library: 'put on top of its library' }[m[2] as 'Exile'];
+  const them = `the token${iids.length === 1 ? '' : 's'}`;
+  const line = m[2] === 'Destroy' ? `DB$ Destroy | Defined$ DelayTriggerRemembered | SpellDescription$ Destroy ${them}.`
+    : `DB$ ChangeZone | Defined$ DelayTriggerRemembered | Origin$ Battlefield | Destination$ ${{ Sacrifice: 'Graveyard', Exile: 'Exile', Hand: 'Hand', Library: 'Library' }[m[2] as 'Exile']} | SpellDescription$ ${verb[0].toUpperCase()}${verb.slice(1)} ${them}.`;
+  const step: Step = m[3] === 'Combat' ? 'endCombat' : m[3] === 'Upkeep' ? 'upkeep' : 'end';
+  const when = m[3] === 'Combat' ? 'end of combat' : `the beginning of ${m[1] ? 'your' : 'the'} next ${m[3] === 'Upkeep' ? 'upkeep' : 'end step'}`;
+  addDelayed(state, ctx, r, step, { line }, iids, `${verb} ${names(state, ctx, iids)} at ${when}`, m[1] ? { pid: r.controller } : undefined);
 }
 
 // ------------------------------------------------------------------ steps
@@ -1173,6 +1181,14 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       remember(made);
       if (p.TokenAttacking) for (const iid of made) if (state.cards[iid]) enterAttacking(state, ctx, state.cards[iid], r.sourceIid);
       if (p.AtEOT && made.length) atEndOf(state, ctx, r, made, p.AtEOT);
+      // PumpKeywords$ Haste | PumpDuration$ EOT: "it gains haste until end of turn" (permanent without PumpDuration$).
+      if (p.PumpKeywords) for (const iid of made) {
+        const c = state.cards[iid];
+        if (!c) continue;
+        const kws = p.PumpKeywords.split('&').map((k) => k.trim()).filter(Boolean);
+        if (/^(EOT|EndOfTurn)$/.test(p.PumpDuration ?? '')) c.tempKeywords = [...new Set([...(c.tempKeywords ?? []), ...kws])];
+        else (c.animations ??= []).push({ id: randomId(ctx.rng), controller: r.controller, until: p.PumpDuration === 'UntilYourNextTurn' ? 'yourNextTurn' : 'permanent', turn: state.turn, keywords: kws });
+      }
       return 'ok';
     }
     case 'Investigate': {
@@ -1551,7 +1567,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         });
         return 'wait';
       }
-      const syms = (p.Produced ?? '').split(' ');
+      // Produced$ Chosen: the color chosen for the source (ChooseColor earlier in the chain: Foraging Wickermaw).
+      const chosenWord = p.Produced === 'Chosen' && r.sourceIid ? state.cards[r.sourceIid]?.chosen?.color : undefined;
+      if (p.Produced === 'Chosen' && !chosenWord) return bad();
+      const syms = chosenWord ? [({ White: 'W', Blue: 'U', Black: 'B', Red: 'R', Green: 'G' } as Record<string, string>)[chosenWord] ?? 'C'] : (p.Produced ?? '').split(' ');
       for (let k = 0; k < n; k++) for (const s of syms) me.manaPool[s] = (me.manaPool[s] ?? 0) + 1;
       log(state, ctx, r.controller, `${me.name} adds ${Array(n).fill(syms.map((s) => `{${s}}`).join('')).join('')}.`);
       return 'ok';
