@@ -10,9 +10,10 @@ import { animateAtCleanup, animateAtTurnStart, animateLeft, animateUnsupported, 
 import { answerCopyPending, copyAtCleanup, copyLeft, copyUnsupported, execCopyStep } from './copy.ts';
 import { effectsAtCleanup, effectsAtTurnStart, effectsAfterMove, effectUnsupported, execEffect } from './effects.ts';
 import type { MatchEnv } from './targets.ts';
+import { answerSetMechPending, execSetMech, SET_APIS, setMechUnsupported } from './setmech.ts';
 import type { AutoCont, AutoInfo, ParsedAbility, Pending } from './types.ts';
 
-export const EXT_APIS = new Set(['Animate', 'AnimateAll', 'Effect', 'CopyPermanent', 'Clone', 'ChooseType', 'ChooseColor', 'NameCard', 'ChoosePlayer']);
+export const EXT_APIS = new Set(['Animate', 'AnimateAll', 'Effect', 'CopyPermanent', 'Clone', 'ChooseType', 'ChooseColor', 'NameCard', 'ChoosePlayer', ...SET_APIS]);
 
 /** What an extension step can use from the running resolution (built by resolve.ts). */
 export interface StepApi {
@@ -44,7 +45,7 @@ export function extUnsupported(step: ParsedAbility): string | null {
   switch (step.api) {
     case 'Animate': case 'AnimateAll': return animateUnsupported(step);
     case 'Effect': return effectUnsupported(step);
-    default: return copyUnsupported(step);
+    default: return SET_APIS.has(step.api) ? setMechUnsupported(step) : copyUnsupported(step);
   }
 }
 
@@ -58,13 +59,13 @@ export function execExtStep(state: GameState, ctx: Ctx, step: ParsedAbility, api
   switch (step.api) {
     case 'Animate': case 'AnimateAll': execAnimate(state, ctx, step, api); return 'ok';
     case 'Effect': execEffect(state, ctx, step, api); return 'ok';
-    default: return execCopyStep(state, ctx, step, api);
+    default: return SET_APIS.has(step.api) ? execSetMech(state, ctx, step, api) : execCopyStep(state, ctx, step, api);
   }
 }
 
 /** Answer an extension Pending (Clone / choose type / color / name / player). undefined = not ours. */
 export function answerExtPending(state: GameState, ctx: Ctx, pend: Pending, value: string): string | null | undefined {
-  return answerCopyPending(state, ctx, pend, value);
+  return answerCopyPending(state, ctx, pend, value) ?? answerSetMechPending(state, ctx, pend, value);
 }
 
 // ------------------------------------------------------------------ duration hooks (durations.ts)

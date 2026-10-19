@@ -493,7 +493,41 @@ const AMOUNT_PARAMS = ['NumDmg', 'NumCards', 'LifeAmount', 'TokenAmount', 'Count
 /** SVar values the engine can evaluate. */
 export function supportedVar(v: string | undefined): boolean {
   if (!v) return false;
-  return /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v) || v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount'
+  if (baseVarSupported(v)) return true;
+  const m = splitVarMath(v);
+  return !!m && baseVarSupported(m.base) && (m.arg == null || /^-?\d+$/.test(m.arg) || supportedVar(m.arg));
+}
+
+/** "<var>/<op>" arithmetic on a variable (Forge AbilityUtils.doXMath): Twice, HalfUp, Plus.N, Minus.<var>, NMinus.N ... */
+export function splitVarMath(v: string): { base: string; op: string; arg?: string } | undefined {
+  const m = /^(.+?)\/(Twice|Thrice|HalfUp|HalfDown|Negative|Plus|Minus|NMinus|Times|DivideEvenlyDown|DivideEvenlyUp|LimitMax|LimitMin)(?:\.(.+))?$/.exec(v);
+  if (!m || /\//.test(m[1])) return undefined;
+  if (['Twice', 'Thrice', 'HalfUp', 'HalfDown', 'Negative'].includes(m[2]) !== (m[3] == null)) return undefined;
+  return { base: m[1], op: m[2], arg: m[3] };
+}
+
+/** Apply splitVarMath's operation. */
+export function applyVarMath(b: number, op: string, k: number): number {
+  switch (op) {
+    case 'Twice': return b * 2;
+    case 'Thrice': return b * 3;
+    case 'HalfUp': return Math.ceil(b / 2);
+    case 'HalfDown': return Math.floor(b / 2);
+    case 'Negative': return -b;
+    case 'Plus': return b + k;
+    case 'Minus': return b - k;
+    case 'NMinus': return k - b;
+    case 'Times': return b * k;
+    case 'DivideEvenlyDown': return k ? Math.floor(b / k) : 0;
+    case 'DivideEvenlyUp': return k ? Math.ceil(b / k) : 0;
+    case 'LimitMax': return Math.min(b, k);
+    default: return Math.max(b, k); // LimitMin
+  }
+}
+
+export function baseVarSupported(v: string): boolean {
+  return /^(ParentTargeted|ThisTargeted)\$Card(Power|Toughness|ManaCost)$/.test(v)
+    || /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v) || v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount'
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
     || supportedCount(v)
@@ -527,6 +561,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
   if (p.Condition && !KNOWN_CONDITIONS.has(p.Condition)) return `${api} (Condition$ ${p.Condition})`;
   for (const k of AMOUNT_PARAMS) {
     if (k === 'Amount' && !['Surveil', 'Mana', 'Sacrifice'].includes(api)) continue;
+    if ((k === 'NumAtt' || k === 'NumDef') && api === 'Pump' && /^\+?Double$/.test(p[k] ?? '')) continue; // "double its power" (resolve.ts)
     if (!amountSupported(p[k], step.svars)) return `${api} (${k}$ ${p[k]})`;
   }
   if (ext) return extUnsupported(step);

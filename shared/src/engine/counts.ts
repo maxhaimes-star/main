@@ -6,7 +6,7 @@
  * Count$LeftGraveyardThisTurn <Valid>, with /Plus.N /Minus.N /Times.N /Twice /HalfUp /HalfDown.
  * And Condition$ Kicked / PlayerTurn / NotPlayerTurn / Delirium / Threshold / Metalcraft / Revolt / Hellbent.
  */
-import { faceOf, type Lookup } from '../game/rules.ts';
+import { effectivePT, faceOf, type Lookup } from '../game/rules.ts';
 import type { CardInstance, GameState } from '../game/types.ts';
 import { isHidden, type ViewCard } from '../game/types.ts';
 import { matchCard } from './targets.ts';
@@ -30,7 +30,47 @@ const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellb
 export const KNOWN_CONDITIONS = new Set([...FLAGS, 'PlayerTurn', 'NotPlayerTurn', 'Blessing', 'Monarch']);
 const ZONED = { ValidGraveyard: 'graveyard', ValidHand: 'hand', ValidLibrary: 'library', ValidExile: 'exile' } as const;
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
+const PERMANENT_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Land', 'Planeswalker'];
 const BASIC = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
+
+/**
+ * Count$Valid <expr>[$<aggregate>]: how many match, or an aggregate over them: $Colors (colors among them),
+ * $CardTypes(Permanent), $CardPower / $CardToughness / $CardManaCost (sums), $Greatest... / $Least... ,
+ * $Different... (distinct values), $CardCounters.<type> (sum).
+ */
+const VALID_RE = /^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) ([^\s$]+)(?:\$(Colors|CardTypes|CardTypesPermanent|(?:Greatest|Least|Different)?Card(?:Power|Toughness|ManaCost)|DifferentCardNames|CardCounters\.\w+))?$/;
+
+const AGG = '(?:\\$(Colors|CardTypes|CardTypesPermanent|(?:Greatest|Least|Different)?Card(?:Power|Toughness|ManaCost)|DifferentCardNames|CardCounters\\.\\w+))?';
+/** Count$ThisTurnCast_<valid>[$<aggregate>]: spells cast this turn (their cards as they were cast). */
+const CAST_RE = new RegExp(`^ThisTurnCast_([^\\s$]+)${AGG}$`);
+
+function aggregate(cards: CardInstance[], agg: string, env: CountEnv): number {
+  const face = (c: CardInstance) => faceOf(c, env.lookup);
+  if (agg === 'Colors') return new Set(cards.flatMap((c) => face(c).colors ?? [])).size;
+  if (agg.startsWith('CardTypes')) {
+    const types = new Set<string>();
+    for (const c of cards) for (const t of face(c).types) if (CARD_TYPES.includes(t) && (agg === 'CardTypes' || PERMANENT_TYPES.includes(t))) types.add(t);
+    return types.size;
+  }
+  if (agg === 'DifferentCardNames') return new Set(cards.map((c) => face(c).name)).size;
+  const cm = /^CardCounters\.(\w+)$/.exec(agg);
+  if (cm) { const k = counterKind(cm[1]); return cards.reduce((a, c) => a + (c.counters[k] ?? 0), 0); }
+  const m = /^(Greatest|Least|Different)?Card(Power|Toughness|ManaCost)$/.exec(agg)!;
+  const vals = cards.map((c) => {
+    if (m[2] === 'ManaCost') return env.lookup(c.cardId ?? '')?.cmc ?? 0;
+    const pt = c.zone === 'battlefield' && 'stack' in env.state ? effectivePT(c, env.lookup, env.state as GameState) : [parseInt(face(c).power ?? '0', 10) || 0, parseInt(face(c).toughness ?? '0', 10) || 0];
+    return m[2] === 'Power' ? pt[0] : pt[1];
+  });
+  if (m[1] === 'Greatest') return vals.length ? Math.max(...vals) : 0;
+  if (m[1] === 'Least') return vals.length ? Math.min(...vals) : 0;
+  if (m[1] === 'Different') return new Set(vals).size;
+  return vals.reduce((a, b) => a + b, 0);
+}
+
+function counterKind(forge: string): string {
+  const u = forge.toUpperCase();
+  return u === 'P1P1' ? '+1/+1' : u === 'M1M1' ? '-1/-1' : forge.toLowerCase();
+}
 
 function splitMods(v: string): [string, string[]] {
   const parts = v.split('/');
@@ -49,8 +89,7 @@ export function supportedCount(v: string): boolean {
   if (/^(Converge|TimesKicked|Domain|YourStartingLife)$/.test(body)) return true;
   if (/^CardCounters\.\w+$/.test(body)) return true;
   if (/^ThisTurnEntered_[A-Za-z]+(_from_[A-Za-z]+)?_\S+$/.test(body) || /^LeftGraveyardThisTurn \S+$/.test(body)) return true;
-  if (/^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) \S+$/.test(body)) return true;
-  if (/^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) [^\s$]+\$CardTypes$/.test(body)) return true;
+  if (VALID_RE.test(body) || CAST_RE.test(body)) return true;
   return false;
 }
 
@@ -144,19 +183,28 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     const src = env.sourceIid ? s.cards[env.sourceIid] : undefined;
     const kind = m[1].toUpperCase() === 'P1P1' ? '+1/+1' : m[1].toUpperCase() === 'M1M1' ? '-1/-1' : m[1].toLowerCase();
     n = src && !isHidden(src) ? src.counters[kind] ?? 0 : 0;
-  } else if ((m = /^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) ([^\s$]+)(\$CardTypes)?$/.exec(body))) {
+  } else if ((m = CAST_RE.exec(body))) {
+    if (!('history' in s)) return undefined; // a GameView: no move history
     const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
-    const types = m[3] ? new Set<string>() : undefined; // "$CardTypes": the number of card types among them
+    const hits: CardInstance[] = [];
+    for (const c of s.turnStats?.castCards ?? []) {
+      const r = matchCard(c, m[1], menv);
+      if (r === 'unknown') return undefined;
+      if (r) hits.push(c);
+    }
+    n = m[2] ? aggregate(hits, m[2], env) : hits.length;
+  } else if ((m = VALID_RE.exec(body))) {
+    const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
     let pool: CardInstance[];
     if (m[1] === 'Valid') pool = s.battlefield.map((i) => s.cards[i]).filter((c): c is CardInstance => !!c && !isHidden(c));
     else pool = s.players.flatMap((p) => zoneCards(s, p.pid, ZONED[m![1] as keyof typeof ZONED]));
-    let count = 0;
+    const hits: CardInstance[] = [];
     for (const c of pool) {
       const r = matchCard(c, m[2], menv);
       if (r === 'unknown') return undefined;
-      if (r) { count++; if (types) for (const t of faceOf(c, env.lookup).types) if (CARD_TYPES.includes(t)) types.add(t); }
+      if (r) hits.push(c);
     }
-    n = types ? types.size : count;
+    n = m[3] ? aggregate(hits, m[3], env) : hits.length;
   }
   return n == null ? undefined : applyMods(n, mods);
 }

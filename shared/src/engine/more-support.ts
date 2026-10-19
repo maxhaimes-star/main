@@ -22,7 +22,7 @@ export const MORE_DEFINED = new Set([
 /** Counting variables more.ts evaluates. */
 export function moreVarSupported(v: string | undefined): boolean {
   if (!v) return false;
-  return /^Count\$(ChosenNumber|RememberedSize|YourCountersEnergy|ResolvedThisTurn|Monarch|Initiative|DungeonsCompleted|YourLifeGainedThisTurn|LifeYouGainedThisTurn|CardsDrawnThisTurn|YouDrewThisTurn|Devotion\.[A-Za-z]+|DevotionDual\.[A-Za-z]+\.[A-Za-z]+|ThisTurnCast_.+|TriggerRememberAmount)$/.test(v)
+  return /^Count\$(ChosenNumber|RememberedSize|YourCountersEnergy|ResolvedThisTurn|Monarch|Initiative|DungeonsCompleted|YourLifeGainedThisTurn|LifeYouGainedThisTurn|CardsDrawnThisTurn|YouDrewThisTurn|Devotion\.[A-Za-z]+|DevotionDual\.[A-Za-z]+\.[A-Za-z]+|TriggerRememberAmount)$/.test(v)
     || /^Remembered\$(Valid .+|CardManaCost|CardPower|Amount)$/.test(v)
     || /^TriggeredCard\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^TriggerCount\$\w+$/.test(v)

@@ -1113,6 +1113,7 @@ function finishCast(state: GameState, ctx: Ctx, d: MData, targets: TargetRef[][]
   state.stack.push(item);
   const st = turnStats(state);
   st.cast[pid] = (st.cast[pid] ?? 0) + 1;
+  (st.castCards ??= []).push(JSON.parse(JSON.stringify(c)) as CardInstance); // Count$ThisTurnCast_ (counts.ts)
   const gs = (state.gameStats ??= { cast: {} });
   gs.cast[pid] = (gs.cast[pid] ?? 0) + 1;
   emit(state, { t: 'cast', iid: c.iid, pid, nth: st.cast[pid] });

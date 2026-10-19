@@ -197,6 +197,8 @@ export interface GameState {
     cast: Record<string, number>; drawn: Record<string, number>; fired?: Record<string, number>;
     /** Public zone changes this turn, with the card as it was (Count$ThisTurnEntered_..., Count$LeftGraveyardThisTurn). */
     moves?: { from: Zone; to: Zone; snap: CardInstance }[];
+    /** Spells cast this turn, as they were cast (Count$ThisTurnCast_...). */
+    castCards?: CardInstance[];
   };
   /** Whole-game counters: spells each player cast this game (Count$YouCastThisGame: Once Upon a Time). */
   gameStats?: { cast: Record<string, number> };

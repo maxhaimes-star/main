@@ -6,7 +6,7 @@ import { cardName, effectivePT, faceOf, hasKeyword, isCreature, payFromPool } fr
 import { type Ctx, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import type { CardInstance, GamePlayer, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import type { TokenData } from '../cards.ts';
-import { chainOf, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, targetSpecs, unsupportedReason } from './script.ts';
+import { chainOf, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, baseVarSupported, splitVarMath, applyVarMath, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import { lifeGainPrevented, staticsDefineToughness } from './statics.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
@@ -41,6 +41,8 @@ interface Run extends AutoCont {
   deathtouched: string[];
   /** Stage 2: what the trigger saw (triggered abilities only). */
   trig?: TriggerContext;
+  /** The step being executed (ParentTargeted$ / ThisTargeted$ variables). */
+  cur?: number;
 }
 
 export function abilityFor(auto: AutoInfo): ParsedAbility | undefined {
@@ -135,7 +137,11 @@ export function revealHandTo(state: GameState, viewer: string, owner: string) {
   }
 }
 
+/** Diagnostics for tools (scripts/playtest.ts --why): called on every "not automated" fallback of a step. */
+export const manualHooks: { onManual?: (step: ParsedAbility, sourceName: string) => void } = {};
+
 function manual(state: GameState, ctx: Ctx, r: Run, step: ParsedAbility) {
+  manualHooks.onManual?.(step, r.sourceName);
   const what = step.description === step.api ? `${r.sourceName} (${step.api})` : step.description;
   log(state, ctx, r.controller, `Not automated: ${what} — resolve it by hand.`);
 }
@@ -277,6 +283,26 @@ function countEnv(state: GameState, ctx: Ctx, r: Run): CountEnv {
 
 function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefined {
   if (!supportedVar(v)) return undefined;
+  if (!baseVarSupported(v)) {
+    const xm = splitVarMath(v);
+    if (xm) {
+      const b = evalVar(state, ctx, r, xm.base);
+      const k = xm.arg == null ? 0 : /^-?\d+$/.test(xm.arg) ? parseInt(xm.arg, 10) : amount(state, ctx, r, xm.arg, 0);
+      return b == null || k == null ? undefined : applyVarMath(b, xm.op, k);
+    }
+  }
+  // ParentTargeted$CardPower: the card targeted by an earlier step ("it deals damage equal to its power", bite spells);
+  // ThisTargeted$...: this step's own target.
+  const pt = /^(ParentTargeted|ThisTargeted)\$Card(Power|Toughness|ManaCost)$/.exec(v);
+  if (pt) {
+    const cur = r.cur ?? 0;
+    const refs = pt[1] === 'ThisTargeted' ? ownTargets(r, cur) ?? [] : parentTargets(r, cur - 1);
+    const iid = refs.find((t) => t.kind === 'card')?.iid as string | undefined;
+    const c = iid ? state.cards[iid] : undefined;
+    const l = c?.zone === 'battlefield' ? lkiOf(c, ctx, state) : iid ? r.lki[iid] ?? (c ? lkiOf(c, ctx, state) : undefined) : undefined;
+    if (!l) return 0;
+    return pt[2] === 'Power' ? l.power : pt[2] === 'Toughness' ? l.toughness : l.mv;
+  }
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
   // SVar$X/HalfDown, SVar$X/Minus.1 ... : math on another SVar.
   let sm = /^SVar\$(\w+)\/(Plus|Minus|Times)\.(-?\d+|\w+)$/.exec(v);
@@ -843,6 +869,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const step = r.steps[i];
   const p = step.params;
   const me = player(state, r.controller);
+  r.cur = i;
   const reason = unsupportedReason(step);
   if (step.api === 'Effect' && p.AILogic === 'CantRegenerate') return 'ok'; // "can't be regenerated": nothing to do
   if (reason) {
@@ -1290,8 +1317,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         }
         return 'ok';
       }
-      const a = amount(state, ctx, r, p.NumAtt, 0);
-      const d = amount(state, ctx, r, p.NumDef, 0);
+      // "Double target creature's power": +X/+0 where X is its power (per creature, below).
+      const dbl = (v: string | undefined) => /^\+?Double$/.test(v ?? '');
+      const a = dbl(p.NumAtt) ? 0 : amount(state, ctx, r, p.NumAtt, 0);
+      const d = dbl(p.NumDef) ? 0 : amount(state, ctx, r, p.NumDef, 0);
       if (a == null || d == null) return bad();
       const kws = p.KW ? p.KW.split('&').map((k) => k.trim().replace(/^HIDDEN /, '')).filter(Boolean) : [];
       let cards: string[];
@@ -1316,11 +1345,12 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const iid of cards) {
         const c = onBattlefield(state, iid);
         if (!c) continue;
-        c.tempPT = [c.tempPT[0] + a, c.tempPT[1] + d];
+        const [pw, tg] = dbl(p.NumAtt) || dbl(p.NumDef) ? effectivePT(c, ctx.lookup, state) : [0, 0];
+        c.tempPT = [c.tempPT[0] + a + (dbl(p.NumAtt) ? pw : 0), c.tempPT[1] + d + (dbl(p.NumDef) ? tg : 0)];
         if (kws.length) c.tempKeywords = [...new Set([...(c.tempKeywords ?? []), ...kws])];
         hit.push(cardName(c, ctx.lookup));
       }
-      const bits = [(a || d) ? `get${hit.length === 1 ? 's' : ''} ${a >= 0 ? '+' : ''}${a}/${d >= 0 ? '+' : ''}${d}` : '', kws.length ? `gain${hit.length === 1 ? 's' : ''} ${kws.join(', ')}` : ''].filter(Boolean).join(' and ');
+      const bits = [dbl(p.NumAtt) || dbl(p.NumDef) ? `ha${hit.length === 1 ? 's its' : 've their'} ${dbl(p.NumAtt) && dbl(p.NumDef) ? 'power and toughness' : dbl(p.NumAtt) ? 'power' : 'toughness'} doubled` : '', (a || d) ? `get${hit.length === 1 ? 's' : ''} ${a >= 0 ? '+' : ''}${a}/${d >= 0 ? '+' : ''}${d}` : '', kws.length ? `gain${hit.length === 1 ? 's' : ''} ${kws.join(', ')}` : ''].filter(Boolean).join(' and ');
       if (hit.length) log(state, ctx, r.controller, `${hit.join(', ')} ${bits || 'is pumped'} until end of turn.`);
       else log(state, ctx, r.controller, `${r.sourceName}: nothing to pump.`);
       if (p.Duration === 'UntilYourNextTurn') {
