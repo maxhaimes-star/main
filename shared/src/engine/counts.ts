@@ -26,7 +26,7 @@ export interface CountEnv {
   colorsSpent?: string[];
 }
 
-const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn'];
+const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn', 'Void'];
 export const KNOWN_CONDITIONS = new Set([...FLAGS, 'PlayerTurn', 'NotPlayerTurn', 'Blessing', 'Monarch']);
 const ZONED = { ValidGraveyard: 'graveyard', ValidHand: 'hand', ValidLibrary: 'library', ValidExile: 'exile' } as const;
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -38,7 +38,7 @@ const BASIC = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest'];
  * $CardTypes(Permanent), $CardPower / $CardToughness / $CardManaCost (sums), $Greatest... / $Least... ,
  * $Different... (distinct values), $CardCounters.<type> (sum).
  */
-const VALID_RE = /^(Valid|ValidGraveyard|ValidHand|ValidLibrary|ValidExile) ([^\s$]+)(?:\$(Colors|CardTypes|CardTypesPermanent|(?:Greatest|Least|Different)?Card(?:Power|Toughness|ManaCost)|DifferentCardNames|CardCounters\.\w+))?$/;
+const VALID_RE = /^(Valid|Valid(?:Battlefield|Graveyard|Hand|Library|Exile)(?:,(?:Battlefield|Graveyard|Hand|Library|Exile))*) (\S[^$]*?)(?:\$(Colors|CardTypes|CardTypesPermanent|(?:Greatest|Least|Different)?Card(?:Power|Toughness|ManaCost)|DifferentCardNames|CardCounters\.\w+))?$/;
 
 const AGG = '(?:\\$(Colors|CardTypes|CardTypesPermanent|(?:Greatest|Least|Different)?Card(?:Power|Toughness|ManaCost)|DifferentCardNames|CardCounters\\.\\w+))?';
 /** Count$ThisTurnCast_<valid>[$<aggregate>]: spells cast this turn (their cards as they were cast). */
@@ -112,6 +112,8 @@ export function conditionTrue(name: string, env: CountEnv): boolean | undefined 
     case 'NotPlayerTurn': return s.activePlayer !== env.controller;
     case 'Revolt': return !!s.turnInfo && s.turnInfo.turn === s.turn && s.turnInfo.leftBattlefield.includes(env.controller);
     case 'Threshold': return zoneCards(s, env.controller, 'graveyard').length >= 7;
+    // Void: a nonland permanent left the battlefield this turn (or a spell was warped this turn — warp isn't modelled).
+    case 'Void': return 'history' in s ? (s.turnStats?.moves ?? []).some((mv) => mv.from === 'battlefield' && !faceOf(mv.snap, env.lookup).types.includes('Land')) : undefined;
     case 'CommittedCrimeThisTurn': return !!s.turnInfo && s.turnInfo.turn === s.turn && (s.turnInfo.activations[`crime|${env.controller}`] ?? 0) > 0; // triggers.ts trackTurnEvents
     case 'Hellbent': return zoneCards(s, env.controller, 'hand').length === 0;
     case 'Blessing': case 'Monarch': {
@@ -196,9 +198,13 @@ export function evalCount(v: string, env: CountEnv): number | undefined {
     n = m[2] ? aggregate(hits, m[2], env) : hits.length;
   } else if ((m = VALID_RE.exec(body))) {
     const menv = { controller: env.controller, sourceIid: env.sourceIid, lookup: env.lookup };
-    let pool: CardInstance[];
-    if (m[1] === 'Valid') pool = s.battlefield.map((i) => s.cards[i]).filter((c): c is CardInstance => !!c && !isHidden(c));
-    else pool = s.players.flatMap((p) => zoneCards(s, p.pid, ZONED[m![1] as keyof typeof ZONED]));
+    // Valid = battlefield; ValidGraveyard / ValidBattlefield,Graveyard ...: those zones (all players').
+    const zones = m[1] === 'Valid' ? ['Battlefield'] : m[1].slice('Valid'.length).split(',');
+    const pool: CardInstance[] = [];
+    for (const z of zones) {
+      if (z === 'Battlefield') pool.push(...s.battlefield.map((i) => s.cards[i]).filter((c): c is CardInstance => !!c && !isHidden(c)));
+      else pool.push(...s.players.flatMap((p) => zoneCards(s, p.pid, ZONED[`Valid${z}` as keyof typeof ZONED])));
+    }
     const hits: CardInstance[] = [];
     for (const c of pool) {
       const r = matchCard(c, m[2], menv);

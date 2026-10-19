@@ -423,3 +423,30 @@ describe('keywords: Affinity, Changeling', () => {
     expect(o.unavailable ?? '').toBe('');
   });
 });
+
+describe('more variables: names with spaces, Count$Void', () => {
+  it('Ancestral Anger: +X/+0 where X is 1 plus the Ancestral Angers in your graveyard', () => {
+    const { g, ctx } = setup(['ancestral_anger', 'ancestral_anger', 'grizzly_bears']);
+    const bear = put(g, ctx, 'grizzly_bears');
+    moveCard(g, ctx, find(g, 'a', 'ancestral_anger'), 'graveyard');
+    pool(g, 'a', { R: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'ancestral_anger'), targets: [[{ kind: 'card', iid: bear }]] });
+    resolveAll(g, ctx);
+    expect(effectivePT(g.cards[bear], getCard, g)[0]).toBe(2 + 2);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+
+  it('Plasma Bolt: 2 damage, 3 with void (a nonland permanent left the battlefield this turn)', () => {
+    const { g, ctx } = setup(['plasma_bolt', 'plasma_bolt', 'grizzly_bears']);
+    pool(g, 'a', { R: 4 });
+    const life = g.players[1].life;
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'plasma_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.players[1].life).toBe(life - 2);
+    moveCard(g, ctx, put(g, ctx, 'grizzly_bears'), 'graveyard');
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'plasma_bolt'), targets: [[{ kind: 'player', pid: 'b' }]] });
+    resolveAll(g, ctx);
+    expect(g.players[1].life).toBe(life - 5);
+    expect(logText(g)).not.toMatch(MANUAL);
+  });
+});

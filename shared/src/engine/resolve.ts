@@ -295,17 +295,38 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
   }
   // ParentTargeted$CardPower: the card targeted by an earlier step ("it deals damage equal to its power", bite spells);
   // ThisTargeted$...: this step's own target.
-  const pt = /^(ParentTargeted|ThisTargeted)\$Card(Power|Toughness|ManaCost)$/.exec(v);
+  const pt = /^(ParentTargeted|ThisTargeted|Enchanted|Equipped)\$Card(Power|Toughness|ManaCost)$/.exec(v);
   if (pt) {
     const cur = r.cur ?? 0;
-    const refs = pt[1] === 'ThisTargeted' ? ownTargets(r, cur) ?? [] : parentTargets(r, cur - 1);
-    const iid = refs.find((t) => t.kind === 'card')?.iid as string | undefined;
+    const refs = pt[1] === 'ThisTargeted' ? ownTargets(r, cur) ?? [] : pt[1] === 'ParentTargeted' ? parentTargets(r, cur - 1) : [];
+    const host = r.sourceIid ? state.cards[r.sourceIid] : undefined;
+    const iid = pt[1] === 'Enchanted' || pt[1] === 'Equipped' ? host?.attachedTo || undefined : refs.find((t) => t.kind === 'card')?.iid as string | undefined;
     const c = iid ? state.cards[iid] : undefined;
     const l = c?.zone === 'battlefield' ? lkiOf(c, ctx, state) : iid ? r.lki[iid] ?? (c ? lkiOf(c, ctx, state) : undefined) : undefined;
     if (!l) return 0;
     return pt[2] === 'Power' ? l.power : pt[2] === 'Toughness' ? l.toughness : l.mv;
   }
   if (v === 'Count$xPaid') return r.item.auto?.x ?? r.item.x ?? 0;
+  // The triggering spell: its mana value (LKI), or the mana spent to cast it (approximated as mana value + X paid).
+  const ts = /^(TriggeredCard|TriggeredSpellAbility)\$(CastTotalManaSpent|CardManaCostLKI)$/.exec(v);
+  if (ts) {
+    const iid = r.trig?.card;
+    const c = iid ? state.cards[iid] : undefined;
+    const mv = (iid ? r.lki[iid]?.mv : undefined) ?? (c?.cardId ? ctx.lookup(c.cardId)?.cmc ?? 0 : 0);
+    if (ts[2] === 'CardManaCostLKI') return mv;
+    const x = c?.castInfo?.x ?? state.stack.find((s) => s.iid === iid)?.x ?? 0;
+    const xs = c?.cardId ? (ctx.lookup(c.cardId)?.manaCost.match(/\{X\}/g) ?? []).length : 0;
+    return mv + x * xs;
+  }
+  // Targeted$Valid <type>: targeted objects that match; ThisTargetedPlayer$Valid Creature.YouCtrl: the targeted player's matching permanents.
+  const tv = /^(Targeted|ThisTargetedPlayer|TargetedPlayer)\$Valid ([^\s$]+)$/.exec(v);
+  if (tv) {
+    const refs = tv[1] === 'ThisTargetedPlayer' ? ownTargets(r, r.cur ?? 0) ?? [] : r.targets.flat();
+    if (tv[1] === 'Targeted') return refs.filter((t) => t.kind === 'card' && state.cards[t.iid] && matchCard(state.cards[t.iid], tv[2], env(state, ctx, r)) === true).length;
+    const pid = refs.find((t) => t.kind === 'player')?.pid as string | undefined;
+    if (!pid) return 0;
+    return state.battlefield.filter((x) => matchCard(state.cards[x], tv[2], { controller: pid, lookup: ctx.lookup }) === true).length;
+  }
   // SVar$X/HalfDown, SVar$X/Minus.1 ... : math on another SVar.
   let sm = /^SVar\$(\w+)\/(Plus|Minus|Times)\.(-?\d+|\w+)$/.exec(v);
   if (sm) {

@@ -526,7 +526,9 @@ export function applyVarMath(b: number, op: string, k: number): number {
 }
 
 export function baseVarSupported(v: string): boolean {
-  return /^(ParentTargeted|ThisTargeted)\$Card(Power|Toughness|ManaCost)$/.test(v)
+  return /^(ParentTargeted|ThisTargeted|Enchanted|Equipped)\$Card(Power|Toughness|ManaCost)$/.test(v)
+    || /^(TriggeredCard|TriggeredSpellAbility)\$(CastTotalManaSpent|CardManaCostLKI)$/.test(v)
+    || /^(Targeted|ThisTargetedPlayer|TargetedPlayer)\$Valid [^\s$]+$/.test(v)
     || /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v) || v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount'
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
