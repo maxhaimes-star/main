@@ -223,10 +223,19 @@ function trackTurnEvents(state: GameState, ctx: Ctx) {
 
 /** Evaluate a host SVar (the subset triggers use in CheckSVar$). */
 function svarValue(state: GameState, ctx: Ctx, env: MatchEnv, svars: Record<string, string>, name: string, trig?: TriggerContext): number | undefined {
-  const v = svars[name];
+  const v = svars[name] ?? (/\$/.test(name) ? name : undefined); // an SVar name, or an inline expression (CheckSVar$ Count$...)
   if (!v) return /^-?\d+$/.test(name) ? parseInt(name, 10) : undefined;
   let m = /^Number\$(-?\d+)$/.exec(v);
   if (m) return parseInt(m[1], 10);
+  // CastSA>Count$Adamant_2.White.2.0 (Emptiness): 2 if at least two white mana was spent to cast the source, else 0.
+  if ((m = /^CastSA>Count\$Adamant_(\d+)\.(\w+)\.(-?\d+)\.(-?\d+)$/.exec(v))) {
+    const src = env.sourceIid ? state.cards[env.sourceIid] : undefined;
+    const by = src?.castInfo?.manaByColor;
+    if (!src?.castInfo) return parseInt(m[4], 10);
+    if (!by) return undefined;
+    const letter = ({ White: 'W', Blue: 'U', Black: 'B', Red: 'R', Green: 'G' } as Record<string, string>)[m[2]] ?? m[2];
+    return parseInt((by[letter] ?? 0) >= parseInt(m[1], 10) ? m[3] : m[4], 10);
+  }
   const mv = moreVar(state, { controller: env.controller, sourceIid: env.sourceIid, remembered: [], trig, item: { id: '', kind: 'trigger', controller: env.controller, text: '' } }, ctx, v);
   if (mv !== undefined) return mv;
   if ((m = /^Count\$ValidHand (.+)$/.exec(v))) {
@@ -497,7 +506,7 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (mode === 'Cycled' && ev.keyword !== 'Cycling' && ev.keyword !== 'TypeCycling') return null;
       const c = state.cards[ev.iid];
       r = and(matchC(c, p.ValidCard ?? 'Card', env), matchP(ev.pid, mode === 'Cycled' ? p.ValidPlayer : p.ValidActivatingPlayer, env));
-      if (mode === 'AbilityCast' && p.ValidSA) r = and(r, activatedSA(p.ValidSA, ev));
+      if (mode === 'AbilityCast' && p.ValidSA) r = and(r, activatedSA(p.ValidSA, ev, env.controller));
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: ev.pid, source: ev.item };
     }
@@ -680,7 +689,7 @@ function lifeEvents(state: GameState) {
 }
 
 /** ValidSA$ of an AbilityCast trigger against an activation ("SpellAbility.!ManaAbility", "Activated.Loyalty", "Activated.Exhaust", "Activated.!hasTapCost"). */
-function activatedSA(valid: string, ev: Extract<GameEvent, { t: 'activated' }>): Tri {
+function activatedSA(valid: string, ev: Extract<GameEvent, { t: 'activated' }>, controller: string): Tri {
   let res: Tri = false;
   for (const alt of valid.split(',')) {
     const [head, ...props] = alt.trim().split('.');
@@ -693,6 +702,8 @@ function activatedSA(valid: string, ev: Extract<GameEvent, { t: 'activated' }>):
       else if (prop === 'Exhaust') ok = and(ok, !!ev.exhaust);
       else if (prop === 'hasTapCost') ok = and(ok, !!ev.tapCost);
       else if (prop === '!hasTapCost') ok = and(ok, !ev.tapCost);
+      else if (prop === 'YouCtrl') ok = and(ok, ev.pid === controller);
+      else if (prop === 'OppCtrl') ok = and(ok, ev.pid !== controller);
       else ok = 'unknown';
     }
     if (ok === true) return true;

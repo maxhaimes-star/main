@@ -214,6 +214,8 @@ export interface CastInfo {
   colorsSpent?: string[];
   /** The optional additional cost (S:Mode$ OptionalCost) was paid (Condition$ OptionalCost, Count$OptionalGenericCostPaid). */
   optionalCost?: boolean;
+  /** Mana spent to cast it by color (Adamant: "if at least three white mana was spent"). */
+  manaByColor?: Record<string, number>;
   /** Total mana spent to cast it (Opus: "if five or more mana was spent"; TriggeredCard$CastTotalManaSpent). */
   manaSpent?: number;
   /** X paid (permanents keep it: ravenous). */

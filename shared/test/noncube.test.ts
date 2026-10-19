@@ -576,3 +576,28 @@ describe('optional additional costs (S:Mode$ OptionalCost)', () => {
     expect(logText(g)).not.toMatch(MANUAL);
   });
 });
+
+describe('Adamant-style "if {W}{W} was spent" (CastSA>Count$Adamant), HasCounters', () => {
+  it('Emptiness cast with white mana: the white ETB triggers, the black one does not', () => {
+    const { g, ctx } = setup(['emptiness', 'grizzly_bears']);
+    const bear = find(g, 'a', 'grizzly_bears');
+    moveCard(g, ctx, bear, 'graveyard');
+    pool(g, 'a', { W: 2, C: 4 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'emptiness') });
+    resolveAll(g, ctx, undefined, [[{ kind: 'card', iid: bear }]]);
+    expect(g.cards[bear].zone).toBe('battlefield');
+    expect(logText(g)).not.toMatch(/three -1\/-1|Check by hand/);
+  });
+
+  it('Ambitious Augmenter: dies with counters -> a Fractal token (no "check by hand")', () => {
+    const { g, ctx } = setup(['ambitious_augmenter', 'lightning_bolt']);
+    const aa = put(g, ctx, 'ambitious_augmenter');
+    g.cards[aa].counters['+1/+1'] = 1;
+    pool(g, 'a', { R: 1 });
+    act(g, ctx, 'a', { t: 'cast', iid: toHand(g, ctx, 'lightning_bolt'), targets: [[{ kind: 'card', iid: aa }]] });
+    resolveAll(g, ctx);
+    expect(g.cards[aa].zone).toBe('graveyard');
+    expect(logText(g)).not.toMatch(/Check by hand/);
+    expect(logText(g)).toMatch(/Ambitious Augmenter's trigger/);
+  });
+});

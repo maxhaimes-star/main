@@ -138,6 +138,7 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'NamedCard': return env.chosen === undefined ? 'unknown' : !!env.chosen.name && fx.name === env.chosen.name;
     case 'ChosenColor': return env.chosen === undefined ? 'unknown' : !!env.chosen.color && fx.colors.includes(COLOR_WORDS[env.chosen.color] ?? env.chosen.color);
     case 'IsRemembered': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.iid);
+    case 'HasCounters': return Object.values(c.counters).some((n) => n > 0);
     case 'IsImprinted': return env.imprinted === undefined ? 'unknown' : env.imprinted.includes(c.iid);
     case 'TargetedPlayerCtrl': return env.targetedPlayers === undefined ? 'unknown' : env.targetedPlayers.includes(c.controller);
     case 'TargetedPlayerOwn': return env.targetedPlayers === undefined ? 'unknown' : env.targetedPlayers.includes(c.owner);
