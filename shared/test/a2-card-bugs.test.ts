@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  activatedAbilitiesOf, applyAction, createGame, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
+  activatedAbilitiesOf, applyAction, castability, createGame, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -233,5 +233,72 @@ describe('A2.6: Chrome Mox (imprint, then mana of an imprinted color)', () => {
     const { g, ctx, mox } = castMox('lightning_bolt', ['lightning_bolt']);
     moveCard(g, ctx, mox, 'hand');
     expect(g.cards[mox].imprinted ?? []).toEqual([]);
+  });
+});
+
+describe('Ragavan, Nimble Pilferer', () => {
+  function hit() {
+    const { g, ctx } = setup(['ragavan_nimble_pilferer'], ['brainstorm']);
+    const rag = put(g, ctx, 'a', 'ragavan_nimble_pilferer');
+    moveCard(g, ctx, find(g, 'b', 'brainstorm'), 'library', { position: 'top' });
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: rag, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let i = 0; i < 40 && g.step !== 'main2'; i++) {
+      if (g.pending.length) { answer(g, ctx); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(g.step).toBe('main2');
+    return { g, ctx, rag, bs: P(g, 'b').zones.exile.find((i) => g.cards[i].cardId === 'brainstorm') };
+  }
+
+  it('combat damage: a Treasure, and the top card of their library is exiled', () => {
+    const { g, bs } = hit();
+    expect(P(g, 'b').life).toBe(18);
+    expect(g.battlefield.some((i) => g.cards[i].token?.name === 'Treasure' && g.cards[i].controller === 'a'), logText(g)).toBe(true);
+    expect(bs, logText(g)).toBeTruthy();
+    expect(P(g, 'b').zones.library).not.toContain(bs);
+  });
+
+  it('the exiled card can be cast this turn, paying with mana of any type (a Mountain for {U})', () => {
+    const { g, ctx, bs } = hit();
+    for (const i of [...g.battlefield]) if (g.cards[i].token?.name === 'Treasure') moveCard(g, ctx, i, 'graveyard');
+    put(g, ctx, 'a', 'basic_mountain');
+    const hand = P(g, 'a').zones.hand.length;
+    expect(castability(g, 'a', bs!, getCard).ok).toBe(true);
+    expect(castability(viewFor(g, 'a') as never, 'a', bs!, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'cast', iid: bs! });
+    drain(g, ctx, (q) => q.options[q.options.length - 1].value);
+    expect(logText(g)).toMatch(/Brainstorm resolves/);
+    expect(P(g, 'a').zones.hand.length).toBe(hand + 3 - 2);
+    expect(g.cards[bs!].owner).toBe('b');
+  });
+
+  it("can't be cast after this turn", () => {
+    const { g, ctx, bs } = hit();
+    advanceTo(g, ctx, 'b', 'main1');
+    expect([g.cards[bs!].zone, g.cards[bs!].owner, g.cards[bs!].cardId]).toEqual(['exile', 'b', 'brainstorm']);
+    advanceTo(g, ctx, 'a', 'main1');
+    put(g, ctx, 'a', 'basic_mountain');
+    expect(g.cards[bs!].zone, logText(g)).toBe('exile');
+    expect(applyAction(g, 'a', { t: 'cast', iid: bs! }, ctx)).toBeTruthy();
+    expect(g.cards[bs!].zone).toBe('exile');
+  });
+
+  it('Dash: cast for {1}{R}, it has haste, and returns to hand at the end step', () => {
+    const { g, ctx } = setup(['ragavan_nimble_pilferer']);
+    const rag = toZone(g, ctx, 'a', 'ragavan_nimble_pilferer', 'hand');
+    put(g, ctx, 'a', 'basic_mountain');
+    put(g, ctx, 'a', 'basic_mountain');
+    act(g, ctx, 'a', { t: 'cast', iid: rag, costOption: 'dash' });
+    drain(g, ctx);
+    expect(g.cards[rag].zone).toBe('battlefield');
+    expect(g.battlefield.filter((i) => g.cards[i].cardId === 'basic_mountain' && g.cards[i].tapped)).toHaveLength(2);
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: rag, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    expect(logText(g)).toMatch(/Alice attacks with Ragavan/);
+    advanceTo(g, ctx, 'b', 'main1');
+    expect(g.cards[rag].zone, logText(g)).toBe('hand');
   });
 });
