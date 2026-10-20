@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard, viewFor,
+  activatedAbilitiesOf, applyAction, createGame, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -110,5 +110,67 @@ describe('A2.4: tutors that say "reveal" reveal the found card', () => {
     expect(g.cards[found].cardId).toBe('lightning_bolt');
     expect(g.cards[found].revealedTo).not.toContain('b');
     expect((viewFor(g, 'b').reveals ?? []).length).toBe(0);
+  });
+});
+
+/** Pass priority (answering questions with the first option) until `pid`'s turn is at `step` with an empty stack. */
+function advanceTo(g: GameState, ctx: Ctx, pid: string, step: string, minTurn = 0) {
+  for (let i = 0; i < 400; i++) {
+    if (g.pending.length) { answer(g, ctx); continue; }
+    if (g.activePlayer === pid && g.step === step && g.turn >= minTurn && !g.stack.length) return;
+    act(g, ctx, g.priority, { t: 'pass' });
+  }
+  throw new Error(`never reached ${step}`);
+}
+
+describe('A2.5: Shrines count only the Shrine subtype', () => {
+  const OTHERS = ['spirited_companion', 'parallax_wave', 'aangs_iceberg', 'godless_shrine', 'sanctum_weaver'];
+
+  it('Sanctum of Stone Fangs: X = Shrines you control, not enchantments', () => {
+    const { g, ctx } = setup(['sanctum_of_stone_fangs', 'honden_of_seeing_winds', ...OTHERS]);
+    for (const id of ['sanctum_of_stone_fangs', 'honden_of_seeing_winds', ...OTHERS]) put(g, ctx, 'a', id);
+    const life = P(g, 'b').life;
+    advanceTo(g, ctx, 'a', 'main1', 3);
+    expect(P(g, 'b').life, logText(g)).toBe(life - 2);
+  });
+
+  it('a permanent with all creature types (animated Mutavault) is not a Shrine', () => {
+    const { g, ctx } = setup(['sanctum_of_stone_fangs', 'mutavault']);
+    put(g, ctx, 'a', 'sanctum_of_stone_fangs');
+    const mv = put(g, ctx, 'a', 'mutavault');
+    put(g, ctx, 'a', 'basic_mountain');
+    const ab = activatedAbilitiesOf('mutavault', 0).find((e) => e.ability.api === 'Animate')!;
+    act(g, ctx, 'a', { t: 'activate', iid: mv, text: '', ability: ab.index });
+    drain(g, ctx);
+    expect(matchCard(g.cards[mv], 'Goblin', { controller: 'a', lookup: getCard })).toBe(true);
+    expect(matchCard(g.cards[mv], 'Shrine.YouCtrl', { controller: 'a', lookup: getCard })).toBe(false);
+    expect(evalCount('Count$Valid Shrine.YouCtrl', { state: g, lookup: getCard, controller: 'a' })).toBe(1);
+  });
+
+  it('Honden of Seeing Winds draws one card per Shrine', () => {
+    const { g, ctx } = setup(['honden_of_seeing_winds', 'sanctum_of_calm_waters', ...OTHERS]);
+    for (const id of ['honden_of_seeing_winds', 'sanctum_of_calm_waters', ...OTHERS]) put(g, ctx, 'a', id);
+    advanceTo(g, ctx, 'a', 'upkeep', 3);
+    expect(logText(g)).toMatch(/Alice draws 2 cards/);
+  });
+
+  it('Sanctum of All finds only Shrine cards', () => {
+    const { g, ctx } = setup(['sanctum_of_all', 'honden_of_infinite_rage', 'parallax_wave', 'sanctum_weaver']);
+    put(g, ctx, 'a', 'sanctum_of_all');
+    toZone(g, ctx, 'a', 'parallax_wave', 'graveyard');
+    toZone(g, ctx, 'a', 'sanctum_weaver', 'graveyard');
+    const offered: string[] = [];
+    for (let i = 0; i < 400 && !(g.turn >= 3 && g.step === 'main1'); i++) {
+      if (g.pending.length) {
+        const q = g.pending[0];
+        for (const o of q.options) if (g.cards[o.value]) offered.push(g.cards[o.value].cardId!);
+        act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value });
+        continue;
+      }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(offered).toContain('honden_of_infinite_rage');
+    expect(offered).not.toContain('parallax_wave');
+    expect(offered).not.toContain('sanctum_weaver');
   });
 });

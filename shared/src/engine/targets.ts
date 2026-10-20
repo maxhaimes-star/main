@@ -5,6 +5,7 @@
  */
 import { type Lookup, faceOf, hasKeyword } from '../game/rules.ts';
 import { type CardInstance, type GameState, type ViewCard, isHidden } from '../game/types.ts';
+import { NON_CREATURE_SUBTYPES } from './layers.ts';
 import type { TargetRef, TargetSpec } from './types.ts';
 import { playerTargetable, protectedFrom } from './protection.ts';
 
@@ -48,7 +49,8 @@ const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 
 const PERMANENT_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Land', 'Planeswalker'];
 const COLOR_WORDS: Record<string, string> = { White: 'W', Blue: 'U', Black: 'B', Red: 'R', Green: 'G' };
 /** Words a "has all creature types" permanent doesn't match. */
-const NOT_CREATURE_TYPES = new Set(['Legendary', 'Basic', 'Snow', 'World', 'Token', 'Aura', 'Equipment', 'Vehicle', 'Saga', 'Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Desert', 'Gate', 'Treasure', 'Clue', 'Food']);
+/** (Supertypes and every non-creature subtype: an animated Mutavault isn't a Shrine, Aura or Equipment.) */
+const NOT_CREATURE_TYPES = new Set(['Legendary', 'Basic', 'Snow', 'World', 'Token', 'Ongoing', 'Historic', ...NON_CREATURE_SUBTYPES]);
 
 function and(a: Tri, b: Tri): Tri {
   if (a === false || b === false) return false;
