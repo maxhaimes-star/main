@@ -265,7 +265,7 @@ describe('Ragavan, Nimble Pilferer', () => {
     for (const i of [...g.battlefield]) if (g.cards[i].token?.name === 'Treasure') moveCard(g, ctx, i, 'graveyard');
     put(g, ctx, 'a', 'basic_mountain');
     const hand = P(g, 'a').zones.hand.length;
-    expect(castability(g, 'a', bs!, getCard).ok).toBe(true);
+    expect(castability(g, 'a', bs!, getCard)).toEqual({ ok: true });
     expect(castability(viewFor(g, 'a') as never, 'a', bs!, getCard).ok).toBe(true);
     act(g, ctx, 'a', { t: 'cast', iid: bs! });
     drain(g, ctx, (q) => q.options[q.options.length - 1].value);

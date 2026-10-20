@@ -63,8 +63,8 @@ export function costNote(g: GameView, iid: string, face: number, me: string | nu
   });
 }
 
-export function safeCastOptions(g: GameView, iid: string, face?: number): CastOption[] {
-  return safe(() => castOptions(g as never, iid, face, getCard)) ?? [];
+export function safeCastOptions(g: GameView, iid: string, face?: number, pid?: string | null): CastOption[] {
+  return safe(() => castOptions(g as never, iid, face, getCard, pid ?? undefined)) ?? [];
 }
 
 /** One-line description of a cast option: "Alt: <label> {cost}, extra; extra". */

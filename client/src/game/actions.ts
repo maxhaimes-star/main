@@ -123,7 +123,7 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
   let cost = face != null && card?.faces ? card.faces[face].manaCost : card?.manaCost ?? '';
   let costOption: string | undefined;
   if (!manual && c) {
-    const opts = safeCastOptions(base.g, iid, face);
+    const opts = safeCastOptions(base.g, iid, face, base.me);
     const avail = opts.filter((o) => !o.unavailable);
     let chosen = avail.length === 1 ? avail[0] : undefined;
     if (avail.length > 1) {
@@ -139,7 +139,7 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
   }
   let x: number | undefined;
   // X in an additional cost (Vicious Rivalry: "pay X life") needs a value too.
-  const xExtra = !manual && c ? (safeCastOptions(base.g, iid, face).find((o) => o.id === (costOption ?? 'normal'))?.extra ?? []).some((e) => /\bX\b/.test(e)) : false;
+  const xExtra = !manual && c ? (safeCastOptions(base.g, iid, face, base.me).find((o) => o.id === (costOption ?? 'normal'))?.extra ?? []).some((e) => /\bX\b/.test(e)) : false;
   if (/\{X\}/.test(cost) || xExtra) {
     const v = await base.ask('Value of X', 1);
     if (v == null) return;

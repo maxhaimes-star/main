@@ -297,7 +297,7 @@ export function autoPayPreview(state: AnyState, pid: string, iid: string, face?:
   { ok: boolean; taps: { iid: string; mana: string }[]; reason?: string; cost?: string; life?: number; phyrexian?: boolean } {
   const c = visibleCard(state, iid);
   if (!c) return { ok: false, taps: [], reason: 'No such card' };
-  const opts = castOptions(asGame(state), iid, face, lookup);
+  const opts = castOptions(asGame(state), iid, face, lookup, pid);
   const opt = opts.find((o) => o.id === (costOption ?? 'normal'));
   if (!opt) return { ok: false, taps: [], reason: `No "${costOption}" cost` };
   const free = c.zone !== 'hand' ? mayPlayPermission(state as StaticsState, iid, pid, lookup, asGame(state).remembered)?.free : false;
@@ -386,7 +386,7 @@ function faceCastability(state: AnyState, pid: string, c: CardInstance, face: nu
   const restricted = castRestriction(state as StaticsState, iid, pid, lookup);
   if (restricted) return { ok: false, reason: restricted };
   let reason = 'Not enough mana';
-  const opts = castOptions(g, iid, face, lookup);
+  const opts = castOptions(g, iid, face, lookup, pid);
   if (!opts.length) return { ok: false, reason: "That face can't be cast" };
   for (const o of opts) {
     if (o.unavailable) { if (o.id === 'normal') reason = o.unavailable; continue; }

@@ -700,7 +700,7 @@ function bestSpell(ctx: Ctx, main: boolean): GameAction | null {
       if (room && choices.length > before) break;
       const fd = faceData(d, face);
       if (/\bLand\b/.test(fd.typeLine)) continue;
-      const options = safe(() => castOptions(asState(v), iid, face, L), []);
+      const options = safe(() => castOptions(asState(v), iid, face, L, pid), []);
       for (const o of options) {
         if (o.unavailable) continue;
         if (c.zone === 'hand' && o.id !== 'normal' && !/kicker|kicked/i.test(o.id)) continue; // alternative costs: keep it simple
