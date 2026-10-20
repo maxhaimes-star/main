@@ -1526,6 +1526,14 @@ export function moreVar(state: GameState, r: { controller: string; sourceIid?: s
     case 'Count$Initiative': return me?.designations.includes('Initiative') ? 1 : 0;
     case 'Count$DungeonsCompleted': return me?.counters.dungeons ?? 0;
     case 'Count$TriggerRememberAmount': return r.trig?.amount ?? 0;
+    // "that creature's power" of a reflexive trigger (Minsc & Boo): the trigger's remembered object, last known.
+    case 'TriggerRemembered$CardPower': case 'TriggerRemembered$CardToughness': case 'TriggerRemembered$CardManaCost': {
+      const iid = r.trig?.remembered?.[0];
+      const c = iid ? state.cards[iid] : undefined;
+      const l = (iid ? r.trig?.lki?.[iid] : undefined) ?? (c ? lkiOf(c, ctx, state) : undefined);
+      if (!l) return 0;
+      return v.endsWith('Power') ? l.power : v.endsWith('Toughness') ? l.toughness : l.mv;
+    }
     case 'Count$ResolvedThisTurn': {
       const key = `resolved|${r.item.auto?.cardId}|${r.item.auto?.index}|${r.sourceIid}`;
       return state.turnInfo?.turn === state.turn ? state.turnInfo.activations[key] ?? 0 : 0;

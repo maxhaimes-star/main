@@ -44,13 +44,14 @@ function continuations(step: ParsedAbility, svars: Record<string, string>): { al
     case 'GenericChoice': one.push(...list(p.Choices)); break;
     case 'FlipCoin': one.push(...list(p.WinSubAbility), ...list(p.LoseSubAbility), ...list(p.HeadsSubAbility), ...list(p.TailsSubAbility)); break;
     case 'Repeat': case 'RepeatEach': all.push(...list(p.RepeatSubAbility)); break;
-    case 'ImmediateTrigger': all.push(...list(p.Execute)); break;
+    // A reflexive trigger with targets is removed when there are none: only untargeted ones must run.
+    case 'ImmediateTrigger': all.push(...list(p.Execute).filter((sv) => !/ValidTgts\$/.test(svars[sv]))); break;
     // Vote / TwoPiles run their result chains inline (engine/unique.ts), not as steps.
   }
   return { all, one };
 }
 
-export interface ChainTrack { item: StackItem; reached: Map<string, ParsedAbility> }
+export interface ChainTrack { item: StackItem; reached: Map<string, ParsedAbility>; skipped?: Set<string> }
 
 /** Steps of a resolved chain that were reached but didn't reach their continuation. */
 export function chainBreaks(c: ChainTrack): string[] {
@@ -60,6 +61,8 @@ export function chainBreaks(c: ChainTrack): string[] {
     // A triggered ability's optional cost ("you may pay ... if you do") that was declined.
     if (step.kind === 'AB' && step.params.Cost && c.item.kind === 'trigger') continue;
     const cont = continuations(step, svars);
+    // A skipped "when you do" (its condition was false / nothing was done) has no Execute$ to reach; its SubAbility$ still runs.
+    if (step.api === 'ImmediateTrigger' && c.skipped?.has(keyOf(step))) cont.all = cont.all.filter((sv) => sv === step.params.SubAbility);
     const hit = (sv: string) => { const ab = parseAbility(svars[sv], svars, ''); return !!ab && c.reached.has(keyOf(ab)); };
     for (const sv of cont.all) if (!hit(sv)) out.push(`${step.api} -> ${sv} never ran`);
     if (cont.one.length && !cont.one.some(hit)) out.push(`${step.api} -> none of ${cont.one.join(', ')} ran`);
@@ -218,6 +221,8 @@ function runEntry(e: Entry, seed: number, strategy: 'first' | 'random'): { misse
     prev = undefined;
     waited = false;
   };
+  const skipped = new Set<string>();
+  chainProbe.onSkip = (item, step) => { if (item.auto?.cardId === e.cardId) skipped.add(keyOf(step)); };
   chainProbe.onStep = (item, step) => {
     if (item.auto?.cardId !== e.cardId) return;
     close();
@@ -266,6 +271,7 @@ function runEntry(e: Entry, seed: number, strategy: 'first' | 'random'): { misse
   }
   close();
   chainProbe.onStep = undefined;
+  chainProbe.onSkip = undefined;
   const logTail = g.log.slice(-12).map((l) => l.text).join(' / ');
   const misses: Miss[] = [];
   if (exception) misses.push({ cardId: e.cardId, entry: e.label, step: '-', missing: exception, log: logTail });
@@ -276,8 +282,11 @@ function runEntry(e: Entry, seed: number, strategy: 'first' | 'random'): { misse
   if (g.pending.length || g.players.some((p) => p.peek)) return { misses, note: 'left a question unanswered' };
   if (g.winner) return { misses };
   for (const step of reachedSteps) {
+    // A triggered ability's optional cost ("you may pay ... if you do") that was declined.
+    if (step.kind === 'AB' && step.params.Cost && e.kind === 'trigger' && /doesn't|can't .* nothing happens/.test(logTail)) continue;
     const svars = step.svars ?? face.svars;
     const c = continuations(step, svars);
+    if (step.api === 'ImmediateTrigger' && skipped.has(keyOf(step))) c.all = c.all.filter((sv) => sv === step.params.SubAbility);
     const reachedSvar = (sv: string) => { const ab = parseAbility(svars[sv], svars, face.name); return !!ab && reached.has(keyOf(ab)); };
     for (const sv of c.all) if (!reachedSvar(sv)) misses.push({ cardId: e.cardId, entry: e.label, step: step.api, missing: sv, log: logTail });
     if (c.one.length && !c.one.some(reachedSvar) && !/condition not met|rolls|by hand/.test(logTail)) {

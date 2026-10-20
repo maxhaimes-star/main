@@ -25,6 +25,7 @@ export function moreVarSupported(v: string | undefined): boolean {
   return /^Count\$(ChosenNumber|RememberedSize|YourCountersEnergy|ResolvedThisTurn|Monarch|Initiative|DungeonsCompleted|YourLifeGainedThisTurn|LifeYouGainedThisTurn|CardsDrawnThisTurn|YouDrewThisTurn|Devotion\.[A-Za-z]+|DevotionDual\.[A-Za-z]+\.[A-Za-z]+|TriggerRememberAmount)$/.test(v)
     || /^Remembered\$(Valid .+|CardManaCost|CardPower|Amount)$/.test(v)
     || /^TriggeredCard\$Card(Power|Toughness|ManaCost)$/.test(v)
+    || /^TriggerRemembered\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^TriggerCount\$\w+$/.test(v)
     || /^Count\$YourCountersEnergy\/.+$/.test(v)
     || /^Count\$Valid .+\/(HalfDown|HalfUp|Twice)$/.test(v)

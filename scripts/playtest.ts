@@ -538,6 +538,7 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
     c.reached.set(`${step.api}|${JSON.stringify(step.params)}`, step);
     lastItem = item.id;
   };
+  chainProbe.onSkip = (item, step) => { const c = chains.get(item.id); if (c) (c.skipped ??= new Set()).add(`${step.api}|${JSON.stringify(step.params)}`); };
   if (!opts.ai && !g.pregame) for (const p of g.players) act(G, p.pid, { t: 'keep' });
   while (actions < 20000) {
     actions++;
@@ -607,6 +608,7 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
     if (actions % (opts.leakEvery ?? 3) === 0) checkLeaks(G);
   }
   chainProbe.onStep = undefined;
+  chainProbe.onSkip = undefined;
   const open = JSON.stringify([g.pending, g.players.map((p) => p.peek), g.stack, g.delayedTriggers ?? []]);
   for (const [id, c] of chains) {
     if (open.includes(id) || (id === lastItem && end !== 'turns')) continue; // still resolving

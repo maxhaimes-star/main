@@ -469,3 +469,37 @@ describe('A2.8: Incubate', () => {
     expect(abilitiesOfInstance(g.cards[inc], g, getCard).some((a) => a.ability.api === 'SetState')).toBe(true);
   });
 });
+
+describe('A2.2: chains that stopped partway (found by scripts/chain-audit.ts)', () => {
+  /** Resolve everything; targets of "when you do" triggers go to Bob. */
+  function resolveAtBob(g: GameState, ctx: Ctx) {
+    for (let k = 0; k < 40 && (g.stack.length || g.pending.length); k++) {
+      const q = g.pending[0];
+      if (q?.targets) { act(g, ctx, q.pid, { t: 'chooseTargets', id: q.id, targets: [[{ kind: 'player', pid: 'b' }]] }); continue; }
+      if (q) { act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+  }
+
+  it('Minsc & Boo −2: the sacrificed creature is remembered, so "when you do" deals damage equal to its power', () => {
+    const { g, ctx } = setup(['minsc_boo_timeless_heroes', 'goblin_guide']);
+    const mb = put(g, ctx, 'a', 'minsc_boo_timeless_heroes');
+    for (const i of [...g.battlefield]) if (g.cards[i].token) moveCard(g, ctx, i, 'graveyard');
+    g.cards[mb].counters.loyalty = 5;
+    put(g, ctx, 'a', 'goblin_guide');
+    const ab = activatedAbilitiesOf('minsc_boo_timeless_heroes', 0).find((e) => e.ability.api === 'Sacrifice')!;
+    act(g, ctx, 'a', { t: 'activate', iid: mb, text: '', ability: ab.index });
+    resolveAtBob(g, ctx);
+    expect(P(g, 'b').life, logText(g)).toBe(18);
+  });
+
+  it('The Royal Scions −8: the four drawn cards are remembered, so "when you do" deals damage', () => {
+    const { g, ctx } = setup(['the_royal_scions']);
+    const rs = put(g, ctx, 'a', 'the_royal_scions');
+    g.cards[rs].counters.loyalty = 8;
+    const ab = activatedAbilitiesOf('the_royal_scions', 0).find((e) => e.ability.params.Ultimate === 'True')!;
+    act(g, ctx, 'a', { t: 'activate', iid: rs, text: '', ability: ab.index });
+    resolveAtBob(g, ctx);
+    expect(P(g, 'b').life, logText(g)).toBe(20 - P(g, 'a').zones.hand.length);
+  });
+});
