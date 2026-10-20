@@ -17,7 +17,7 @@ import { isHidden } from '../game/types.ts';
 import { parseCost } from './costs.ts';
 import { type CountState, evalCount } from './counts.ts';
 import { parseAbility, scriptFaceOf, scriptRef } from './script.ts';
-import { activateRestriction, adjustCost, staticMods, type StaticsState } from './statics.ts';
+import { activateRestriction, adjustCost, mayAdjustAbilityCost, staticMods, type StaticsState } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 import { chapterManaLines } from './turns.ts';
 import { manaTapped, noteTapped } from './manatriggers.ts';
@@ -72,7 +72,7 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
     const tokens = (ab.params.Cost ?? '').split(/\s+/);
     // Cost reductions for activated abilities that include mana abilities (Zirda / Forensic Gadgeteer house rules: down to {0}).
     let manaCost = cost.mana;
-    if (manaCost && 'battlefield' in state && 'players' in state) {
+    if (manaCost && mayAdjustAbilityCost(state as unknown as StaticsState)) {
       const adj = adjustCost(state as unknown as StaticsState, c as CardInstance, c.controller, manaCost, 'Ability', lookup, { manaAbility: true }).cost;
       manaCost = /^(\{0\})*$/.test(adj) ? '' : adj;
     }

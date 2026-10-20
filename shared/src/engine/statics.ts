@@ -867,6 +867,30 @@ export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, co
   return { cost: changeGeneric(cost, delta, minMana), notes };
 }
 
+const abilityCostCards = new Map<string, boolean>();
+function hasAbilityCostStatic(id: string): boolean {
+  let v = abilityCostCards.get(id);
+  if (v == null) {
+    v = !!getScript(id)?.some((f) => f.statics.some((l) => /Mode\$ (ReduceCost|RaiseCost)/.test(l) && /Type\$ Ability|ValidSpell\$ Activated/.test(l)));
+    abilityCostCards.set(id, v);
+  }
+  return v;
+}
+
+/**
+ * Cheap check before adjustCost(..., 'Ability') on hot paths (mana abilities during auto-pay): is there a permanent whose
+ * script changes activated-ability costs (Zirda, Forensic Gadgeteer ...)? false = ability costs are as printed.
+ */
+export function mayAdjustAbilityCost(st: StaticsState): boolean {
+  for (const iid of st.battlefield) {
+    const c = st.cards[iid];
+    if (!c || isHidden(c)) continue;
+    const ref = scriptRef(c);
+    if ((ref && hasAbilityCostStatic(ref.cardId.replace(/#doors$/, ''))) || (c.cardId && hasAbilityCostStatic(c.cardId))) return true;
+  }
+  return false;
+}
+
 /** Printed mana cost of a face (0 front, 1 back / adventure / second half). */
 export function faceManaCost(inst: CardInstance, face: number, lookup: Lookup): string {
   const data = inst.cardId ? lookup(inst.cardId) : undefined;
