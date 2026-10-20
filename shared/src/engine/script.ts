@@ -4,6 +4,7 @@
  */
 import data from '../../data/scripts.json' with { type: 'json' };
 import { getCard } from '../cube.ts';
+import { applyScriptOverride, CARD_OVERRIDES } from '../overrides.ts';
 import { KNOWN_CONDITIONS, supportedCount } from './counts.ts';
 import { type Animation, type AutoInfo, type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
 import { KEYWORD_APIS, synthAbilities, synthLine } from './keywords.ts';
@@ -18,6 +19,8 @@ export function unlessCostSupported(cost: string): boolean {
 }
 
 export const SCRIPTS = data as unknown as ScriptData;
+// House rules and custom cards (shared/data/overrides.json) replace the Forge lines they change.
+for (const id of Object.keys(CARD_OVERRIDES)) if (SCRIPTS.cards[id]) SCRIPTS.cards[id] = applyScriptOverride(id, SCRIPTS.cards[id]);
 
 export function getScript(cardId: string): ForgeFace[] | undefined {
   const s = SCRIPTS.cards[cardId];
@@ -147,7 +150,7 @@ export function isRoomCard(cardId: string | undefined): boolean {
  * loads cards for a room, the client when the server sends them. Existing entries are kept.
  */
 export function registerScripts(cards: Record<string, ForgeFace[]>, tokens?: Record<string, ScriptData['tokens'][string]>) {
-  for (const [id, faces] of Object.entries(cards)) if (faces && !SCRIPTS.cards[id]) SCRIPTS.cards[id] = faces;
+  for (const [id, faces] of Object.entries(cards)) if (faces && !SCRIPTS.cards[id]) SCRIPTS.cards[id] = applyScriptOverride(id, faces);
   for (const [id, t] of Object.entries(tokens ?? {})) if (t && !SCRIPTS.tokens[id]) SCRIPTS.tokens[id] = t;
 }
 

@@ -17,7 +17,7 @@ import { isHidden } from '../game/types.ts';
 import { parseCost } from './costs.ts';
 import { type CountState, evalCount } from './counts.ts';
 import { parseAbility, scriptFaceOf, scriptRef } from './script.ts';
-import { activateRestriction, staticMods, type StaticsState } from './statics.ts';
+import { activateRestriction, adjustCost, staticMods, type StaticsState } from './statics.ts';
 import type { ManaOption, ParsedAbility } from './types.ts';
 import { chapterManaLines } from './turns.ts';
 import { manaTapped, noteTapped } from './manatriggers.ts';
@@ -70,10 +70,16 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
     if (n == null) return;
     const cost = parseCost(ab.params.Cost ?? '', name);
     const tokens = (ab.params.Cost ?? '').split(/\s+/);
+    // Cost reductions for activated abilities that include mana abilities (Zirda / Forensic Gadgeteer house rules: down to {0}).
+    let manaCost = cost.mana;
+    if (manaCost && 'battlefield' in state && 'players' in state) {
+      const adj = adjustCost(state as unknown as StaticsState, c as CardInstance, c.controller, manaCost, 'Ability', lookup, { manaAbility: true }).cost;
+      manaCost = /^(\{0\})*$/.test(adj) ? '' : adj;
+    }
     const base: Omit<Planned, 'id' | 'label' | 'produces'> = {
-      sideEffects: [], tap: tokens.includes('T'), mana: cost.mana, life: 0, sacSelf: false, discardHand: false, selfDamage: 0, byHand: [],
+      sideEffects: [], tap: tokens.includes('T'), mana: manaCost, life: 0, sacSelf: false, discardHand: false, selfDamage: 0, byHand: [],
     };
-    if (cost.mana) base.sideEffects.push(`Pay ${cost.mana}`);
+    if (manaCost) base.sideEffects.push(`Pay ${manaCost}`);
     let tapType: string | undefined;
     for (const part of cost.parts) {
       const tm = /^tapXType<1\/([^>]+)> \(by hand\)$/.exec(part.text);

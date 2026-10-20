@@ -310,7 +310,7 @@ export class Rooms {
     // Random seating, like a real draft table.
     const order = players.map((p) => ({ p, r: rng() })).sort((x, y) => x.r - y.r).map((x, i) => ({ ...x.p, seat: i }));
     s.players = order;
-    const list = cubeList(s, CUBE.list);
+    const list = cubeList(s, CUBE.list, cardAvailable);
     const n = order.length;
     try {
       if (s.settings.source === 'set' && s.settings.mode === 'draft') {
@@ -369,7 +369,7 @@ export class Rooms {
       s.decks[bot.id] = { ...deck, ready: true };
       return bot;
     }
-    const list = s.settings.mode === 'constructed' ? CUBE.list : cubeList(s, CUBE.list);
+    const list = s.settings.mode === 'constructed' ? CUBE.list : cubeList(s, CUBE.list, cardAvailable);
     const pool = list.map((c) => ({ c, r: rng() })).sort((x, y) => x.r - y.r).slice(0, 90).map((x) => x.c);
     ensureCards(pool);
     s.pools[bot.id] = pool;
@@ -510,7 +510,7 @@ export class Rooms {
       phase: s.phase, draft, auction: s.auction,
       pool: s.pools[pid] ?? [], deck: s.decks[pid] ?? null,
       decksReady: Object.fromEntries(Object.entries(s.decks).map(([k, d]) => [k, d.ready])),
-      matches, chat: s.chat, serverNow: Date.now(), cubeSize: cubeList(s, CUBE.list).length, carddb: carddbAvailable(),
+      matches, chat: s.chat, serverNow: Date.now(), cubeSize: cubeList(s, CUBE.list, cardAvailable).length, carddb: carddbAvailable(),
       ...(spectators.length ? { spectators } : {}),
     } as RoomView;
   }
@@ -543,6 +543,9 @@ function clamp(v: unknown, lo: number, hi: number, dflt: number) {
   const n = Math.floor(Number(v));
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
 }
+
+/** Cards this server can load ("Power up" skips power cards it can't: no card database). */
+const cardAvailable = (id: string) => !!getCard(id);
 
 /** Valid ids of an imported list: cube cards, plus any database card when the DB is built. */
 function cleanList(list: unknown): string[] | undefined {
@@ -579,6 +582,7 @@ export function sanitizeSettings(x: RoomSettings, humans: number, keepList?: str
     colorBalance: !!x.colorBalance,
     ...(BOT_LEVELS.includes(x.vsBot as BotLevel) ? { vsBot: x.vsBot } : {}),
     customList,
+    ...(x.powerUp ? { powerUp: true } : {}),
     ...(customList?.length && x.customListName ? { customListName: String(x.customListName).slice(0, 80) } : {}),
   };
 }

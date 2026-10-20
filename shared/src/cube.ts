@@ -1,5 +1,6 @@
 import { basicLandCard, type CardData, type Color, type CubeData } from './cards.ts';
 import cubeJson from '../data/cube.json' with { type: 'json' };
+import { applyCardOverride } from './overrides.ts';
 
 /** The lookup plus the five basic lands (same as game/reducer.ts withBasics; kept here so cube.ts has no engine imports). */
 function withBasics(lookup: (id: string) => CardData | undefined): (id: string) => CardData | undefined {
@@ -8,7 +9,9 @@ function withBasics(lookup: (id: string) => CardData | undefined): (id: string) 
   return (id) => basics[id] ?? lookup(id);
 }
 
-export const CUBE = cubeJson as unknown as CubeData;
+const RAW_CUBE = cubeJson as unknown as CubeData;
+/** The built-in cube, with card overrides (shared/data/overrides.json) applied. */
+export const CUBE: CubeData = { ...RAW_CUBE, cards: RAW_CUBE.cards.map((c) => applyCardOverride(c)) };
 const byId = new Map<string, CardData>(CUBE.cards.map((c) => [c.id, c]));
 
 // ------------------------------------------------------------ registry for cards outside the cube
@@ -26,8 +29,9 @@ let version = 0;
 export function registerCards(cards: CardData[] | Record<string, CardData>) {
   const list = Array.isArray(cards) ? cards : Object.values(cards);
   let changed = false;
-  for (const c of list) {
-    if (!c?.id) continue;
+  for (const raw of list) {
+    if (!raw?.id) continue;
+    const c = applyCardOverride(raw);
     const cur = registry.get(c.id);
     if (cur && cur.image === c.image && cur.rank === c.rank) continue;
     registry.set(c.id, c);
@@ -63,7 +67,7 @@ export function cardRegistryVersion(): number {
 function lookup(id: string): CardData | undefined {
   const c = registry.get(id) ?? byId.get(id);
   if (c || !resolver) return c;
-  const r = resolver(id);
+  const r = applyCardOverride(resolver(id));
   if (r && !registry.has(id)) registry.set(id, r);
   return r;
 }

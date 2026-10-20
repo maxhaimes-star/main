@@ -1,3 +1,4 @@
+import { withPower } from './powerup.ts';
 import { type CardData, COLORS } from './cards.ts';
 import { botDeck, botPick, cardScore } from './bots.ts';
 import { emptyDeck, multisetDiff } from './deckutil.ts';
@@ -45,8 +46,9 @@ export function seatedPlayers(room: RoomState): Player[] {
   return room.players.slice().sort((a, b) => a.seat - b.seat);
 }
 
-export function cubeList(room: RoomState, defaultList: string[]): string[] {
-  return room.settings.customList?.length ? room.settings.customList : defaultList;
+export function cubeList(room: RoomState, defaultList: string[], available?: (id: string) => boolean): string[] {
+  const list = room.settings.customList?.length ? room.settings.customList : defaultList;
+  return room.settings.powerUp ? withPower(list, available) : list; // "Power up" (powerup.ts)
 }
 
 export { multisetDiff, emptyDeck };

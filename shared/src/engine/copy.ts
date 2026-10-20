@@ -13,8 +13,8 @@
  * ETB replacements are asked as Pending questions after the permanent is on the battlefield; its "enters the
  * battlefield" event is held back until the answer, so ETB triggers see the copied card.
  */
-import cubeJson from '../../data/cube.json' with { type: 'json' };
 import type { CardData, Color, TokenData } from '../cards.ts';
+import { CUBE } from '../cube.ts';
 import { cardName, faceOf } from '../game/rules.ts';
 import { type Ctx, emit, log, randomId } from '../game/state.ts';
 import { moveHooks } from '../game/hooks.ts';
@@ -28,7 +28,7 @@ import { MORE_DEFINED } from './more-support.ts';
 import { matchCard } from './targets.ts';
 import type { AutoCont, CopyExtra, ParsedAbility, Pending } from './types.ts';
 
-const CUBE_CARDS = (cubeJson as unknown as { cards: CardData[] }).cards;
+const CUBE_CARDS: CardData[] = CUBE.cards;
 const COLORS = ['White', 'Blue', 'Black', 'Red', 'Green'];
 
 const list = (v: string | undefined, sep: string | RegExp = /[,&]/) => (v ? v.split(sep).map((x) => x.trim()).filter(Boolean) : []);

@@ -824,7 +824,7 @@ function changeGeneric(cost: string, delta: number, minMana: number): string {
  * Apply RaiseCost / ReduceCost statics to a mana cost.
  * kind 'Spell': `inst` is the spell being cast (its own EffectZone$ All statics count too). 'Ability': `inst` is the source.
  */
-export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, cost: string, kind: 'Spell' | 'Ability', lookup: Lookup): { cost: string; notes: string[] } {
+export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, cost: string, kind: 'Spell' | 'Ability', lookup: Lookup, opts: { manaAbility?: boolean } = {}): { cost: string; notes: string[] } {
   const c = computed(st, lookup);
   const ev = new Evaluator(st, lookup, true);
   const sources = [...c.statics];
@@ -839,6 +839,9 @@ export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, co
     if (!raise && !s.modes.includes('ReduceCost')) continue;
     const p = s.params;
     if (costKind(p) !== kind || p.Cost || p.Color) continue;
+    // "Abilities ... that aren't mana abilities" (ValidSpell$ Activated.!ManaAbility): mana abilities (engine/mana.ts) are skipped.
+    if (opts.manaAbility && /(!ManaAbility|nonManaAbility)/.test(p.ValidSpell ?? '')) continue;
+    if (!opts.manaAbility && /(^|\.)ManaAbility\b/.test((p.ValidSpell ?? '').replace(/!ManaAbility/g, ''))) continue;
     if (ev.active(s) !== true) continue;
     if (p.Activator === 'You' && pid !== s.controller) continue;
     if (p.Activator === 'Opponent' && pid === s.controller) continue;
