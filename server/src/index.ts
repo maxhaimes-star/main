@@ -55,15 +55,17 @@ app.post('/api/rooms', (req, res) => {
   res.json(rooms.create(String(roomName ?? ''), String(name ?? '')));
 });
 app.post('/api/rooms/:id/join', (req, res) => {
-  const r = rooms.join(req.params.id.toLowerCase(), String(req.body?.name ?? ''));
-  if (!r) return res.status(404).json({ error: 'Room not found' });
-  broadcast(req.params.id.toLowerCase());
-  res.json(r);
+  const rec = rooms.find(req.params.id);
+  const r = rec && rooms.join(rec.state.id, String(req.body?.name ?? ''));
+  if (!rec || !r) return res.status(404).json({ error: 'Room not found' });
+  broadcast(rec.state.id);
+  res.json({ ...r, roomId: rec.state.id });
 });
 app.get('/api/rooms/:id', (req, res) => {
-  const rec = rooms.rooms.get(req.params.id.toLowerCase());
+  const rec = rooms.find(req.params.id);
   if (!rec) return res.status(404).json({ error: 'Room not found' });
-  res.json({ id: rec.state.id, name: rec.state.name, phase: rec.state.phase, players: rec.state.players.map((p) => p.name) });
+  const host = rec.state.players.find((p) => p.id === rec.state.hostId);
+  res.json({ id: rec.state.id, name: rec.state.name, phase: rec.state.phase, host: host?.name ?? null, players: rec.state.players.map((p) => p.name) });
 });
 app.get('/healthz', (_req, res) => res.send('ok'));
 registerCardDbRoutes(app);
@@ -108,7 +110,7 @@ function setConnected(roomId: string, pid: string) {
 
 io.on('connection', (socket) => {
   const { roomId, token } = socket.handshake.auth as { roomId?: string; token?: string };
-  const auth = roomId && token ? rooms.auth(roomId.toLowerCase(), token) : null;
+  const auth = roomId && token ? rooms.auth(roomId, token) : null;
   if (!auth) {
     socket.emit('fatal', 'Room not found or your seat expired — rejoin from the home page.');
     socket.disconnect(true);
