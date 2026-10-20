@@ -8,6 +8,7 @@ import { isCubeCard, isKnownCard, registerCards, setCardResolver } from '@ojb/sh
 import { getCard } from '@ojb/shared/src/cube.ts';
 import { registerScripts } from '@ojb/shared/src/engine/script.ts';
 import { heuristicRank } from '@ojb/shared/src/power.ts';
+import { rareFirst } from '@ojb/shared/src/boosters.ts';
 import { printingImage, type Rarity } from '@ojb/shared/src/carddb-types.ts';
 import { boosterFor, carddbAvailable, getCardById, getScript, getSet, printingsOf, tokenTable } from './carddb.ts';
 
@@ -60,7 +61,8 @@ export interface SetPack { ids: string[]; prints: Record<string, string> }
 
 /** One booster as card ids; registers its cards (rank from the booster's rarity) and their printings. */
 export function setBooster(code: string, rng: () => number): SetPack {
-  const cards = boosterFor(code, rng);
+  // Rares and mythics at the top of the pack, like opening a real booster.
+  const cards = rareFirst(boosterFor(code, rng));
   const prints: Record<string, string> = {};
   const add: CardData[] = [];
   for (const b of cards) {
