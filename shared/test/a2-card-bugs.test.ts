@@ -2,9 +2,12 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilityUsability, activatedAbilitiesOf, applyAction, castability, createGame, isValidTarget, targetSpecs, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
+  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, type CardData, castability, createGame, effectivePT, faceOf, isCreature, isValidTarget, targetSpecs, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
+import { registerCards } from '../src/cube.ts';
+import { registerScripts } from '../src/engine/script.ts';
+import { INCUBATE } from './fixtures/incubate.ts';
 import { blockRestriction } from '../src/engine/statics.ts';
 import { parseAbility, SCRIPTS } from '../src/engine/script.ts';
 
@@ -415,5 +418,54 @@ describe('A2.7: True-Name Nemesis (protection from the chosen player)', () => {
     expect(g.cards[t].zone, logText(g)).toBe('battlefield');
     expect(g.cards[t].damage).toBe(0);
     expect(g.cards[gg].zone).toBe('graveyard');
+  });
+});
+
+describe('A2.8: Incubate', () => {
+  registerCards(Object.values(INCUBATE).map((r) => r.card as unknown as CardData));
+  registerScripts(Object.fromEntries(Object.entries(INCUBATE).map(([id, r]) => [id, r.script])) as never);
+
+  function incubate() {
+    const { g, ctx } = setup(['eyes_of_gitaxias'], [], 7, 'basic_island');
+    for (let k = 0; k < 5; k++) put(g, ctx, 'a', 'basic_island');
+    const eg = toZone(g, ctx, 'a', 'eyes_of_gitaxias', 'hand');
+    const hand = P(g, 'a').zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid: eg });
+    drain(g, ctx);
+    const inc = g.battlefield.find((i) => g.cards[i].token?.name === 'Incubator')!;
+    return { g, ctx, inc, hand };
+  }
+
+  it('Eyes of Gitaxias: an Incubator artifact token with three +1/+1 counters, then draw', () => {
+    const { g, inc, hand } = incubate();
+    expect(inc, logText(g)).toBeTruthy();
+    expect(g.cards[inc].counters['+1/+1']).toBe(3);
+    expect(faceOf(g.cards[inc], getCard).types).toEqual(['Artifact']);
+    expect(isCreature(g.cards[inc], getCard, g)).toBe(false);
+    expect(P(g, 'a').zones.hand.length).toBe(hand - 1 + 1);
+  });
+
+  it('{2}: transform it (auto-paid) into a 3/3 Phyrexian artifact creature', () => {
+    const { g, ctx, inc } = incubate();
+    const ab = abilitiesOfInstance(g.cards[inc], g, getCard).find((a) => a.ability.api === 'SetState')!;
+    expect(ab, 'transform ability').toBeTruthy();
+    expect(abilityUsability(g, 'a', inc, ab.index, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'activate', iid: inc, text: '', ability: ab.index });
+    drain(g, ctx);
+    const f = faceOf(g.cards[inc], getCard);
+    expect(f.name).toBe('Phyrexian Token');
+    expect(f.types).toEqual(['Artifact', 'Creature']);
+    expect(/Phyrexian/.test(f.typeLine)).toBe(true);
+    expect(effectivePT(g.cards[inc], getCard, g)).toEqual([3, 3]);
+    expect(abilitiesOfInstance(g.cards[inc], g, getCard).some((a) => a.ability.api === 'SetState')).toBe(false);
+  });
+
+  it('an Incubator from the token table gets the transform too', () => {
+    const { g, ctx } = setup();
+    g.fixMode = { on: true } as never;
+    act(g, ctx, 'a', { t: 'createToken', token: { name: 'Incubator', typeLine: 'Token Artifact — Incubator', colors: [], power: '0', toughness: '0', oracle: '{2}: Transform this token.', keywords: [] }, n: 1 });
+    const inc = g.battlefield.find((i) => g.cards[i].token?.name === 'Incubator')!;
+    expect(g.cards[inc].token?.back?.name).toBe('Phyrexian Token');
+    expect(abilitiesOfInstance(g.cards[inc], g, getCard).some((a) => a.ability.api === 'SetState')).toBe(true);
   });
 });

@@ -23,6 +23,8 @@ export interface TokenData {
   toughness?: string;
   oracle: string;
   keywords: string[];
+  /** Double-faced tokens (Incubator): the face it transforms into. */
+  back?: TokenData;
 }
 
 export interface CardData {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { NumberField } from '../NumberField.tsx';
-import { type CardInstance, faceOf, isHidden, type TokenData, type Color, multisetDiff } from '@ojb/shared';
+import { type CardInstance, faceOf, INCUBATOR_TOKEN, isHidden, type TokenData, type Color, multisetDiff } from '@ojb/shared';
 import { CardBack, CardImage, CubeCard, getCard, setPreview, tokenToFace } from '../cards.tsx';
 import { isTouch } from '../touch.ts';
 import { Modal, useGame } from './ui.tsx';
@@ -111,6 +111,7 @@ const COMMON_TOKENS: TokenData[] = [
   { name: 'Zombie', typeLine: 'Token Creature — Zombie', colors: ['B'], power: '2', toughness: '2', oracle: '', keywords: [] },
   { name: 'Beast', typeLine: 'Token Creature — Beast', colors: ['G'], power: '3', toughness: '3', oracle: '', keywords: [] },
   { name: 'Germ', typeLine: 'Token Creature — Phyrexian Germ', colors: ['B'], power: '0', toughness: '0', oracle: '', keywords: [] },
+  INCUBATOR_TOKEN,
   { name: 'Construct', typeLine: 'Token Artifact Creature — Construct', colors: [], power: '0', toughness: '0', oracle: 'This creature gets +1/+1 for each artifact you control.', keywords: [] },
 ];
 

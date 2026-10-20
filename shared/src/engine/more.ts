@@ -21,8 +21,9 @@ import { addEffect } from './durations.ts';
 import { addExtraCombat } from './combat-rules.ts';
 import { canPayCost, parseCostTokens, payCostNow } from './paycost.ts';
 import { checkTargets } from './play.ts';
+import { tokenMultiplier } from './replacements.ts';
 import { addSplice, createTokenInstance, exiledWithSource, lkiOf, resumeAuto } from './resolve.ts';
-import { flatten, getScript, parseAbility, registerScripts, SCRIPTS, spellAbility, targetSpecs } from './script.ts';
+import { flatten, getScript, INCUBATOR_TOKEN, parseAbility, registerScripts, SCRIPTS, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard, type MatchEnv } from './targets.ts';
 import type { AutoCont, AutoInfo, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
 import type { UniqueRun } from './unique.ts';
@@ -234,6 +235,25 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       for (const svar of [sub, side]) if (svar && r.svars[svar]) r.splice(svar);
       return 'ok';
     }
+    case 'Incubate': {
+      // Incubate N (Times$ T): create an Incubator token with N +1/+1 counters ("{2}: Transform this artifact." into a 0/0 Phyrexian).
+      const n = r.amount(p.Amount ?? '1', 1);
+      const times = r.amount(p.Times ?? '1', 1);
+      if (n == null || times == null) { r.manual(); return 'ok'; }
+      const players = p.Defined ? r.defined(p.Defined)?.players ?? [] : [r.controller];
+      const made: string[] = [];
+      for (const owner of players) {
+        const count = times * tokenMultiplier(state, ctx, owner);
+        for (let k = 0; k < count; k++) {
+          const inst = createTokenInstance(state, ctx, owner, INCUBATOR_TOKEN, false);
+          if (n > 0) inst.counters['+1/+1'] = (inst.counters['+1/+1'] ?? 0) + n;
+          made.push(inst.iid);
+        }
+        log(state, ctx, owner, `${pname(state, owner)} incubates ${n}${count > 1 ? ` ${count} times` : ''} (Incubator token${count === 1 ? '' : 's'} with ${n} +1/+1 counter${n === 1 ? '' : 's'}).`);
+      }
+      if (Object.keys(p).some((k) => k.startsWith('Remember'))) r.remember(made);
+      return 'ok';
+    }
     case 'ChooseCard': return chooseCard(state, ctx, r);
     case 'ChooseNumber': {
       const min = r.amount(p.Min ?? '0', 0) ?? 0;
@@ -378,7 +398,7 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
         if (!c || c.zone !== 'battlefield') continue;
         if (p.Mode === 'TurnFaceUp' || p.Mode === 'TurnFace') { c.faceDown = false; log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} is turned face up.`); continue; }
         const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
-        if (!data?.faces || data.faces.length < 2) continue;
+        if (!(c.token?.back && !c.cardId) && (!data?.faces || data.faces.length < 2)) continue;
         const before = cardName(c, ctx.lookup);
         c.transformed = !c.transformed;
         const f = faceOf(c, ctx.lookup);

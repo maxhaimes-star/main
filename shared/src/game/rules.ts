@@ -85,7 +85,7 @@ function bestowedFace(f: Face): Face {
 }
 
 function printedFace(inst: CardInstance, lookup: Lookup, isToken: boolean): Face {
-  if (inst.token && !inst.cardId) return tokenFace(inst.token);
+  if (inst.token && !inst.cardId) return tokenFace(inst.transformed && inst.token.back ? inst.token.back : inst.token);
   const card = inst.cardId ? lookup(inst.cardId) : undefined;
   if (!card) return { name: 'Unknown card', manaCost: '', typeLine: '', oracle: '', types: [], keywords: [], isToken };
   const back: CardFace | undefined = inst.transformed && card.faces?.[1] && (card.layout === 'transform' || card.layout === 'modal_dfc' || card.layout === 'flip') ? card.faces[1] : undefined;

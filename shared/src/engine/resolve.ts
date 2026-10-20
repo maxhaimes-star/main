@@ -6,7 +6,7 @@ import { cardName, effectivePT, faceOf, hasKeyword, isCreature, payFromPool } fr
 import { type Ctx, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import type { CardInstance, GamePlayer, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import type { TokenData } from '../cards.ts';
-import { chainOf, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, baseVarSupported, splitVarMath, applyVarMath, targetSpecs, unsupportedReason } from './script.ts';
+import { chainOf, withTokenBack, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, baseVarSupported, splitVarMath, applyVarMath, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import { lifeGainPrevented, staticsDefineToughness } from './statics.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
@@ -877,7 +877,8 @@ function rememberOnCard(state: GameState, item: StackItem, iids: string[]) {
 }
 
 /** Create a token on the battlefield (Stage 2: emits an "enters the battlefield" event). */
-export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, token: TokenData, tapped: boolean, cardId?: string): CardInstance {
+export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, token0: TokenData, tapped: boolean, cardId?: string): CardInstance {
+  const token = withTokenBack(token0);
   const inst = newInstance(state, ctx.rng, owner, 'battlefield', cardId, token);
   inst.tapped = tapped;
   inst.summoningSick = true;
