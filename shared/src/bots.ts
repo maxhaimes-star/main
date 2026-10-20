@@ -106,16 +106,63 @@ export function cardScore(card: CardData, picks: string[], lookup: CardLookup): 
   return scoreCard(card, pickProfile(picks, lookup));
 }
 
-export function botPick(pack: string[], picks: string[], lookup: CardLookup, rng: Rng): string {
+// ===================================================================== signals and synergy
+
+/**
+ * Colour signals: strong cards still in a pack that reaches us late mean their colour is flowing from upstream.
+ * `left` = cards in the pack now, `size` = the pack's full size. A first pick (a fresh pack) says nothing.
+ */
+export function noteSignals(signals: Record<Color, number>, pack: string[], left: number, size: number, lookup: CardLookup) {
+  const lateness = size > 0 ? Math.max(0, 1 - left / size) : 0;
+  if (lateness <= 0) return;
+  for (const id of pack) {
+    const c = lookup(id);
+    if (!c || isLand(c) || !c.colors.length) continue;
+    const strength = Math.max(0, cardPower(c) - 0.4);
+    for (const col of c.colors) signals[col] += (strength * (0.5 + lateness)) / c.colors.length;
+  }
+}
+
+/** How much `card` gains from the picks so far (tribes, spells-matter, artifacts); 0 .. ~0.35. */
+export function synergy(card: CardData, picks: string[], lookup: CardLookup): number {
+  const pool = picks.map(lookup).filter(Boolean) as CardData[];
+  if (!pool.length) return 0;
+  let s = 0;
+  // Tribes: creature types shared with the pool (only types that matter: more than a couple).
+  if (isCreature(card)) {
+    const types = new Set(card.subtypes);
+    const mates = pool.filter((c) => isCreature(c) && c.subtypes.some((t) => types.has(t))).length;
+    const tribal = pool.some((c) => card.subtypes.some((t) => new RegExp(`\\b${t}s?\\b`).test(c.oracle)));
+    s += Math.min(0.2, mates * (tribal ? 0.05 : 0.02));
+    if (card.subtypes.some((t) => pool.some((c) => new RegExp(`\\b${t}s?\\b`).test(c.oracle)))) s += 0.1;
+  }
+  const spell = (c: CardData) => c.types.includes('Instant') || c.types.includes('Sorcery');
+  const spellsMatter = (c: CardData) => /instant (and|or) sorcery|noncreature spell/i.test(c.oracle);
+  const artifactsMatter = (c: CardData) => /\bartifacts?\b/i.test(c.oracle) && !c.types.includes('Artifact');
+  // Payoffs and enablers find each other.
+  if (spell(card)) s += Math.min(0.2, pool.filter(spellsMatter).length * 0.07);
+  if (spellsMatter(card)) s += Math.min(0.2, pool.filter(spell).length * 0.02);
+  if (card.types.includes('Artifact')) s += Math.min(0.15, pool.filter(artifactsMatter).length * 0.05);
+  if (artifactsMatter(card)) s += Math.min(0.15, pool.filter((c) => c.types.includes('Artifact')).length * 0.02);
+  return Math.min(0.35, s);
+}
+
+export function botPick(pack: string[], picks: string[], lookup: CardLookup, rng: Rng, signals?: Record<Color, number>): string {
   // Never pass a super busted card, whatever its colours: take the best of them.
   const busted = pack.map((id) => ({ id, c: lookup(id) })).filter((x) => x.c && isMustPick(x.c));
   if (busted.length) return busted.sort((a, b) => mustPickPriority(a.c!) - mustPickPriority(b.c!))[0].id;
   const prof = pickProfile(picks, lookup);
   let best = pack[0];
   let bestScore = -Infinity;
+  const sigTotal = signals ? COLORS.reduce((a, c) => a + signals[c], 0) : 0;
   for (const id of pack) {
     const c = lookup(id);
-    const s = (c ? scoreCard(c, prof) : 0) + rng() * 0.12;
+    let s = (c ? scoreCard(c, prof) : 0) + rng() * 0.12;
+    if (c && !isLand(c)) {
+      // Read the signals while still choosing colours: lean toward what's flowing.
+      if (sigTotal > 0 && c.colors.length) s += 0.3 * (1 - 0.6 * prof.commit) * (c.colors.reduce((a, col) => a + signals![col], 0) / c.colors.length / sigTotal);
+      s += synergy(c, picks, lookup);
+    }
     if (s > bestScore) { bestScore = s; best = id; }
   }
   return best;

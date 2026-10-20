@@ -1,5 +1,5 @@
 import { type CardData, COLORS } from './cards.ts';
-import { botDeck, botPick, cardScore } from './bots.ts';
+import { botDeck, botPick, cardScore, noteSignals } from './bots.ts';
 import { emptyDeck, multisetDiff } from './deckutil.ts';
 import type { AuctionState, Deck, DraftState, Player, RoomState } from './room.ts';
 
@@ -222,7 +222,13 @@ export function draftTick(room: RoomState, now: number, lookup: CardLookup, rng:
     const p = players[seat];
     const timedOut = d.deadlines[seat] != null && now >= d.deadlines[seat]!;
     if (p.isBot || timedOut) {
-      const pick = p.isBot ? botPick(pack, d.picks[seat], lookup, rng) : autoPickFor(room, seat, lookup)!;
+      let pick: string;
+      if (p.isBot) {
+        // What reaches this seat tells it which colours are open upstream.
+        const sig = ((d.signals ??= d.queues.map(() => ({ W: 0, U: 0, B: 0, R: 0, G: 0 })))[seat] ??= { W: 0, U: 0, B: 0, R: 0, G: 0 });
+        noteSignals(sig, pack, pack.length, room.settings.packSize, lookup);
+        pick = botPick(pack, d.picks[seat], lookup, rng, sig);
+      } else pick = autoPickFor(room, seat, lookup)!;
       // Never leave a seat without its card: fall back to the first card if the choice is somehow not in the pack.
       if (draftPick(room, seat, pick, now)) draftPick(room, seat, pack[0], now);
       changed = true;

@@ -111,6 +111,8 @@ export interface DraftState {
   main?: string[][];
   /** Per seat: the card the player highlighted in their current pack (auto-picked if the timer runs out). */
   highlight?: (string | null)[];
+  /** Bots: colour signals per seat (strong cards seen late in packs, see bots.ts noteSignals). */
+  signals?: Record<Color, number>[];
   /** Packs not yet opened, per round per seat. */
   unopened: string[][][];
   pickNumber: number[];
