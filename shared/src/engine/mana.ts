@@ -51,6 +51,16 @@ function amountOf(raw: string | undefined, ab: ParsedAbility, state: CountState,
   if (/^\d+$/.test(raw)) return parseInt(raw, 10);
   const v = ab.svars?.[raw];
   if (!v) return undefined;
+  // Count$Compare X GE1.6.2: 6 if SVar X >= 1, else 2 (Undermountain Adventurer).
+  const cm = /^Count\$Compare (\w+) (LT|LE|EQ|NE|GE|GT)(-?\d+)\.(-?\d+)\.(-?\d+)$/.exec(v);
+  if (cm) {
+    const left = amountOf(cm[1], ab, state, c, lookup);
+    if (left == null) return undefined;
+    const r = parseInt(cm[3], 10);
+    const ok = { LT: left < r, LE: left <= r, EQ: left === r, NE: left !== r, GE: left >= r, GT: left > r }[cm[2] as 'LT'];
+    return parseInt(ok ? cm[4] : cm[5], 10);
+  }
+  if (v === 'DungeonsCompleted$Amount' || v === 'Count$DungeonsCompleted') return state.players.find((p) => p.pid === c.controller)?.counters.dungeons ?? 0;
   return evalCount(v, { state, lookup, controller: c.controller, sourceIid: c.iid });
 }
 

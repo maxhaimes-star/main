@@ -302,3 +302,17 @@ describe('Ragavan, Nimble Pilferer', () => {
     expect(g.cards[rag].zone, logText(g)).toBe('hand');
   });
 });
+
+describe('Undermountain Adventurer: its mana ability adds mana', () => {
+  it('adds {G}{G}, or six {G} once you completed a dungeon; auto-pay can use it', () => {
+    const { g, ctx } = setup(['undermountain_adventurer']);
+    const ua = put(g, ctx, 'a', 'undermountain_adventurer');
+    const opts = manaOptionsFor(g, ua, getCard);
+    expect(opts.map((o) => o.produces)).toEqual(['GG']);
+    act(g, ctx, 'a', { t: 'activateMana', iid: ua, option: opts[0].id });
+    expect(P(g, 'a').manaPool.G).toBe(2);
+    g.cards[ua].tapped = false;
+    P(g, 'a').counters.dungeons = 1;
+    expect(manaOptionsFor(g, ua, getCard).map((o) => o.produces)).toEqual(['GGGGGG']);
+  });
+});
