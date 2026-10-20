@@ -8,10 +8,14 @@ The whole app is one Node.js server that serves the website and runs the live ga
 2. Click **New → Blueprint**, pick this repository, and click **Apply**. It reads `render.yaml`.
 3. Wait for the build (a few minutes). Render gives you a URL like `https://ojb-cube.onrender.com`. Share it with your friends.
 
+4. **Set `ROOM_SECRET`** (once): in the Render dashboard open the service → **Environment** → **Add Environment Variable**, key `ROOM_SECRET`, value a long random string (for example the output of `openssl rand -base64 32`), then **Save changes**. New Blueprint deploys create it automatically (`generateValue` in `render.yaml`); check it is there. Never change it afterwards.
+
 Notes:
 - Free Render services **go to sleep after ~15 minutes with nobody connected**. The first visit after that takes ~30–60 seconds to wake up.
-- Sleeping or redeploying **clears rooms**, because free services have no permanent disk. Finish a draft and its games in one sitting, or export your decks (XMage/text) before you leave.
-- For rooms that survive restarts, use a paid instance with a persistent disk mounted at `/data` and set the env var `DATA_DIR=/data`.
+- Sleeping, restarting or redeploying wipes the server's disk, but **rooms come back**: every player's browser keeps an encrypted, signed copy of the room (settings, cube list, seats, draft/auction, picks, decks and games). When the server has forgotten a room, the first player to reconnect sends that copy back, the room returns under the same code, and everyone else rejoins automatically. Undo history inside a game is not kept.
+- This needs a stable `ROOM_SECRET` (step 4). Without it the server makes a random secret on every start, so copies saved before a restart can't be read after it, and rooms are lost as before.
+- Saved cubes and decks live in each browser's own storage and are never affected by restarts.
+- A paid instance with a persistent disk mounted at `/data` and `DATA_DIR=/data` also keeps rooms on the server.
 
 ## Option B: Your own computer + a free tunnel (rooms are saved)
 
