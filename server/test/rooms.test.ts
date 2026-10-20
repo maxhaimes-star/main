@@ -54,6 +54,8 @@ describe('rooms', () => {
     const m = rec.state.matches[0];
     const g = m.game!;
     expect(g.strict).toBe(true);
+    // A random sealed pool may hold Arcane Savant with sideboard instants: decline its pre-game question.
+    for (let i = 0; i < 20 && g.pregame; i++) { const q = g.pending[0]; rooms.handle(rec, q.pid, { t: 'game', matchId: m.id, action: { t: 'choose', id: q.id, value: 'no' } }); }
     rooms.handle(rec, host.pid, { t: 'game', matchId: m.id, action: { t: 'keep' } });
     rooms.handle(rec, friend.pid, { t: 'game', matchId: m.id, action: { t: 'keep' } });
     expect(rooms.handle(rec, host.pid, { t: 'game', matchId: m.id, action: { t: 'life', pid: friend.pid, delta: -20 } })).toMatch(/fix mode/);
@@ -78,6 +80,7 @@ describe('rooms', () => {
     rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, friend.pid], bestOf: 3 });
     const m = rec.state.matches[0];
     const game = (action: GameAction, pid: string) => rooms.handle(rec, pid, { t: 'game', matchId: m.id, action });
+    for (let i = 0; i < 20 && m.game!.pregame; i++) { const q = m.game!.pending[0]; game({ t: 'choose', id: q.id, value: 'no' }, q.pid); } // Arcane Savant in a random pool
     expect(game({ t: 'requestFreeMulligan' }, host.pid)).toBeNull();
     expect(game({ t: 'answerFreeMulligan', accept: true }, friend.pid)).toBeNull();
     expect(m.game!.freeMulligan?.on).toBe(true);
