@@ -7,7 +7,7 @@ import type { RoomProps } from '../Room.tsx';
 import { backFaceOf, CardBack, CardImage, cardFace, getCard, HoverPreview, setHoverZoom, setPreview, useHoverZoom } from '../cards.tsx';
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 import { hideSheet, showSheet } from '../sheet.tsx';
-import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
+import { type AutoSettings, noteHoldClick, sourceName, useAutoPass, useAutoSettings, withHold } from './auto.ts';
 import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, RevealedZone, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { attackAllCandidates, isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
@@ -15,7 +15,7 @@ import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from
 import { ATTACH_PEEK, COMBAT_SHIFT, fitBoard, STACK_UNITS, TAPPED_UNITS, type BoardSpec, type RowFit } from './boardLayout.ts';
 
 /** Actions never performed on behalf of a controlled player (see engine/turns.ts NEVER_ROUTED); also allowed while controlled. */
-const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan']);
+const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan', 'propose', 'answerProposal', 'cancelProposal']);
 
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
 
@@ -89,13 +89,16 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const toast = useCallback((msg: string) => { setToastMsg(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToastMsg(null), 2200); }, []);
 
   const [forceAsk, setForceAsk] = useState<{ error: string; resolve: (yes: boolean) => void } | null>(null);
+  const holdRef = useRef(auto.hold);
+  holdRef.current = auto.hold;
   const rawAct = useCallback(async (action: GameAction): Promise<string | null> => {
     if (controlled && !FREE_ACTIONS.has(action.t)) return `${g.players.find((p) => p.pid === cb!.by)?.name ?? 'Someone'} controls your turn`;
     const a = actAs && !FREE_ACTIONS.has(action.t) && !action.as ? { ...action, as: actAs } as GameAction : action;
     return send({ t: 'game', matchId: match.id, action: a }) as Promise<string | null>;
   }, [send, match.id, actAs, controlled, cb, g.players]);
   // Static restrictions (Teferi, Ensnaring Bridge ...) come back as errors mentioning "force": offer to override.
-  const act = useCallback(async (action: GameAction): Promise<string | null> => {
+  const act = useCallback(async (action0: GameAction): Promise<string | null> => {
+    const action = withHold(action0, { hold: holdRef.current }); // hold priority: toggle or Ctrl/Cmd-click
     const err = await rawAct(action);
     if (err && /force/i.test(err) && (action.t === 'cast' || action.t === 'activate' || action.t === 'declareAttacker' || action.t === 'declareBlocker') && !(action as { force?: boolean }).force) {
       const msg = err.replace(/\s*\((?:cast with|use) force to override\)\.?/i, '').replace(/[.\s]+$/, '');
@@ -751,7 +754,7 @@ function HandCard({ iid, i = 0, n = 1 }: { iid: string; i?: number; n?: number }
       onMouseLeave={() => { setPayPreview([]); setPreview(null); }}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); }}
       onMouseEnter={() => { showPay(); setPreview({ face, extra: [usable && !usable.ok ? `Can't cast: ${usable.reason ?? 'not now'}` : undefined, costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined, ...altHints].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined }); }}
-      onClick={() => { if (lp.consumed()) return; if (isTouch()) tapCard(iid); else defaultAction(iid); }}
+      onClick={(e) => { if (lp.consumed()) return; noteHoldClick(e); if (isTouch()) tapCard(iid); else defaultAction(iid); }}
       onContextMenu={(e) => { e.preventDefault(); if (!isTouch()) openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
       <CardImage face={face} />
     </div>
@@ -908,10 +911,16 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
       <input type="checkbox" checked={auto.autoPass} onChange={(e) => setAuto({ autoPass: e.target.checked })} /> Auto-pass
     </label>
   );
+  const hold = (
+    <label className={`tgl hold-tgl ${auto.hold ? 'on' : ''}`} title="Hold priority: keep priority after you cast a spell or activate an ability, so you can respond to it yourself (e.g. sacrifice Lion's Eye Diamond with a wheel on the stack). Ctrl/Cmd-click a card to hold for that one spell.">
+      <input type="checkbox" checked={auto.hold} onChange={(e) => setAuto({ hold: e.target.checked })} /> Hold priority
+    </label>
+  );
   if (inline) {
     return (
       <div className="auto-toggles">
         {autoPass}
+        {hold}
         <label className={`tgl ${auto.fullControl ? 'on' : ''}`} title="Stop at every step and never auto-pass">
           <input type="checkbox" checked={auto.fullControl} onChange={(e) => setFullControl(e.target.checked)} /> Full control
         </label>
@@ -923,6 +932,7 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
   return (
     <div className="auto-toggles">
       {autoPass}
+      {hold}
       {auto.fullControl && <span className="tgl on" title="Full control is on">Full control</span>}
       <button className={`tiny settings-btn ${pop ? 'sel' : ''}`} title="Stops (my turn / opponent's turn), full control, hover zoom"
         onClick={(e) => setPop(pop ? null : e.currentTarget.getBoundingClientRect())}>Stops ▾</button>
@@ -999,6 +1009,7 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
             { label: 'Stops: gold dot = your turn, red dot = opponent\'s turn. Edit both under "Stops".', disabled: true },
             { label: 'Right-click a phase to toggle a stop for the current turn type.', disabled: true },
             { label: 'Right-click a trigger on the stack to always yield to it.', disabled: true },
+            { label: 'Ctrl/Cmd-click a card (or turn on "Hold priority") to keep priority after casting it.', disabled: true },
           ], 'Help')}>?</button>
         </div>
       )}

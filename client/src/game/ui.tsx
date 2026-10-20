@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { NumberField } from '../NumberField.tsx';
 import { effectivePT, type Face, type GameAction, type GameView, isHidden, type ViewCard, faceOf, type TargetRef, type TargetSpec, type RevealEntry, type RevealedCard } from '@ojb/shared';
-import { attackProblem, blockProblem, isStrict, manualOk, summoningSickNoHaste } from './engine.ts';
+import { attackProblem, blockProblem, isStrict, manualOk, showsSummoningSick, summoningSickNoHaste } from './engine.ts';
+import { noteHoldClick } from './auto.ts';
 import { ATTACH_PEEK } from './boardLayout.ts';
 import { CardBack, CardImage, getCard, setPreview } from '../cards.tsx';
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
@@ -116,7 +117,7 @@ export function TableCard({ iid, small, attachments, stack }: { iid: string; sma
 
   return (
     <div
-      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || (stack ?? [iid]).some((x) => hoverTargets.includes(x)) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && c.summoningSick && isCreature ? 'sick' : ''} ${(stack ?? [iid]).some((x) => payPreview.includes(x)) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''} ${canAttack ? 'can-attack' : ''} ${canBlock ? 'can-block' : ''} ${stack ? 'stacked' : ''}`}
+      className={`tcard ${small ? 'small' : ''} ${c.tapped ? 'tapped' : ''} ${c.attacking ? 'attacking' : ''} ${c.blocking ? 'blocking' : ''} ${selectable ? 'targetable' : ''} ${targeting ? (legal ? 'legal-target' : 'dim') : ''} ${chosen || (stack ?? [iid]).some((x) => hoverTargets.includes(x)) ? 'targeted' : ''} ${mode && 'iid' in mode && mode.iid === iid ? 'selected' : ''} ${!hidden && showsSummoningSick(g, c) ? 'sick' : ''} ${(stack ?? [iid]).some((x) => payPreview.includes(x)) ? 'pay-preview' : ''} ${noAttack ? 'no-attack' : ''} ${canAttack ? 'can-attack' : ''} ${canBlock ? 'can-block' : ''} ${stack ? 'stacked' : ''}`}
       data-iid={iid}
       draggable={!isTouch() && (!hidden || c.faceDown)}
       {...lp.props}
@@ -126,6 +127,7 @@ export function TableCard({ iid, small, attachments, stack }: { iid: string; sma
       onClick={(e) => {
         e.stopPropagation();
         if (lp.consumed()) return;
+        noteHoldClick(e); // Ctrl / Cmd-click: hold priority after this cast / activation
         if (targeting) pickTarget({ kind: 'card', iid });
         else if (isTouch() && !mode) tapCard(iid);
         else defaultAction(iid);
@@ -201,7 +203,7 @@ export function describe(c: ViewCard): string {
     if (faces) parts.push(faces.slice(0, 2).map((f, i) => `${f.name}: ${c.unlocked!.includes(i) ? 'unlocked' : 'locked'}`).join(' · '));
   }
   if (c.tempKeywords?.length) parts.push(`Gains until EOT: ${c.tempKeywords.join(', ')}`);
-  if (c.summoningSick) parts.push('Summoning sick');
+  if (showsSummoningSick(null, c)) parts.push('Summoning sick');
   return parts.join(' · ');
 }
 

@@ -1,6 +1,6 @@
 import {
   abilitiesOfInstance, activatedAbilitiesOf, activeStatics, castOptions, divisionError, effectiveCost, flatten, faceManaCost, isAutomatable, isValidTarget, spellAbility, targetSpecs,
-  type ActiveStatic, type CastOption, type GameView, type ParsedAbility, type TargetRef, type TargetSpec,
+  type ActiveStatic, type CastOption, type GameView, type ParsedAbility, type TargetRef, type TargetSpec, type ViewCard,
 } from '@ojb/shared';
 import * as Shared from '@ojb/shared';
 import { faceOf } from '@ojb/shared';
@@ -144,6 +144,16 @@ export function phyrexianChoice(g: GameView, pid: string | null, iid: string, fa
   if (!m?.phyrexian) return undefined;
   const l = run('life');
   return { mana: { ok: m.ok, life: m.life ?? 0 }, life: { ok: !!l?.ok, life: l?.life ?? 0 } };
+}
+
+/**
+ * Show the summoning-sick badge / styling: only creatures (a face-down permanent counts). Lands and other noncreature
+ * permanents never look summoning sick, even though the engine tracks the flag for every permanent (manlands, Mutavault).
+ */
+export function showsSummoningSick(g: GameView | null, c: ViewCard): boolean {
+  if (Shared.isHidden(c) || !c.summoningSick || c.zone !== 'battlefield') return false;
+  if (c.faceDown) return true;
+  return !!safe(() => (g ? Shared.isCreature(c as never, getCard, g as never) : faceOf(c as never, getCard).types.includes('Creature')));
 }
 
 /** A creature that cannot attack this turn because of summoning sickness (no haste). */

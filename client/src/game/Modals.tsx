@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { NumberField } from '../NumberField.tsx';
-import { type CardInstance, faceOf, isHidden, type TokenData, type Color, multisetDiff } from '@ojb/shared';
+import { type CardInstance, faceOf, isHidden, mulliganCost, type TokenData, type Color, multisetDiff } from '@ojb/shared';
 import { CardBack, CardImage, CubeCard, getCard, setPreview, tokenToFace } from '../cards.tsx';
 import { isTouch } from '../touch.ts';
 import { Modal, useGame } from './ui.tsx';
@@ -157,6 +157,32 @@ export function TokenModal({ onClose }: { onClose: () => void }) {
 
 // ---------------------------------------------------------------- mulligan
 
+/**
+ * The opponent's proposal (free mulligan, another 6, scry 1, random discard, shuffle into library): Agree / Decline;
+ * my own: waiting, with Withdraw. Like fix mode, nothing happens until the other player agrees.
+ */
+export function ProposalPrompt({ className = 'undo-req' }: { className?: string }) {
+  const { g, me, act } = useGame();
+  const prop = g.proposal;
+  if (!prop || !me) return null;
+  const who = g.players.find((x) => x.pid === prop.by)?.name ?? 'Your opponent';
+  if (prop.by === me) {
+    return (
+      <div className={`${className} pending-wait proposal-wait`}>
+        Waiting for your opponent to agree: {prop.text}…
+        <button className="tiny" onClick={() => act({ t: 'cancelProposal' })}>Withdraw</button>
+      </div>
+    );
+  }
+  return (
+    <div className={`${className} proposal-ask`}>
+      <span>{who} proposes: <b>{prop.text}</b>.</span>
+      <button className="primary" onClick={() => act({ t: 'answerProposal', accept: true })}>Agree</button>
+      <button onClick={() => act({ t: 'answerProposal', accept: false })}>Decline</button>
+    </div>
+  );
+}
+
 export function MulliganOverlay() {
   const { g, me, act } = useGame();
   const p = g.players.find((x) => x.pid === me);
@@ -164,8 +190,7 @@ export function MulliganOverlay() {
   if (!p) return <div className="overlay-msg">Players are choosing their opening hands…</div>;
   const others = g.players.filter((x) => x.pid !== me);
   const waiting = p.kept && p.needsBottom === 0;
-  const free = !!g.freeMulligan?.on;
-  const freeReq = !free ? g.freeMulligan?.requestedBy ?? null : null;
+  const free = g.freeMulligan?.on ? g.freeMulligan.count ?? 1 : 0;
   // Before the opening hands: cards revealed from the deck (Arcane Savant) — the question itself is a pending modal.
   if (g.pregame) {
     const mine = g.pending.some((q) => q.pid === me);
@@ -176,6 +201,12 @@ export function MulliganOverlay() {
       </div>
     );
   }
+  const cost = mulliganCost(g, p); // cards to bottom if I keep now
+  const next = mulliganCost(g, { ...p, mulligans: p.mulligans + 1 }); // ... after one more mulligan
+  const proposal = g.proposal;
+  // Free mulligans can be proposed while nobody kept after a paid mulligan (twice at most); "another 6" before going to 5.
+  const canProposeFree = free < 2 && !g.players.some((x) => x.kept && x.mulligans > free);
+  const canAsk6 = !p.kept && cost === 1;
   return (
     <div className="mulligan">
       <h2>{g.startingPlayer === me ? 'You are on the play.' : 'You are on the draw.'} {p.mulligans > 0 && `Mulligans: ${p.mulligans}`}</h2>
@@ -194,20 +225,15 @@ export function MulliganOverlay() {
       </div>
       {!p.kept && (
         <div className="row">
-          <button className="primary big" onClick={() => act({ t: 'keep' })}>Keep {7 - Math.max(0, p.mulligans - (free ? 1 : 0))}</button>
-          <button className="big" onClick={() => act({ t: 'mulligan' })} disabled={p.mulligans >= 6}>{free && p.mulligans === 0 ? 'Free mulligan (to 7)' : `Mulligan to ${6 - Math.max(0, p.mulligans - (free ? 1 : 0))}`}</button>
+          <button className="primary big" onClick={() => act({ t: 'keep' })}>Keep {7 - cost}</button>
+          <button className="big" onClick={() => act({ t: 'mulligan' })} disabled={p.mulligans >= 6}>{next === 0 ? 'Free mulligan (to 7)' : `Mulligan to ${7 - next}`}</button>
+          {canAsk6 && !proposal && <button className="big ask-6" title="Ask your opponent to let you mulligan to 6 again instead of going down to 5" onClick={() => act({ t: 'propose', kind: 'another6' })}>Request another 6</button>}
         </div>
       )}
-      {/* "Free mulligan" house rule: both players must agree (like fix mode). */}
-      {free ? <p className="muted">The first mulligan is free for both players.</p>
-        : freeReq === me ? <p className="muted">Waiting for your opponent to agree to a free first mulligan…</p>
-        : freeReq ? (
-          <div className="row">
-            <span>{g.players.find((x) => x.pid === freeReq)?.name ?? 'Your opponent'} proposes a free first mulligan.</span>
-            <button className="primary" onClick={() => act({ t: 'answerFreeMulligan', accept: true })}>Agree</button>
-            <button onClick={() => act({ t: 'answerFreeMulligan', accept: false })}>Decline</button>
-          </div>
-        ) : !p.kept && <button className="tiny" onClick={() => act({ t: 'requestFreeMulligan' })}>Propose a free first mulligan</button>}
+      {free > 0 && <p className="muted">{free === 1 ? 'The first mulligan is free for both players.' : 'The first two mulligans are free for both players.'}</p>}
+      {/* House rules both players must agree to (like fix mode). */}
+      {proposal ? <ProposalPrompt className="row proposal-row" />
+        : !p.kept && canProposeFree && <button className="tiny" onClick={() => act({ t: 'propose', kind: 'freeMulligan' })}>{free ? 'Propose a second free mulligan' : 'Propose a free first mulligan'}</button>}
       {p.kept && p.needsBottom > 0 && (
         <div className="row">
           <span>Choose {p.needsBottom} card(s) to put on the bottom ({sel.length} selected).</span>
