@@ -137,11 +137,17 @@ export interface AuctionState {
     nominatedBy: string;
     /** Players who passed since the last bid. */
     passes: string[];
+    /** When the card was put up. */
+    openedAt?: number;
   };
+  /** Per player: the won cards in the main deck (new wins start there; the rest is sideboard). Carried into deckbuilding. */
+  main?: Record<string, string[]>;
+  /** Players who chose "Pass on the rest": when every player has, the remaining cards go unsold and the auction ends. */
+  passRest?: string[];
   budgets: Record<string, number>;
   pools: Record<string, string[]>;
   /** Recent results for the feed. */
-  /** pid null = unsold (skipped and discarded). */
+  /** pid null = unsold (nobody bid, or everyone passed on the rest). */
   results: { cardId: string; pid: string | null; amount: number }[];
   done: boolean;
 }

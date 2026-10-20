@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CUBE, getCard } from '../src/cube.ts';
-import { auctionTick, DEFAULT_SETTINGS, draftPick, draftTick, nominate, passLot, placeBid, skipCard, type RoomState, startAuction, startDraft, startSealed, botDeck, highBid } from '../src/index.ts';
+import { auctionTick, DEFAULT_SETTINGS, draftPick, draftTick, nominate, passLot, placeBid, type RoomState, startAuction, startDraft, startSealed, botDeck, highBid } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
 function room(n: number, humans: number, over: Partial<RoomState['settings']> = {}): RoomState {
@@ -146,14 +146,16 @@ describe('auction', () => {
     expect(a.budgets.p0).toBe(15);
   });
 
-  it('skip discards the card as unsold and rotates the nominator', () => {
+  it('a card nobody bids on goes unsold and the nominator rotates', () => {
     const r = room(2, 2);
     startAuction(r, CUBE.list, rng(), getCard, 0);
     const a = r.auction!;
     const card = a.open[3];
     const before = a.open.length;
-    expect(skipCard(r, 'p1', card, 0)).toMatch(/Waiting/);
-    expect(skipCard(r, 'p0', card, 0)).toBeNull();
+    expect(nominate(r, 'p1', card, 0, 0)).toMatch(/Waiting/);
+    expect(nominate(r, 'p0', card, 0, 0)).toBeNull();
+    expect(passLot(r, 'p0', 0)).toBeNull();
+    expect(passLot(r, 'p1', 0)).toBeNull();
     expect(a.open.length).toBe(before - 1);
     expect(a.open).not.toContain(card);
     expect(a.results[0]).toMatchObject({ cardId: card, pid: null });

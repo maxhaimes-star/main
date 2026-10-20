@@ -22,8 +22,12 @@ export type ClientMsg =
   | { t: 'pick'; cardId: string }
   /** During the draft: which of my picks are in the main deck (a sub-multiset of my picks; the rest is sideboard). */
   | { t: 'draftMain'; main: string[] }
+  /** Put a card up for auction; `amount` is the opening bid (0 = no bid: anyone may open the bidding). */
   | { t: 'nominate'; cardId: string; amount?: number }
-  | { t: 'skipLot'; cardId: string }
+  /** Auction: which of my won cards are in the main deck (the rest is sideboard). */
+  | { t: 'auctionMain'; main: string[] }
+  /** Auction: select / unselect "Pass on the rest". */
+  | { t: 'passRest'; on: boolean }
   | { t: 'passLot' }
   | { t: 'bid'; amount: number }
   | { t: 'saveDeck'; deck: Omit<Deck, 'ready'>; ready: boolean }

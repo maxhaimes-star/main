@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { highBid } from '@ojb/shared';
+import { highBid, multisetDiff } from '@ojb/shared';
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
 import { Countdown, LeaveButton, PoolSummary } from './Draft.tsx';
@@ -26,6 +26,13 @@ export function Auction({ view, send, skew }: RoomProps) {
   const canBid = !!me && !!a.lot && !capped && !isHigh && minBid <= budget;
   const passes = a.lot?.passes ?? [];
   const iPassed = passes.includes(view.me);
+  const passRest = a.passRest ?? [];
+  const iPassRest = passRest.includes(view.me);
+  const humans = players.filter((p) => !p.isBot);
+  const myPool = me ? a.pools[me.id] ?? [] : [];
+  const myMain = me ? a.main?.[me.id] ?? myPool : [];
+  const mySide = multisetDiff(myPool, myMain);
+  const setMain = (main: string[]) => send({ t: 'auctionMain', main });
 
   useEffect(() => { setCustom(''); }, [a.lot?.cardId]);
   useEffect(() => { setPicked(null); setOpenAt(String(st.auctionMinBid)); }, [a.open.length, a.lot?.cardId, st.auctionMinBid]);
@@ -46,13 +53,14 @@ export function Auction({ view, send, skew }: RoomProps) {
               <div className="lot-info">
                 <h3>{getCard(a.lot.cardId)?.name}</h3>
                 <div className="high-bid">
-                  {a.lot.bids.length > 1 ? <>High bid <b>${high?.amount}</b> by <b>{name(high?.pid ?? null)}</b></> : <>Opened by <b>{name(a.lot.nominatedBy)}</b> at <b>${high?.amount}</b></>}
+                  {!high ? <>Put up by <b>{name(a.lot.nominatedBy)}</b> · <b>no bids yet</b> (min {st.auctionMinBid})</>
+                    : a.lot.bids.length > 1 ? <>High bid <b>${high.amount}</b> by <b>{name(high.pid)}</b></> : <>Opened by <b>{name(high.pid)}</b> at <b>${high.amount}</b></>}
                 </div>
                 <Countdown deadline={a.lot.deadline} skew={skew} total={st.auctionTimer * 1000} />
                 {me && (
                   <div className="bid-buttons sticky-actions">
                     {[1, 2, 5, 10].map((inc) => {
-                      const amt = (high?.amount ?? 0) + inc;
+                      const amt = high ? high.amount + inc : st.auctionMinBid + inc - 1;
                       return <button key={inc} className={inc === 1 ? 'primary' : ''} disabled={!canBid || amt > budget} onClick={() => bid(amt)}>Bid {amt}</button>;
                     })}
                     <input type="number" inputMode="numeric" placeholder="amount" value={custom} min={minBid} max={budget} onChange={(e) => setCustom(e.target.value)}
@@ -62,6 +70,8 @@ export function Auction({ view, send, skew }: RoomProps) {
                   </div>
                 )}
                 {isHigh && <div className="good">You're winning this one. The lot closes when everyone else passes.</div>}
+                {!high && <div className="muted">Nobody has bid yet. If everyone who can afford it passes, the card goes unsold.</div>}
+                {me && !isHigh && !capped && budget < minBid && <div className="muted">You can't afford a bid on this one; it won't wait for you.</div>}
                 {capped && me && <div className="muted">Your pool is full.</div>}
                 {passes.length > 0 && <div className="passes muted">{passes.map(name).join(', ')} passed</div>}
                 <div className="bid-history">
@@ -73,7 +83,7 @@ export function Auction({ view, send, skew }: RoomProps) {
             <div className="center-msg">
               {myTurn ? (
                 <>
-                  <b>Your turn: pick a card, then open the bidding (min {st.auctionMinBid}) or skip it (the card is discarded).</b>
+                  <b>Your turn: pick a card, then open the bidding (min {st.auctionMinBid}) or put it up without a bid (it goes unsold only if nobody bids).</b>
                   {picked && (
                     <div className="nominate-panel">
                       <h3>{getCard(picked)?.name}</h3>
@@ -81,7 +91,7 @@ export function Auction({ view, send, skew }: RoomProps) {
                         <input type="number" inputMode="numeric" value={openAt} min={st.auctionMinBid} max={budget} onChange={(e) => setOpenAt(e.target.value)} />
                         <button className="primary" disabled={!(Number(openAt) >= st.auctionMinBid && Number(openAt) <= budget)}
                           onClick={() => send({ t: 'nominate', cardId: picked, amount: Number(openAt) })}>Open at ${openAt || '?'}</button>
-                        <button className="skip-btn" onClick={() => send({ t: 'skipLot', cardId: picked })}>Skip (discard)</button>
+                        <button className="nobid-btn" onClick={() => send({ t: 'nominate', cardId: picked, amount: 0 })}>Put up, no bid</button>
                       </div>
                     </div>
                   )}
@@ -91,6 +101,18 @@ export function Auction({ view, send, skew }: RoomProps) {
             </div>
           )}
         </div>
+
+        {me && (
+          <div className="pass-rest">
+            <label>
+              <input type="checkbox" checked={iPassRest} onChange={(e) => send({ t: 'passRest', on: e.target.checked })} /> Pass on the rest
+            </label>
+            <small className="muted">
+              {' '}When every player ticks this, the remaining cards go unsold and the auction ends
+              {passRest.length ? ` · ${humans.filter((p) => passRest.includes(p.id)).length}/${humans.length} agreed (${humans.filter((p) => passRest.includes(p.id)).map((p) => p.name).join(', ')})` : ''}.
+            </small>
+          </div>
+        )}
 
         <h3>Open pack</h3>
         <div className="card-grid">
@@ -108,7 +130,13 @@ export function Auction({ view, send, skew }: RoomProps) {
               </button>
             ))}
           </div>
-          <PoolSummary ids={a.pools[watchPool] ?? []} />
+          {me && watchPool === view.me ? (
+            <div className="picks">
+              <p className="muted">Click a card to move it between your main deck and sideboard; the split carries over to deckbuilding.</p>
+              <div className="picks-main"><PoolSummary ids={myMain} title="Main deck" tapLabel="Move to sideboard" onClick={(id) => setMain(multisetDiff(myMain, [id]))} /></div>
+              <div className="picks-side"><PoolSummary ids={mySide} title="Sideboard" tapLabel="Move to main deck" onClick={(id) => setMain([...myMain, id])} /></div>
+            </div>
+          ) : <PoolSummary ids={a.pools[watchPool] ?? []} />}
         </div>
       </div>
       <div className="side">
@@ -117,7 +145,7 @@ export function Auction({ view, send, skew }: RoomProps) {
           <tbody>
             {players.map((p) => (
               <tr key={p.id} className={`${p.id === view.me ? 'me' : ''} ${p.id === nominator?.id ? 'nominator' : ''}`}>
-                <td>{p.id === nominator?.id ? '▶ ' : ''}{p.name}{passes.includes(p.id) ? <small className="muted"> (passed)</small> : null}</td>
+                <td>{p.id === nominator?.id ? '▶ ' : ''}{p.name}{passes.includes(p.id) ? <small className="muted"> (passed)</small> : null}{passRest.includes(p.id) ? <small className="muted"> (pass on the rest)</small> : null}</td>
                 <td>${a.budgets[p.id]}</td><td>{a.pools[p.id].length}</td>
               </tr>
             ))}

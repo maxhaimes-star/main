@@ -603,3 +603,7 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .saved-deck-list h5 { margin: 0 0 4px; }
 .saved-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 8px 0; }
 .save-deck input { width: 100%; box-sizing: border-box; }
+
+/* Auction: "Pass on the rest" */
+.pass-rest { margin: 10px 0; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
+.pass-rest label { font-weight: 600; cursor: pointer; }

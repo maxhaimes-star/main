@@ -116,7 +116,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   .sticky-actions > button.primary.big { width: 100%; min-height: 52px; }
   .bid-buttons.sticky-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
   .bid-buttons.sticky-actions button, .bid-buttons.sticky-actions input { min-height: 46px; width: 100%; padding-left: 4px; padding-right: 4px; }
-  .bid-buttons.sticky-actions .pass-btn, .bid-buttons.sticky-actions .skip-btn { grid-column: span 2; }
+  .bid-buttons.sticky-actions .pass-btn, .bid-buttons.sticky-actions .nobid-btn { grid-column: span 2; }
   .bid-buttons.sticky-actions input { grid-column: span 1; }
   .auction-main { padding-bottom: 170px; }
   .lot { flex-direction: column; align-items: center; padding: 12px; gap: 10px; }

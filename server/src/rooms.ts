@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import {
   type ClientMsg, type DraftView, type Match, type MatchView, type Player, type RoomState, type RoomView,
   applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, leaveSeat, reclaimSeat, setDraftMain, emptyDeck,
-  finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, placeBid, skipCard, seatedPlayers, startAuction, startDraft,
+  finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, passRest, placeBid, setAuctionMain, seatedPlayers, startAuction, startDraft,
   startSealed, viewFor, type Color, type RoomSettings, type Deck, startDraftWithPacks, startSealedWithPools,
   CONSTRUCTED_FORMATS, type CardPayload, botDeck, BOT_LEVELS, type BotLevel,
 } from '@ojb/shared';
@@ -158,22 +158,34 @@ export class Rooms {
       case 'nominate': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return nominate(s, pid, msg.cardId, now, msg.amount == null ? undefined : Math.floor(Number(msg.amount)));
+        const err = nominate(s, pid, msg.cardId, now, msg.amount == null ? undefined : Math.floor(Number(msg.amount)));
+        if (!err) this.afterPools(s);
+        return err;
       }
-      case 'skipLot': {
+      case 'auctionMain': {
+        if (!me || s.phase !== 'auction') return 'No auction';
+        return setAuctionMain(s, pid, msg.main);
+      }
+      case 'passRest': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return skipCard(s, pid, msg.cardId, now);
+        const err = passRest(s, pid, !!msg.on, now);
+        if (!err) this.afterPools(s);
+        return err;
       }
       case 'passLot': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return passLot(s, pid, now);
+        const err = passLot(s, pid, now);
+        if (!err) this.afterPools(s);
+        return err;
       }
       case 'bid': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return placeBid(s, pid, Math.floor(Number(msg.amount)), now);
+        const err = placeBid(s, pid, Math.floor(Number(msg.amount)), now);
+        if (!err) this.afterPools(s);
+        return err;
       }
       case 'saveDeck': {
         if (!me || !s.pools[pid]) return 'You have no pool';
