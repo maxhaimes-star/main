@@ -1128,7 +1128,8 @@ function finishCast(state: GameState, ctx: Ctx, d: MData, targets: TargetRef[][]
   c.zone = 'stack';
   c.controller = pid;
   c.revealedTo = [];
-  c.castAs = undefined;
+  const splitData = c.cardId ? ctx.lookup(c.cardId) : undefined;
+  c.castAs = splitData?.layout === 'split' && splitData.faces?.length ? splitData.faces[0].name : undefined; // split / Room: the left half
   c.transformed = false;
   c.castInfo = { option: 'free', ...(from !== 'hand' ? { from } : {}), ...(x != null ? { x } : {}) };
   const name = cardName(c, ctx.lookup);

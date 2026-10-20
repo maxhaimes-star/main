@@ -146,7 +146,8 @@ function printedCost(c: CardInstance, face: number | undefined, lookup: Lookup):
   const data = c.cardId ? lookup(c.cardId) : undefined;
   if (!data) return faceOf(c, lookup).manaCost;
   if (data.faces && face != null && face > 0 && data.faces[face]) return data.faces[face].manaCost;
-  if (data.layout === 'split' && data.faces && face != null) return data.faces[face].manaCost;
+  // Split cards / Rooms: each half is cast for its own cost (no face = the left half), never the combined "A // B".
+  if (data.layout === 'split' && data.faces?.length) return data.faces[face ?? 0]?.manaCost ?? data.faces[0].manaCost;
   return data.manaCost;
 }
 

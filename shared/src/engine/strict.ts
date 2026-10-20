@@ -352,31 +352,49 @@ export function handClick(state: AnyState, pid: string, iid: string, lookup: Loo
  * Can `pid` cast (or play, for lands) this card right now: priority, timing, land drop, zone,
  * restrictions and mana (pool + untapped sources via auto-pay, for any available cost option).
  */
-export function castability(state: AnyState, pid: string, iid: string, lookup: Lookup = getCard): { ok: boolean; reason?: string } {
+export function castability(state: AnyState, pid: string, iid: string, lookup: Lookup = getCard, face?: number): { ok: boolean; reason?: string } {
   const c = visibleCard(state, iid);
   if (!c) return { ok: false, reason: 'No such card' };
   const pe = priorityError(state, pid);
   if (pe) return { ok: false, reason: pe };
   const data = c.cardId ? lookup(c.cardId) : undefined;
   const frontLand = isLandCard(c, lookup, data?.faces && data.layout === 'modal_dfc' ? 0 : undefined);
-  if (frontLand) {
+  if (frontLand && !face) {
     const e = landPlayError(state, pid, iid, lookup);
     return e ? { ok: false, reason: e } : { ok: true };
   }
+  if (face != null) return faceCastability(state, pid, c, face, lookup);
+  // A card with several castable faces (split cards and Rooms, adventurers, modal DFCs) is castable when any of its
+  // spell faces is: each face is cast for its own cost (a Room's door, never the combined "{2}{G} // {3}{G}{G}").
+  const faces = data?.faces && castableFaces(data).length > 1 ? castableFaces(data).filter((f) => !isLandCard(c, lookup, f)) : [undefined];
+  let first: { ok: boolean; reason?: string } | undefined;
+  for (const f of faces) {
+    const r = faceCastability(state, pid, c, f, lookup);
+    if (r.ok) return r;
+    first ??= r;
+  }
+  return first ?? { ok: false, reason: 'Not enough mana' };
+}
+
+/** castability for one face (undefined = the card as a whole / its front). */
+function faceCastability(state: AnyState, pid: string, c: CardInstance, face: number | undefined, lookup: Lookup): { ok: boolean; reason?: string } {
   const g = asGame(state);
-  const timing = castTimingError(g, c, pid, undefined, lookup);
+  const iid = c.iid;
+  const timing = castTimingError(g, c, pid, face, lookup);
   if (timing) return { ok: false, reason: timing };
   const restricted = castRestriction(state as StaticsState, iid, pid, lookup);
   if (restricted) return { ok: false, reason: restricted };
   let reason = 'Not enough mana';
-  for (const o of castOptions(g, iid, undefined, lookup)) {
+  const opts = castOptions(g, iid, face, lookup);
+  if (!opts.length) return { ok: false, reason: "That face can't be cast" };
+  for (const o of opts) {
     if (o.unavailable) { if (o.id === 'normal') reason = o.unavailable; continue; }
     const z = castZoneError(state, pid, c, o.id, lookup);
     if (z) { if (o.id === 'normal') reason = z; continue; }
-    const pv = autoPayPreview(state, pid, iid, undefined, o.id, hasX(o.cost) ? 0 : undefined, lookup);
+    const pv = autoPayPreview(state, pid, iid, face, o.id, hasX(o.cost) ? 0 : undefined, lookup);
     if (pv.ok) return { ok: true };
     // castable by choosing to pay Phyrexian symbols with life (down to 0)
-    if (pv.phyrexian && autoPayPreview(state, pid, iid, undefined, o.id, hasX(o.cost) ? 0 : undefined, lookup, 'life').ok) return { ok: true };
+    if (pv.phyrexian && autoPayPreview(state, pid, iid, face, o.id, hasX(o.cost) ? 0 : undefined, lookup, 'life').ok) return { ok: true };
   }
   return { ok: false, reason };
 }

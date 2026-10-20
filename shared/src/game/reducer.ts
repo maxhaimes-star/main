@@ -755,6 +755,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         else c.castAs = data.faces[a.face].name;
       } else if (data?.faces && data.layout === 'adventure') {
         c.castAs = undefined;
+      } else if (data?.faces && data.layout === 'split' && !a.faceDown) {
+        c.castAs = data.faces[0].name; // a split card / Room on the stack has only the cast half's characteristics (rule 709.3)
       }
       const face = faceOf(c, ctx.lookup);
       if (strictPay) {

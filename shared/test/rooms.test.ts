@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilitiesOfInstance, abilityUsability, applyAction, autoPayPreview, castability, castOptions, createGame, handClick, type Ctx, type GameAction, type GameState, moveCard,
+  abilitiesOfInstance, abilityUsability, applyAction, autoPayPreview, castability, castOptions, createGame, faceOf, handClick, type Ctx, type GameAction, type GameState, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -63,6 +63,8 @@ describe('Rooms: Walk-In Closet // Forgotten Cellar', () => {
     expect(handClick(g, 'a', room, getCard)).toBe('menu'); // choose a door
     act(g, ctx, 'a', { t: 'cast', iid: room, face: 0 });
     expect(forests.every((f) => g.cards[f].tapped)).toBe(true);
+    expect(logText(g)).toMatch(/casts Walk-In Closet\./); // on the stack it's only the cast door
+    expect(faceOf(g.cards[room], getCard).manaCost).toBe('{2}{G}');
     drain(g, ctx);
     expect(g.cards[room].zone).toBe('battlefield');
     expect(g.cards[room].unlocked).toEqual([0]);
@@ -120,13 +122,15 @@ describe('Rooms: Walk-In Closet // Forgotten Cellar', () => {
     const room = toHand(g, ctx, 'a', ROOM);
     act(g, ctx, 'a', { t: 'cast', iid: room, face: 0 });
     drain(g, ctx);
+    const ouat = find(g, 'a', 'once_upon_a_time');
+    moveCard(g, ctx, ouat, 'graveyard');
     const unlock = unlockOf(g, room)!;
     expect(unlock).toBeTruthy();
     expect(unlock.ability.params.Door).toBe('1');
     // all three lands are tapped: can't pay {3}{G}{G}
     expect(abilityUsability(g, 'a', room, unlock.index, getCard).ok).toBe(false);
-    // five fresh lands: still not on the opponent's turn / with a spell on the stack
-    lands(g, ctx, 5);
+    // five fresh lands (+2 for Once Upon a Time later): still not on the opponent's turn
+    lands(g, ctx, 7);
     expect(abilityUsability(g, 'a', room, unlock.index, getCard).ok).toBe(true);
     g.activePlayer = 'b'; g.priority = 'a';
     expect(abilityUsability(g, 'a', room, unlock.index, getCard).ok).toBe(false);
@@ -135,19 +139,23 @@ describe('Rooms: Walk-In Closet // Forgotten Cellar', () => {
     expect(g.cards[room].unlocked).toEqual([0]);
     // only four untapped lands: not enough
     const fresh = g.battlefield.filter((i) => g.cards[i].cardId === 'basic_forest' && !g.cards[i].tapped);
+    const spare = fresh.splice(5);
+    for (const i of spare) g.cards[i].tapped = true;
     g.cards[fresh[0]].tapped = true;
     expect(abilityUsability(g, 'a', room, unlock.index, getCard).ok).toBe(false);
     g.cards[fresh[0]].tapped = false;
     act(g, ctx, 'a', { t: 'activate', iid: room, ability: unlock.index, text: '' });
     expect(fresh.every((f) => g.cards[f].tapped)).toBe(true);
+    for (const i of spare) g.cards[i].tapped = false;
     expect(g.cards[room].unlocked).toEqual([0, 1]);
     expect(logText(g)).toMatch(/unlocks Forgotten Cellar/);
     drain(g, ctx);
     expect(logText(g)).toMatch(/Forgotten Cellar/);
-    // the trigger resolved: spells from the graveyard this turn
-    const ouat = find(g, 'a', 'once_upon_a_time');
-    moveCard(g, ctx, ouat, 'graveyard');
+    // the trigger resolved: spells from your graveyard this turn, and cards that would go there are exiled
     expect(castability(g, 'a', ouat, getCard).ok).toBe(true);
+    const isl = put(g, ctx, 'a', 'basic_forest');
+    moveCard(g, ctx, isl, 'graveyard');
+    expect(g.cards[isl].zone).toBe('exile');
   });
 
   it("a fully unlocked Room has both doors' abilities and no unlock action", () => {
