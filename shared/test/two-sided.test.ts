@@ -332,3 +332,98 @@ describe('A1.2: Prepare cards (cast a copy of the spell while prepared)', () => 
     expect(g.cards[iid].counters.prepared).toBeUndefined();
   });
 });
+
+/** Pass priority until a question comes up for `pid` (or `n` passes). */
+function passUntilAsked(g: GameState, ctx: Ctx, pid: string, re: RegExp, n = 150) {
+  for (let i = 0; i < n; i++) {
+    const q = g.pending[0];
+    if (q && q.pid === pid && re.test(q.prompt)) return q;
+    if (q) { answer(g, ctx); continue; }
+    act(g, ctx, g.priority, { t: 'pass' });
+  }
+  throw new Error(`never asked ${re} (at ${g.step}, turn ${g.turn})\n${logTail(g, 12)}`);
+}
+
+const choose = (g: GameState, ctx: Ctx, q: Q, re: RegExp) => {
+  const o = q.options.find((x) => re.test(x.label) || re.test(x.value));
+  if (!o) throw new Error(`no option ${re} in ${JSON.stringify(q.options)} (${q.prompt})`);
+  act(g, ctx, q.pid, { t: 'choose', id: q.id, value: o.value });
+};
+
+describe('A1.3: Cosima, God of the Voyage', () => {
+  function cosimaGame() {
+    const { g, ctx } = setup(['cosima_god_of_the_voyage', ...Array(6).fill('basic_island')], [], 'basic_island', 'basic_mountain');
+    const cos = put(g, ctx, 'a', 'cosima_god_of_the_voyage');
+    // Lands to play on later turns: keep islands in hand.
+    for (let k = 0; k < 4; k++) toZone(g, ctx, 'a', 'basic_island', 'hand', g.players[0].zones.hand.slice());
+    return { g, ctx, cos };
+  }
+
+  /** Go to a's next main phase (answering questions with `pick`). */
+  function toMyMain(g: GameState, ctx: Ctx, pick: (q: Q) => string) {
+    for (let i = 0; i < 200; i++) {
+      if (g.pending.length) { const q = g.pending[0]; if (q.targets) answer(g, ctx); else act(g, ctx, q.pid, { t: 'choose', id: q.id, value: pick(q) }); continue; }
+      if (g.activePlayer === 'a' && g.step === 'main1' && g.priority === 'a' && !g.stack.length && i > 0) return;
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    throw new Error(`never reached a's main phase\n${logTail(g, 12)}`);
+  }
+
+  it('upkeep: may exile her; each land that enters adds a voyage counter; declining returns her with X +1/+1 counters and draws X', () => {
+    const { g, ctx, cos } = cosimaGame();
+    act(g, ctx, 'a', { t: 'nextTurn' });
+    const q = passUntilAsked(g, ctx, 'a', /Cosima|exile/i);
+    choose(g, ctx, q, /^(yes|Yes)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone, logTail(g)).toBe('exile');
+    toMyMain(g, ctx, yes);
+    expect(g.cards[cos].zone).toBe('exile');
+    // A land enters: put a voyage counter on her.
+    const land1 = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_island')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: land1 });
+    const q1 = passUntilAsked(g, ctx, 'a', /voyage|Cosima/i, 10);
+    choose(g, ctx, q1, /^(yes|Yes|Put)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone, logTail(g)).toBe('exile');
+    expect(g.cards[cos].counters.voyage ?? g.cards[cos].counters.VOYAGE, logTail(g)).toBe(1);
+    // Next turn: another land, another counter (no new upkeep exile: she's in exile).
+    toMyMain(g, ctx, yes);
+    const land2 = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_island')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: land2 });
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /voyage|Cosima/i, 10), /^(yes|Yes|Put)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].counters.voyage ?? g.cards[cos].counters.VOYAGE, logTail(g)).toBe(2);
+    // Next turn: decline — she returns with 2 +1/+1 counters and a draws 2.
+    toMyMain(g, ctx, yes);
+    const land3 = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_island')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: land3 });
+    const hand = g.players[0].zones.hand.length;
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /voyage|Cosima/i, 10), /^(no|No|Don)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone, logTail(g)).toBe('battlefield');
+    expect(g.cards[cos].counters['+1/+1'], logTail(g)).toBe(2);
+    expect(g.cards[cos].counters.voyage ?? g.cards[cos].counters.VOYAGE).toBeFalsy();
+    expect(g.players[0].zones.hand.length, logTail(g)).toBe(hand + 2);
+    expect(faceOf(g.cards[cos], getCard).name).toBe('Cosima, God of the Voyage');
+  });
+
+  it('declining the upkeep exile keeps her on the battlefield', () => {
+    const { g, ctx, cos } = cosimaGame();
+    act(g, ctx, 'a', { t: 'nextTurn' });
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /Cosima|exile/i), /^(no|No|Don)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone).toBe('battlefield');
+  });
+
+  it("an opponent's land entering does not trigger her", () => {
+    const { g, ctx, cos } = cosimaGame();
+    act(g, ctx, 'a', { t: 'nextTurn' });
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /Cosima|exile/i), /^(yes|Yes)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone).toBe('exile');
+    const opp = toZone(g, ctx, 'b', 'basic_mountain', 'hand', g.players[1].zones.hand.slice());
+    moveCard(g, ctx, opp, 'battlefield', { controller: 'b' });
+    expect(g.pending.filter((q) => /voyage/i.test(q.prompt))).toHaveLength(0);
+    expect(g.stack.filter((s) => /Cosima|voyage/i.test(s.text))).toHaveLength(0);
+  });
+});
