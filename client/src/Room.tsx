@@ -19,7 +19,11 @@ export function Room({ roomId }: { roomId: string }) {
   const [seat, setSeat] = useState(() => loadSeat(roomId));
   const [name, setName] = useState(() => localStorage.getItem('ojb:name') ?? '');
   const [joinErr, setJoinErr] = useState<string | null>(null);
-  const { view, send, fatal, connected, toast, clockSkew } = useRoom(roomId, seat?.token ?? null);
+  const { view, send, fatal, connected, toast, clockSkew, restoring } = useRoom(roomId, seat?.token ?? null, (newId) => {
+    // The server restarted and this room came back under a new code.
+    if (seat) saveSeat(newId, seat);
+    navigate(`/r/${newId}`);
+  });
   const [info, setInfo] = useState<RoomInfo | 'missing' | null>(null);
   const [joining, setJoining] = useState(false);
   const [watching, setWatching] = useState<string | null>(null);
@@ -95,7 +99,7 @@ export function Room({ roomId }: { roomId: string }) {
       </div></div>
     );
   }
-  if (!view) return <div className="loading">Connecting…</div>;
+  if (!view) return <div className="loading">{restoring ? 'The server restarted — restoring the room…' : 'Connecting…'}</div>;
 
   const props: RoomProps = { view, send, skew: clockSkew };
   const myMatch = view.matches.find((m) => m.players.includes(view.me) && !dismissed.includes(m.id));
@@ -113,7 +117,7 @@ export function Room({ roomId }: { roomId: string }) {
 
   return (
     <div className="room">
-      {!connected && <div className="banner warn">Reconnecting…</div>}
+      {!connected && <div className="banner warn">{restoring ? 'The server restarted — restoring the room…' : 'Reconnecting…'}</div>}
       {toast && <div className="toast">{toast}</div>}
       {!shownMatch && <AwayBanner view={view} send={send} />}
       {body}
