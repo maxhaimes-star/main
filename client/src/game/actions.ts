@@ -127,7 +127,7 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
     const avail = opts.filter((o) => !o.unavailable);
     let chosen = avail.length === 1 ? avail[0] : undefined;
     if (avail.length > 1) {
-      const id = await base.pickOption(`Cast ${card?.name ?? 'spell'}`, opts.map((o) => ({ value: o.id, label: o.label, detail: optionText(o), disabled: o.unavailable })));
+      const id = await base.pickOption(`Cast ${(face != null ? card?.faces?.[face]?.name : undefined) ?? card?.name ?? 'spell'}`, opts.map((o) => ({ value: o.id, label: o.label, detail: optionText(o), disabled: o.unavailable })));
       if (!id) return;
       chosen = opts.find((o) => o.id === id);
     }
@@ -287,7 +287,15 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
     if (mana.length && !c.tapped && c.controller === me) {
       items.push({ label: 'Tap for mana', sub: mana.map((m) => ({ label: m.split('').map((x) => `{${x}}`).join(''), onClick: () => act({ t: 'tapForMana', iid, mana: m }) })) });
     }
-    const scripted = c.controller === me || manual ? safeAbilities(g, c).filter((e) => !e.zone) : [];
+    const all = c.controller === me || manual ? safeAbilities(g, c).filter((e) => !e.zone) : [];
+    // Rooms: "Unlock <door>" (a special action at sorcery speed, paying the door's mana cost) as its own menu item.
+    for (const e of all.filter((x) => x.ability.api === '_Unlock')) {
+      const door = card?.faces?.[parseInt(e.ability.params.Door ?? '-1', 10)];
+      const label = `Unlock ${door?.name ?? 'door'}`;
+      const u = abilityUsable(g, me, iid, e.index);
+      items.push(u && !u.ok ? { label, disabled: true, hint: u.reason ?? "Can't unlock now" } : { label, hint: door?.manaCost, onClick: () => act({ t: 'activate', iid, text: label, ability: e.index }) });
+    }
+    const scripted = all.filter((e) => e.ability.api !== '_Unlock');
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({
       label: `[${l.cost > 0 ? '+' : ''}${l.cost}] ${l.text.slice(0, 70)}${l.text.length > 70 ? '…' : ''}`,
       onClick: async () => {
@@ -403,7 +411,10 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
       // Transforming / flip cards are cast front face up (rule 711.2): only the faces that can be cast.
       if (card?.faces && castableFaces(card).length > 1) {
         for (const fi of castableFaces(card)) {
-          items.push(castItem({ label: `Cast ${card.faces[fi].name}`, hint: hintOf(card.faces[fi].manaCost, c.cardId, fi, effCost(g, iid, fi, me)), onClick: () => castWithX(base, iid, fi) }));
+          // Each face is checked on its own (a Room's door / split half costs only its own mana cost).
+          const fu = blocked || isLand ? undefined : castability(g, me, iid, fi);
+          const faceItem = (it: MenuItem): MenuItem => (fu && !fu.ok ? { label: it.label, disabled: true, hint: fu.reason ?? "Can't do that now" } : castItem(it));
+          items.push(faceItem({ label: `Cast ${card.faces[fi].name}`, hint: hintOf(card.faces[fi].manaCost, c.cardId, fi, effCost(g, iid, fi, me)), onClick: () => castWithX(base, iid, fi) }));
           if (manual && safeSpell(c.cardId, fi)) items.push({ label: `Cast ${card.faces[fi].name} (resolve by hand)`, onClick: () => castWithX(base, iid, fi, true) });
         }
       } else {

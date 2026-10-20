@@ -201,6 +201,9 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .pt.lethal .dmg { color: #fff; }
 .note { position: absolute; bottom: 22px; left: 2px; right: 2px; background: #000c; color: var(--accent2); font-size: 9px; padding: 1px 3px; border-radius: 3px; max-height: 26px; overflow: hidden; }
 .nountap { position: absolute; top: 2px; left: 2px; }
+.room-doors { position: absolute; top: 2px; left: 2px; right: 2px; display: flex; flex-direction: column; gap: 1px; pointer-events: none; }
+.room-doors .door { font-size: 8px; background: #000c; padding: 0 3px; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.room-doors .door.locked { color: #aaa; }
 .token-badge { position: absolute; top: 45%; left: 50%; transform: translateX(-50%); font-size: 9px; background: #000a; padding: 0 4px; border-radius: 3px; }
 .facedown-peek { position: absolute; bottom: 4px; left: 2px; right: 2px; font-size: 9px; background: #000c; padding: 1px 3px; border-radius: 3px; }
 

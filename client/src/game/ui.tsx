@@ -147,11 +147,27 @@ export function TableCard({ iid, small, attachments, stack }: { iid: string; sma
         {combatLabel && <div className={`combat-badge ${combatLabel.kind}`} data-target={combatLabel.target} title={combatLabel.title}>{combatLabel.kind === 'attack' ? '⚔' : '🛡'} {combatLabel.target}</div>}
         {!hidden && c.note && <div className="note" title={c.note}>{c.note}</div>}
         {!hidden && c.noUntap && <div className="nountap" title="Doesn't untap">⛓</div>}
+        {!hidden && c.unlocked && c.zone === 'battlefield' && <RoomDoors cardId={c.cardId} unlocked={c.unlocked} />}
         {kws.length > 0 && <div className="kw-badge" title={`Until end of turn: ${kws.join(', ')}`}>{kws.map((k) => k.slice(0, 3)).join(' ')}</div>}
         {!hidden && c.token && <div className="token-badge">token</div>}
         {stack && <div className="stack-count" title={`${stack.length} identical lands`}>×{stack.length}</div>}
       </div>
       {actionable && <button className="dots" aria-label="Card actions" onClick={(e) => { e.stopPropagation(); openFor(e.clientX, e.clientY); }}>⋯</button>}
+    </div>
+  );
+}
+
+/** Rooms: each door with its lock state (CardInstance.unlocked). */
+function RoomDoors({ cardId, unlocked }: { cardId?: string; unlocked: number[] }) {
+  const faces = cardId ? getCard(cardId)?.faces : undefined;
+  if (!faces || faces.length < 2) return null;
+  return (
+    <div className="room-doors">
+      {faces.slice(0, 2).map((f, i) => (
+        <span key={f.name} className={unlocked.includes(i) ? 'door open' : 'door locked'} title={unlocked.includes(i) ? `${f.name}: unlocked` : `${f.name}: locked (unlock for ${f.manaCost}, as a sorcery)`}>
+          {unlocked.includes(i) ? '🔓' : '🔒'} {f.name}
+        </span>
+      ))}
     </div>
   );
 }
@@ -180,6 +196,10 @@ export function describe(c: ViewCard): string {
   if (c.tempPT[0] || c.tempPT[1]) parts.push(`Until EOT: ${c.tempPT[0] >= 0 ? '+' : ''}${c.tempPT[0]}/${c.tempPT[1] >= 0 ? '+' : ''}${c.tempPT[1]}`);
   if (c.permPT[0] || c.permPT[1]) parts.push(`Modifier: ${c.permPT[0] >= 0 ? '+' : ''}${c.permPT[0]}/${c.permPT[1] >= 0 ? '+' : ''}${c.permPT[1]}`);
   if (c.note) parts.push(`Note: ${c.note}`);
+  if (c.unlocked && c.zone === 'battlefield') {
+    const faces = c.cardId ? getCard(c.cardId)?.faces : undefined;
+    if (faces) parts.push(faces.slice(0, 2).map((f, i) => `${f.name}: ${c.unlocked!.includes(i) ? 'unlocked' : 'locked'}`).join(' · '));
+  }
   if (c.tempKeywords?.length) parts.push(`Gains until EOT: ${c.tempKeywords.join(', ')}`);
   if (c.summoningSick) parts.push('Summoning sick');
   return parts.join(' · ');

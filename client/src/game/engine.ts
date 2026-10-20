@@ -110,10 +110,10 @@ export const fixRequest = (g: GameView) => { const f = loose(g).fixMode; return 
 export interface Usable { ok: boolean; reason?: string }
 
 /** Can this card be cast / played now? undefined = unknown (not strict, or the engine has no castability yet). */
-export function castability(g: GameView, pid: string | null, iid: string): Usable | undefined {
+export function castability(g: GameView, pid: string | null, iid: string, face?: number): Usable | undefined {
   const fn = shared.castability;
   if (!pid || !fn || !isStrict(g)) return undefined;
-  return safe(() => (fn as unknown as (...a: unknown[]) => Usable)(g, pid, iid, getCard));
+  return safe(() => (fn as unknown as (...a: unknown[]) => Usable)(g, pid, iid, getCard, face));
 }
 
 export function landPlaysLeft(g: GameView, pid: string | null): number | undefined {
