@@ -607,6 +607,8 @@ function hostsFor(state: GameState, ev: GameEvent, leftSnaps: Map<string, CardIn
   if (ev.t === 'zone') add(ev.from === 'battlefield' ? ev.snap : state.cards[ev.iid] ?? ev.snap, ev.from === 'battlefield' || !state.cards[ev.iid]);
   if (ev.t === 'cast' || ev.t === 'activated') add(state.cards[ev.iid], false);
   for (const iid of state.battlefield) add(state.cards[iid], false);
+  // Cards outside the battlefield with granted triggers that work there (Cosima on her voyage, in exile).
+  for (const p of state.players) for (const iid of p.zones.exile) if (state.cards[iid]?.animations?.length) add(state.cards[iid], false);
   for (const p of state.players) for (const iid of p.zones.graveyard) {
     const c = state.cards[iid];
     if (c?.cardId && triggersOf(c.cardId, 0).some((t) => /Graveyard/.test(t.params.TriggerZones ?? ''))) add(c, false);

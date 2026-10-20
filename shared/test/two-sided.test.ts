@@ -338,10 +338,10 @@ function passUntilAsked(g: GameState, ctx: Ctx, pid: string, re: RegExp, n = 150
   for (let i = 0; i < n; i++) {
     const q = g.pending[0];
     if (q && q.pid === pid && re.test(q.prompt)) return q;
-    if (q) { answer(g, ctx); continue; }
+    if (q) { act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }); continue; }
     act(g, ctx, g.priority, { t: 'pass' });
   }
-  throw new Error(`never asked ${re} (at ${g.step}, turn ${g.turn})\n${logTail(g, 12)}`);
+  throw new Error(`never asked ${re} (at ${g.step}, turn ${g.turn})\n${g.log.slice(0, 25).map((l) => l.text).join('\n')}`);
 }
 
 const choose = (g: GameState, ctx: Ctx, q: Q, re: RegExp) => {
@@ -371,7 +371,6 @@ describe('A1.3: Cosima, God of the Voyage', () => {
 
   it('upkeep: may exile her; each land that enters adds a voyage counter; declining returns her with X +1/+1 counters and draws X', () => {
     const { g, ctx, cos } = cosimaGame();
-    act(g, ctx, 'a', { t: 'nextTurn' });
     const q = passUntilAsked(g, ctx, 'a', /Cosima|exile/i);
     choose(g, ctx, q, /^(yes|Yes)/);
     drain(g, ctx, yes);
@@ -409,7 +408,6 @@ describe('A1.3: Cosima, God of the Voyage', () => {
 
   it('declining the upkeep exile keeps her on the battlefield', () => {
     const { g, ctx, cos } = cosimaGame();
-    act(g, ctx, 'a', { t: 'nextTurn' });
     choose(g, ctx, passUntilAsked(g, ctx, 'a', /Cosima|exile/i), /^(no|No|Don)/);
     drain(g, ctx, yes);
     expect(g.cards[cos].zone).toBe('battlefield');
@@ -417,7 +415,6 @@ describe('A1.3: Cosima, God of the Voyage', () => {
 
   it("an opponent's land entering does not trigger her", () => {
     const { g, ctx, cos } = cosimaGame();
-    act(g, ctx, 'a', { t: 'nextTurn' });
     choose(g, ctx, passUntilAsked(g, ctx, 'a', /Cosima|exile/i), /^(yes|Yes)/);
     drain(g, ctx, yes);
     expect(g.cards[cos].zone).toBe('exile');
