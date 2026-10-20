@@ -686,7 +686,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const poolSpec = flag('pool') ?? 'cube';
   const pool = poolSpec === 'cube' ? undefined : await databasePool(poolSpec);
   if (pool) console.log(`Pool ${poolSpec}: ${pool.length} cards`);
-  const force = (flag('force') ?? '').split(',').filter(Boolean).map((id) => getCard(id)).filter((c): c is CardData => !!c);
+  const forceIds = (flag('force') ?? '').split(',').filter(Boolean);
+  // Forced cards outside the cube (Mana Crypt, Sol Ring ...) come from the card database, with their rules scripts.
+  if (forceIds.some((id) => !getCard(id))) {
+    const rc = await import('../server/src/roomcards.ts');
+    if (rc.installCardDb()) rc.ensureCards(forceIds);
+  }
+  const force = forceIds.map((id) => getCard(id)).filter((c): c is CardData => !!c);
+  const unknown = forceIds.filter((id) => !getCard(id));
+  if (unknown.length) throw new Error(`Unknown --force cards: ${unknown.join(', ')}`);
   const aiFlag = args.find((a) => a === '--ai' || a.startsWith('--ai='));
   const ai = aiFlag ? ((aiFlag.split('=')[1] ?? 'normal') as BotLevel) : undefined;
   const s = playtest(n, seed, { maxTurns: parseInt(flag('turns') ?? '30', 10), trace: args.includes('--trace'), ...(pool ? { pool } : {}), ...(force.length ? { force } : {}), ...(ai ? { ai } : {}), ...(flag('side') ? { side: parseInt(flag('side')!, 10) } : {}) });

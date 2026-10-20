@@ -2,6 +2,7 @@
  * More effect APIs, all automatic, every decision a Pending question for the right player:
  *
  *   Branch / RepeatEach / Repeat / GenericChoice / RollDice   run sub-chains chosen while resolving (resolve.ts "splices")
+ *   FlipCoin                                                  one random flip, logged (Win/Lose, Heads/Tails sub-abilities)
  *   Charm without chosen modes (activated / triggered)         asks the modes on resolution
  *   ChooseCard / ChooseNumber                                  Defined$ ChosenCard, Count$ChosenNumber
  *   TapOrUntap, Amass, Proliferate, Connive, Recruit, Empower, Discover, Fight, Explore, MultiplyCounter, ExchangeControl, SetState (transform),
@@ -197,6 +198,17 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
         const [lo, hi] = range.split('-').map((x) => parseInt(x, 10));
         if (n >= lo && n <= (Number.isNaN(hi) ? lo : hi)) { r.splice(svar); break; }
       }
+      return 'ok';
+    }
+    case 'FlipCoin': {
+      // One flip (Mana Crypt, Krark's Thumb-free): the flipper calls it, so winning is a fair 50/50, as are heads / tails.
+      const flipper = r.defined(p.Flipper ?? p.Defined ?? 'You')?.players[0] ?? r.controller;
+      const heads = ctx.rng() < 0.5;
+      const won = p.NoCall === 'True' ? undefined : ctx.rng() < 0.5;
+      log(state, ctx, flipper, `${pname(state, flipper)} flips a coin (${r.sourceName}): ${heads ? 'heads' : 'tails'}${won == null ? '' : ` — ${pname(state, flipper)} ${won ? 'wins' : 'loses'} the flip`}.`);
+      const sub = won === true ? p.WinSubAbility : won === false ? p.LoseSubAbility : undefined;
+      const side = heads ? p.HeadsSubAbility : p.TailsSubAbility;
+      for (const svar of [sub, side]) if (svar && r.svars[svar]) r.splice(svar);
       return 'ok';
     }
     case 'ChooseCard': return chooseCard(state, ctx, r);

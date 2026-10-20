@@ -95,7 +95,8 @@ export function manaSources(state: AnyState, pid: string, lookup: Lookup = getCa
     if (!plans.length) continue;
     const sick = summoningSick(state, c, lookup);
     const f = faceOf(c, lookup);
-    const base = f.types.includes('Land') ? 0 : isCreature(c, lookup, state as StaticsState) ? 3 : 1;
+    // lands first, then rocks, then creatures; a source that doesn't untap (Grim Monolith, Mana Vault) only when its mana is worth it
+    const base = (f.types.includes('Land') ? 0 : isCreature(c, lookup, state as StaticsState) ? 3 : 1) + (c.noUntap ? 1.5 : 0);
     const options = plans.filter((o) => {
       if (!o.produces || o.byHand.length || o.discardHand || o.mana || o.tapOther) return false;
       if (o.sideEffects.some((s) => /^Spend only/.test(s))) return false;

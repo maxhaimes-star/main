@@ -725,7 +725,8 @@ function planSpell(ctx: Ctx, iid: string, c: CardInstance, d: CardData, face: nu
   // X: as big as we can pay.
   let x: number | undefined;
   if (/\{X\}/.test(fd.manaCost)) {
-    const maxX = safe(() => manaSources(v, pid, L).length, 0) + Object.values(me(v, pid).manaPool).reduce((a, b) => a + b, 0);
+    // every source at its biggest option (Mana Crypt: 2, Grim Monolith: 3), plus floating mana
+    const maxX = safe(() => manaSources(v, pid, L).reduce((n, src) => n + Math.max(0, ...src.options.map((o) => o.produces.length)), 0), 0) + Object.values(me(v, pid).manaPool).reduce((a, b) => a + b, 0);
     for (let k = maxX; k >= 1; k--) {
       if (safe(() => autoPayPreview(v, pid, iid, face, costOption, k, L).ok, false)) { x = k; break; }
     }
