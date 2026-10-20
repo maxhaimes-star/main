@@ -19,14 +19,14 @@
  *   - guards: a cap on actions per step, refused actions are never retried at the same game state
  */
 import { getCard } from '../cube.ts';
-import { parseManaSymbols, type CardData } from '../cards.ts';
+import { cmcOf, parseManaSymbols, type CardData } from '../cards.ts';
 import type { Lookup } from '../game/rules.ts';
 import { effectivePT, faceOf, hasKeyword, isCreature } from '../game/rules.ts';
 import { type CardInstance, type GameAction, type GameState, type GameView, isHidden, type ViewCard, type ViewPlayer } from '../game/types.ts';
 import type { ParsedAbility, Pending, TargetRef, TargetSpec } from '../engine/types.ts';
 import { abilitiesOfInstance } from '../engine/animate.ts';
 import { castableFaces, castOptions } from '../engine/costs.ts';
-import { castSpellAbility, flatten, targetSpecs, type ActivatedEntry } from '../engine/script.ts';
+import { castSpellAbility, flatten, isRoomCard, targetSpecs, type ActivatedEntry } from '../engine/script.ts';
 import { isValidTarget } from '../engine/targets.ts';
 import { attackRestriction, blockRestriction } from '../engine/statics.ts';
 import { abilityUsability, attackError, autoPayPreview, blockError, castability, isLandCard, landPlaysLeft, manaSources } from '../engine/strict.ts';
@@ -681,8 +681,14 @@ function bestSpell(ctx: Ctx, main: boolean): GameAction | null {
     const d = L(c.cardId);
     if (!d || (d.types.includes('Land') && d.layout !== 'modal_dfc')) continue;
     if (!safe(() => castability(v, pid, iid, L).ok, false)) continue;
-    const faces = d.faces && ['modal_dfc', 'adventure', 'split'].includes(d.layout) ? safe(() => castableFaces(d), [0]) : [undefined];
+    let faces: (number | undefined)[] = d.faces && ['modal_dfc', 'adventure', 'split'].includes(d.layout) ? safe(() => castableFaces(d), [0]) : [undefined];
+    // Rooms: cast the cheaper door (the other one is unlocked later, abilityAction); the costlier one only when it's
+    // the only door we can pay for.
+    const room = safe(() => isRoomCard(c.cardId), false);
+    if (room) faces = [...faces].sort((a, b) => cmcOf(d.faces![a ?? 0].manaCost) - cmcOf(d.faces![b ?? 0].manaCost));
+    const before = choices.length;
     for (const face of faces) {
+      if (room && choices.length > before) break;
       const fd = faceData(d, face);
       if (/\bLand\b/.test(fd.typeLine)) continue;
       const options = safe(() => castOptions(asState(v), iid, face, L), []);
@@ -764,7 +770,7 @@ function planSpell(ctx: Ctx, iid: string, c: CardInstance, d: CardData, face: nu
   }
   // Value.
   let value: number;
-  const cmc = d.cmc;
+  const cmc = d.layout === 'split' && face != null ? cmcOf(fd.manaCost) : d.cmc; // a split card / Room: the cast half
   if (/\bCreature\b/.test(types)) {
     const p = parseInt(fd.power ?? '0', 10) || 0, t = parseInt(fd.toughness ?? '0', 10) || 0;
     value = 2 + p * 1.2 + t * 0.8 + cmc + (x ?? 0);
@@ -819,7 +825,9 @@ function abilityAction(ctx: Ctx, main: boolean): GameAction | null {
       if (!walker && /discard|sacrifice|lose \d+ life|deals? \d+ damage to you/i.test(e.ability.description)) continue;
       const isEquip = e.keyword === 'Equip';
       if (e.keyword && !isEquip) continue; // crew, level up ... not handled
-      if (!walker && !isEquip && !SINK_APIS.has(e.ability.api)) continue;
+      const unlock = e.ability.api === '_Unlock'; // Rooms: unlock the other door whenever we can (sorcery speed)
+      if (unlock && !main) continue;
+      if (!walker && !isEquip && !unlock && !SINK_APIS.has(e.ability.api)) continue;
       if (!walker && !isEquip && !main && e.ability.api === 'Pump') continue;
       if (!safe(() => abilityUsability(v, pid, iid, e.index, L).ok, false)) continue;
       const specs = safe(() => targetSpecs(e.ability), [] as TargetSpec[]);
@@ -835,6 +843,7 @@ function abilityAction(ctx: Ctx, main: boolean): GameAction | null {
         if (c.attachedTo && v.cards[c.attachedTo]?.zone === 'battlefield') continue;
         value += 2;
       }
+      if (unlock) value = 3 + cmcOf(L(c.cardId ?? '')?.faces?.[parseInt(e.ability.params.Door ?? '0', 10)]?.manaCost ?? '');
       if (walker) {
         const loyalty = c.counters.loyalty ?? 0;
         const l = e.loyalty ?? 0;

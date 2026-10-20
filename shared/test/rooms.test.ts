@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilitiesOfInstance, abilityUsability, applyAction, autoPayPreview, castability, castOptions, createGame, faceOf, handClick, type Ctx, type GameAction, type GameState, moveCard,
+  abilitiesOfInstance, abilityUsability, applyAction, autoPayPreview, castability, castOptions, createGame, decideBotAction, faceOf, handClick, newBotMemory, viewFor, type Ctx, type GameAction, type GameState, moveCard,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -175,5 +175,38 @@ describe('Rooms: Walk-In Closet // Forgotten Cellar', () => {
     moveCard(g, ctx, isl, 'graveyard');
     expect(castability(g, 'a', isl, getCard).ok).toBe(true);
     expect(logText(g)).toMatch(/unlocks Walk-In Closet/);
+  });
+
+  it('the bot casts the cheaper door, then unlocks the other one when it can', () => {
+    const { g, ctx } = setup([ROOM], 'basic_forest');
+    const p = g.players.find((x) => x.pid === 'a')!;
+    for (const iid of [...p.zones.hand]) moveCard(g, ctx, iid, 'library');
+    lands(g, ctx, 5);
+    const room = toHand(g, ctx, 'a', ROOM);
+    g.step = 'main1'; g.priority = 'a';
+    const mem = newBotMemory(1);
+    const a = decideBotAction(viewFor(g, 'a'), 'a', mem);
+    expect(a).toMatchObject({ t: 'cast', iid: room, face: 0 });
+    act(g, ctx, 'a', a!);
+    drain(g, ctx);
+    expect(g.cards[room].unlocked).toEqual([0]);
+    // two untapped Forests left: can't unlock Forgotten Cellar yet
+    const b = decideBotAction(viewFor(g, 'a'), 'a', mem);
+    expect(b?.t === 'activate' && b.iid === room).toBe(false);
+    lands(g, ctx, 3);
+    const c = decideBotAction(viewFor(g, 'a'), 'a', mem);
+    expect(c).toMatchObject({ t: 'activate', iid: room });
+    act(g, ctx, 'a', c!);
+    expect(g.cards[room].unlocked).toEqual([0, 1]);
+  });
+
+  it('with exactly 3 lands the bot casts Walk-In Closet', () => {
+    const { g, ctx } = setup([ROOM], 'basic_forest');
+    const p = g.players.find((x) => x.pid === 'a')!;
+    for (const iid of [...p.zones.hand]) moveCard(g, ctx, iid, 'library');
+    lands(g, ctx, 3);
+    const room = toHand(g, ctx, 'a', ROOM);
+    g.step = 'main1'; g.priority = 'a';
+    expect(decideBotAction(viewFor(g, 'a'), 'a', newBotMemory(1))).toMatchObject({ t: 'cast', iid: room, face: 0 });
   });
 });
