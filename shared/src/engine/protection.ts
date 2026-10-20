@@ -45,6 +45,15 @@ export function protectionsOf(st: St, c: CardInstance, lookup: Lookup): string[]
   for (const a of c.animations ?? []) kws.push(...(a.keywords ?? []));
   const mods = c.zone === 'battlefield' ? staticMods(st, c.iid, lookup) : undefined;
   if (mods) kws.push(...mods.addKw);
+  // Its own "has protection from the chosen player" static (True-Name Nemesis): statics.ts can't carry a keyword
+  // that depends on a choice, so it is read here.
+  if (c.zone === 'battlefield') {
+    for (const line of scriptFaceOf(c)?.statics ?? []) {
+      if (!/AffectedDefined\$\s*Self\b/.test(line)) continue;
+      const kw = /AddKeyword\$\s*(Protection:[^|]*ChosenPlayer[^|]*)/.exec(line)?.[1];
+      if (kw) kws.push(kw.trim());
+    }
+  }
   const f = faceOf(c, lookup);
   for (const m of f.oracle.matchAll(/^Protection from ([\w ,]+?)(?:\s*\(|$)/gim)) kws.push(`Protection from ${m[1]}`);
   const out: string[] = [];

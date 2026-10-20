@@ -2,9 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilityUsability, activatedAbilitiesOf, applyAction, castability, createGame, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
+  abilityUsability, activatedAbilitiesOf, applyAction, castability, createGame, isValidTarget, targetSpecs, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
+import { blockRestriction } from '../src/engine/statics.ts';
+import { parseAbility, SCRIPTS } from '../src/engine/script.ts';
 
 const deck = (extra: string[], fill = 'basic_mountain') => [...extra, ...Array(40 - extra.length).fill(fill)];
 
@@ -372,5 +374,46 @@ describe('A2.3: Ninjutsu', () => {
     act(g, ctx, 'b', { t: 'confirmBlockers' });
     P(g, 'a').manaPool = { U: 1, B: 1, C: 2 };
     expect(applyAction(g, 'a', { t: 'activate', iid: fs, text: '', ability: idx, targets: [[{ kind: 'card', iid: gg }]] }, ctx)).toBeTruthy();
+  });
+});
+
+describe('A2.7: True-Name Nemesis (protection from the chosen player)', () => {
+  function tnn(choose: string) {
+    const { g, ctx } = setup(['true_name_nemesis'], ['lightning_bolt', 'goblin_guide'], 7, 'basic_island');
+    const t = put(g, ctx, 'a', 'true_name_nemesis');
+    answer(g, ctx, (q) => q.options.find((o) => o.value === choose)?.value ?? q.options[0].value);
+    return { g, ctx, t };
+  }
+  const boltSpec = () => targetSpecs(parseAbility(SCRIPTS.cards.lightning_bolt[0].abilities[0], {}, 'Lightning Bolt')!)[0];
+
+  it('as it enters, its controller chooses a player', () => {
+    const { g, t } = tnn('b');
+    expect(g.cards[t].chosen?.player).toBe('b');
+  });
+
+  it("can't be targeted by the chosen player's spells; the other player can target it", () => {
+    const { g, ctx, t } = tnn('b');
+    const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+    expect(isValidTarget(g, boltSpec(), { kind: 'card', iid: t }, 'b', bolt, getCard)).toBe(false);
+    const r2 = tnn('a');
+    const bolt2 = toZone(r2.g, r2.ctx, 'b', 'lightning_bolt', 'hand');
+    expect(isValidTarget(r2.g, boltSpec(), { kind: 'card', iid: r2.t }, 'b', bolt2, getCard)).toBe(true);
+  });
+
+  it("can't be blocked by the chosen player's creatures and isn't dealt their damage", () => {
+    const { g, ctx, t } = tnn('b');
+    const gg = put(g, ctx, 'b', 'goblin_guide');
+    expect(blockRestriction(g, gg, t, getCard)).toBeTruthy();
+    advanceTo(g, ctx, 'b', 'main1');
+    act(g, ctx, 'b', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'b', { t: 'declareAttacker', iid: gg, target: 'a' });
+    act(g, ctx, 'b', { t: 'confirmAttackers' });
+    for (let k = 0; k < 30 && g.step !== 'blockers'; k++) { if (g.pending.length) { answer(g, ctx); continue; } act(g, ctx, g.priority, { t: 'pass' }); }
+    act(g, ctx, 'a', { t: 'declareBlocker', iid: t, attacker: gg });
+    act(g, ctx, 'a', { t: 'confirmBlockers' });
+    for (let k = 0; k < 30 && g.step !== 'main2'; k++) { if (g.pending.length) { answer(g, ctx); continue; } act(g, ctx, g.priority, { t: 'pass' }); }
+    expect(g.cards[t].zone, logText(g)).toBe('battlefield');
+    expect(g.cards[t].damage).toBe(0);
+    expect(g.cards[gg].zone).toBe('graveyard');
   });
 });
