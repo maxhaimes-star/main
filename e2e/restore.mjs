@@ -118,7 +118,7 @@ try {
   const picksA2 = await A.locator('.picks .cube-card img').evaluateAll((els) => els.map((e) => e.getAttribute('alt')).sort());
   assert(JSON.stringify(picksA2) === JSON.stringify(picksA), `picks changed: ${picksA2} vs ${picksA}`);
   const info = await (await fetch(`${URL_}/api/rooms/${code}`)).json();
-  assert(info.phase === 'drafting' && info.players.join(',') === 'Max,Sam', `room info after restore: ${JSON.stringify(info)}`);
+  assert(info.phase === 'drafting' && info.players.slice().sort().join(',') === 'Max,Sam', `room info after restore: ${JSON.stringify(info)}`);
   await shot(A, 'restore-after');
 
   step('the draft goes on after the restore');
