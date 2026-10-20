@@ -7,6 +7,7 @@ import { SortToggle, useSortMode } from './sort.tsx';
 import { download } from './net.ts';
 import { Constructed } from './Constructed.tsx';
 import { PlayVsBot } from './BotControls.tsx';
+import { basicStacks } from './basics.ts';
 import { defaultDeckName, eventName, namesFor, saveDeck, sourceName } from './decklib.ts';
 
 type DeckState = { main: string[]; basics: Record<Color, number> };
@@ -126,6 +127,16 @@ function LimitedDeckbuilder({ view, send, onWatch }: RoomProps & { onWatch: (id:
           <div className="db-col">
             <div className="db-col-title">Lands <small>({landCol.length + basicsCount})</small></div>
             {landCol.map(({ c, i }) => <CubeCard key={`${c.id}-${i}`} id={c.id} onClick={() => toSide(i)} className="stacked" tapLabel="Remove from deck" />)}
+            {basicStacks(deck.basics).map((b) => (
+              <div key={b.id} className="basic-stack" data-basic={b.color} aria-label={`${b.count} ${b.name}`}>
+                {Array.from({ length: b.shown }, (_, k) => (
+                  <CubeCard key={k} id={b.id} className="stacked" tapLabel={`Remove a ${b.name}`} title={`${b.count} ${b.name} (click to remove one)`}
+                    onClick={() => setDeck((d) => ({ ...d, basics: { ...d.basics, [b.color]: Math.max(0, d.basics[b.color] - 1) } }))}>
+                    {k === b.shown - 1 && <span className="basic-count-badge">×{b.count}</span>}
+                  </CubeCard>
+                ))}
+              </div>
+            ))}
           </div>
         </div>
         <PoolSummary ids={side} title="Pool / sideboard" onClick={(id) => toMain(id)} tapLabel="Add to deck" />

@@ -607,3 +607,7 @@ h1, h2, h3, h4 { margin: 8px 0; }
 /* Auction: "Pass on the rest" */
 .pass-rest { margin: 10px 0; padding: 8px 10px; border: 1px dashed var(--line); border-radius: 8px; }
 .pass-rest label { font-weight: 600; cursor: pointer; }
+
+/* Deck view: basic lands as stacked images with a count */
+.basic-stack .stacked:not(:last-child) { margin-bottom: -142px; }
+.basic-count-badge { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); background: #000c; color: #fff; font-weight: 800; padding: 2px 8px; border-radius: 10px; font-size: 14px; pointer-events: none; }
