@@ -122,6 +122,7 @@ export function draftPick(room: RoomState, seat: number, cardId: string, now: nu
   // New picks go straight to the main deck; the player can move them to the sideboard.
   (d.main ??= d.picks.map(() => []))[seat].push(cardId);
   d.pickNumber[seat]++;
+  if (d.highlight) d.highlight[seat] = null;
   d.queues[seat].shift();
   d.deadlines[seat] = null;
   const n = d.queues.length;
@@ -187,6 +188,27 @@ export function setDraftMain(room: RoomState, seat: number, main: string[]): str
   return null;
 }
 
+/** The player in `seat` highlights a card in their current pack: if their pick timer runs out, they get that card. */
+export function highlightCard(room: RoomState, seat: number, cardId: string | null): string | null {
+  const d = room.draft;
+  if (!d || d.done) return 'No draft in progress';
+  const pack = d.queues[seat]?.[0];
+  if (!pack) return 'No pack to pick from';
+  if (cardId != null && !pack.includes(cardId)) return 'Card not in pack';
+  (d.highlight ??= d.queues.map(() => null))[seat] = cardId;
+  return null;
+}
+
+/** What a human whose timer ran out gets: the highlighted card, else the best-rated card for their picks (no random noise). */
+export function autoPickFor(room: RoomState, seat: number, lookup: CardLookup): string | undefined {
+  const d = room.draft!;
+  const pack = d.queues[seat][0];
+  if (!pack?.length) return undefined;
+  const hl = d.highlight?.[seat];
+  if (hl && pack.includes(hl)) return hl;
+  return botPick(pack, d.picks[seat], lookup, () => 0);
+}
+
 /** Called periodically: auto-picks for bots and timed-out humans. Returns true if anything changed. */
 export function draftTick(room: RoomState, now: number, lookup: CardLookup, rng: Rng): boolean {
   const d = room.draft;
@@ -200,8 +222,9 @@ export function draftTick(room: RoomState, now: number, lookup: CardLookup, rng:
     const p = players[seat];
     const timedOut = d.deadlines[seat] != null && now >= d.deadlines[seat]!;
     if (p.isBot || timedOut) {
-      const pick = botPick(pack, d.picks[seat], lookup, rng);
-      draftPick(room, seat, pick, now);
+      const pick = p.isBot ? botPick(pack, d.picks[seat], lookup, rng) : autoPickFor(room, seat, lookup)!;
+      // Never leave a seat without its card: fall back to the first card if the choice is somehow not in the pack.
+      if (draftPick(room, seat, pick, now)) draftPick(room, seat, pack[0], now);
       changed = true;
     }
   }
@@ -238,8 +261,9 @@ function finishPools(room: RoomState, poolForSeat: (seat: number) => string[], m
   room.phase = 'deckbuilding';
 }
 
+/** Bots build their decks. A human who left (a bot holds their seat) keeps their own picks and main/sideboard split. */
 export function finishPoolsWithBots(room: RoomState, lookup: CardLookup) {
-  for (const p of room.players) if (p.isBot) room.decks[p.id] = botDeck(room.pools[p.id], lookup);
+  for (const p of room.players) if (p.isBot && !p.away) room.decks[p.id] = botDeck(room.pools[p.id], lookup);
 }
 
 // ===================================================================== auction

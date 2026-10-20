@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import {
   type ClientMsg, type DraftView, type Match, type MatchView, type Player, type RoomState, type RoomView,
-  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, leaveSeat, reclaimSeat, setDraftMain, emptyDeck,
+  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, leaveSeat, reclaimSeat, setDraftMain, highlightCard, emptyDeck,
   finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, passRest, placeBid, setAuctionMain, seatedPlayers, startAuction, startDraft,
   startSealed, viewFor, type Color, type RoomSettings, type Deck, startDraftWithPacks, startSealedWithPools,
   CONSTRUCTED_FORMATS, type CardPayload, botDeck, BOT_LEVELS, type BotLevel,
@@ -150,6 +150,10 @@ export class Rooms {
         for (const [tok, owner] of Object.entries(rec.tokens)) if (owner === pid) rec.tokens[tok] = target.id;
         delete rec.spectators[pid];
         return reclaimSeat(s, target.id, now);
+      }
+      case 'highlight': {
+        if (!me || s.phase !== 'drafting') return 'Not drafting';
+        return highlightCard(s, me.seat, msg.cardId ?? null);
       }
       case 'draftMain': {
         if (!me || s.phase !== 'drafting') return 'Not drafting';
@@ -363,7 +367,7 @@ export class Rooms {
 
   /** When drafting ends, bots build decks. */
   afterPools(s: RoomState) {
-    if (s.phase === 'deckbuilding' && s.players.some((p) => p.isBot && !s.decks[p.id]?.ready)) finishPoolsWithBots(s, getCard);
+    if (s.phase === 'deckbuilding' && s.players.some((p) => p.isBot && !p.away && !s.decks[p.id]?.ready)) finishPoolsWithBots(s, getCard);
   }
 
   /**

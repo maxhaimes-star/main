@@ -109,6 +109,8 @@ export interface DraftState {
   picks: string[][];
   /** Per seat: the picks the player has moved into their main deck (the rest are sideboard). Carried into deckbuilding. */
   main?: string[][];
+  /** Per seat: the card the player highlighted in their current pack (auto-picked if the timer runs out). */
+  highlight?: (string | null)[];
   /** Packs not yet opened, per round per seat. */
   unopened: string[][][];
   pickNumber: number[];

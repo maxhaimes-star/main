@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { BUCKET_ORDER, type CardData, colorBucket, multisetDiff } from '@ojb/shared';
 import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel } from './cards.tsx';
@@ -100,8 +100,13 @@ export function AwayBanner({ view, send }: Pick<RoomProps, 'view' | 'send'>) {
 
 export function Draft({ view, send, skew }: RoomProps) {
   const d = view.draft!;
-  const [sel, setSel] = useState<string | null>(null);
-  const pick = (id: string) => { send({ t: 'pick', cardId: id }); setSel(null); };
+  const [sel, setSelState] = useState<string | null>(null);
+  // The server remembers the selection: if the pick timer runs out, you get the card you selected.
+  const setSel = (id: string | null) => { setSelState(id); send({ t: 'highlight', cardId: id }); };
+  const pick = (id: string) => { send({ t: 'pick', cardId: id }); setSelState(null); };
+  // A new pack: drop a selection from the previous one.
+  const packKey = `${d.round}:${d.pickNumber}`;
+  useEffect(() => { setSelState(null); }, [packKey]);
   const setMain = (main: string[]) => send({ t: 'draftMain', main });
   const sideboard = multisetDiff(d.picks, d.main);
   const away = !!view.players.find((p) => p.id === view.me)?.away;
@@ -130,7 +135,7 @@ export function Draft({ view, send, skew }: RoomProps) {
           <div className="center-msg">A bot is drafting for you. Take your seat back to keep picking yourself — your picks so far are below.</div>
         ) : d.pack ? (
           <>
-            <p className="muted"><span className="hide-touch">Click a card to select it, then click again (or double-click) to pick.</span><span className="show-touch">Tap a card to zoom in, then tap Pick.</span> {d.queued > 0 && <b>{d.queued} more pack(s) waiting for you.</b>}</p>
+            <p className="muted"><span className="hide-touch">Click a card to select it, then click again (or double-click) to pick. If time runs out you get the selected card (or the best-rated one).</span><span className="show-touch">Tap a card to zoom in, then tap Pick.</span> {d.queued > 0 && <b>{d.queued} more pack(s) waiting for you.</b>}</p>
             <div className="card-grid">
               {d.pack.map((id, i) => (
                 <CubeCard key={`${id}-${i}`} id={id} className={sel === id ? 'selected' : ''}

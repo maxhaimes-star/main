@@ -20,6 +20,8 @@ export type ClientMsg =
   | { t: 'rename'; name: string }
   | { t: 'start' }
   | { t: 'pick'; cardId: string }
+  /** Draft: the card I have selected in my current pack (auto-picked if my timer runs out); null clears it. */
+  | { t: 'highlight'; cardId: string | null }
   /** During the draft: which of my picks are in the main deck (a sub-multiset of my picks; the rest is sideboard). */
   | { t: 'draftMain'; main: string[] }
   /** Put a card up for auction; `amount` is the opening bid (0 = no bid: anyone may open the bidding). */
