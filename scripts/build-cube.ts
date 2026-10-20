@@ -16,7 +16,7 @@ import {
   type CardData, type CardFace, type Color, type CubeData, type Layout, type TokenData,
   scryfallImage, slugify,
 } from '../shared/src/cards.ts';
-import { buildForgeIndex, cardFromForgeText, loadToken, producedManaOf, splitTypeLine } from './lib/forge-card.ts';
+import { buildForgeIndex, cardFromForgeText, expandCopyFaces, loadToken, producedManaOf, splitTypeLine } from './lib/forge-card.ts';
 
 const args = process.argv.slice(2);
 const arg = (k: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
@@ -43,7 +43,7 @@ function fromForge(res: string, names: string[]): { cards: Map<string, CardData>
     if (cards.has(name)) return;
     const file = index.get(name.toLowerCase()) ?? index.get(name.split(' // ')[0].toLowerCase());
     if (!file) { missing.push(name); return; }
-    const card = cardFromForgeText(fs.readFileSync(file, 'utf8'), rank, (s) => loadToken(res, s));
+    const card = cardFromForgeText(expandCopyFaces(fs.readFileSync(file, 'utf8'), res), rank, (s) => loadToken(res, s));
     if (card) cards.set(name, card);
   });
   return { cards, missing };

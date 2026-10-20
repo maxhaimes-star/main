@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CubeData } from '../shared/src/cards.ts';
 import type { ScriptData } from '../shared/src/engine/types.ts';
-import { engineTokenFromText, parseFaces } from './lib/forge-card.ts';
+import { engineTokenFromText, expandCopyFaces, parseFaces } from './lib/forge-card.ts';
 
 const args = process.argv.slice(2);
 const res = args[args.indexOf('--forge') + 1];
@@ -33,7 +33,7 @@ for (const card of cube.cards) {
   const front = (card.faces?.[0]?.name ?? card.name).toLowerCase();
   const file = index.get(front);
   if (!file) { missing++; continue; }
-  const text = fs.readFileSync(file, 'utf8');
+  const text = expandCopyFaces(fs.readFileSync(file, 'utf8'), res);
   out.cards[card.id] = parseFaces(text);
   for (const m of text.matchAll(/TokenScript\$\s*([^|\n]+)/g)) for (const t of m[1].split(',')) tokenNames.add(t.trim());
 }

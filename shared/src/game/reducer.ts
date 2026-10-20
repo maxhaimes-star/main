@@ -4,7 +4,7 @@ import type { Rng } from '../draft.ts';
 import { computeCombat } from './combat.ts';
 import { cardName, effectivePT, faceOf, hasKeyword, isCreature, type Lookup, payFromPool } from './rules.ts';
 import { activateAuto } from '../engine/play.ts';
-import { afterSpellResolved, finishCast, payCastMana, planCast } from '../engine/costs.ts';
+import { afterSpellResolved, finishCast, payCastMana, planCast, preparedCopy, preparedSpellCast } from '../engine/costs.ts';
 import { durationsAtCleanup, durationsAtTurnStart } from '../engine/durations.ts';
 import { activateMana } from '../engine/mana.ts';
 import { loyaltyError, recordActivation } from '../engine/timing.ts';
@@ -719,15 +719,19 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       return null;
     }
     case 'cast': {
-      const c = card(state, a.iid);
-      if (!c) return 'No such card';
+      const target = card(state, a.iid);
+      if (!target) return 'No such card';
+      let c: CardInstance = target;
       if (!canTouch(state, pid, c)) return "You can't cast that card";
-      if (c.zone === 'battlefield' || c.zone === 'stack') return 'That card is already in play';
+      // A prepared permanent: a copy of its spell (face 1) is cast; everything is checked against the permanent first.
+      const prepared = c.zone === 'battlefield' && a.face === 1 && preparedSpellCast(c, 1, ctx.lookup);
+      if (c.zone === 'stack' || (c.zone === 'battlefield' && !prepared)) return 'That card is already in play';
+      if (prepared && c.controller !== pid) return `You don't control ${cardName(c, ctx.lookup)}`;
       let strictPay: ReturnType<typeof planAutoPay> = null;
       if (state.strict) {
         const fix = fixModeOn(state);
         if (!a.faceDown && isLandCard(c, ctx.lookup, a.face ?? 0)) return `${cardName(c, ctx.lookup)} is a land — play it instead of casting it`;
-        const zoneErr = castZoneError(state, pid, c, a.costOption, ctx.lookup);
+        const zoneErr = castZoneError(state, pid, c, a.costOption, ctx.lookup, a.face);
         if (zoneErr && !fix) return zoneErr;
         if (!a.manual && !a.faceDown && c.cardId && a.targets === undefined) {
           const sp = castSpellAbility(c.cardId, a.face ?? 0, a.costOption);
@@ -749,8 +753,9 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
           if (gy > 0 && (parseRequirements(full, prep.plan.x)?.generic ?? 0) > 0) strictPay = null;
         }
       }
+      if (prepared) c = preparedCopy(state, ctx, pid, c);
       const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
-      const from = c.zone;
+      const from = prepared ? 'battlefield' : c.zone;
       detach(state, c);
       c.zone = 'stack';
       c.controller = pid;
@@ -786,7 +791,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         gs.cast[pid] = (gs.cast[pid] ?? 0) + 1;
         emit(state, { t: 'cast', iid: c.iid, pid, nth: st.cast[pid] });
       }
-      const fromText = from === 'hand' ? '' : ` from ${from === 'library' ? 'the top of their library' : ZONE_LABEL[from]}`;
+      const fromText = prepared ? ' (a copy, from a prepared permanent)' : from === 'hand' ? '' : ` from ${from === 'library' ? 'the top of their library' : ZONE_LABEL[from]}`;
       const tnames = prep.auto?.targets.flat().map((t) => t.kind === 'player' ? player(state, t.pid).name : t.kind === 'card' ? cardName(state.cards[t.iid], ctx.lookup) : state.stack.find((s) => s.id === t.id)?.text ?? 'a spell') ?? [];
       log(state, ctx, pid, `${name} casts ${a.faceDown ? 'a face-down spell' : face.name}${a.x != null ? ` (X=${a.x})` : ''}${fromText}${tnames.length ? ` targeting ${tnames.join(', ')}` : ''}${paid}.`);
       if (prep.auto) wardReminders(state, ctx, pid, prep.auto.targets);

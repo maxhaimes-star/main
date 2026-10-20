@@ -38,7 +38,7 @@ function castTypeLine(c: CardInstance, face: number | undefined, lookup: Lookup)
   if (c.faceDown) return 'Creature';
   const data = c.cardId ? lookup(c.cardId) : undefined;
   if (data?.faces && face != null && data.faces[face]) return data.faces[face].typeLine;
-  if (data?.layout === 'adventure' || data?.layout === 'split' || data?.layout === 'modal_dfc' || data?.layout === 'transform') return data.faces?.[0]?.typeLine ?? data.typeLine;
+  if (data?.layout === 'adventure' || data?.layout === 'prepare' || data?.layout === 'split' || data?.layout === 'modal_dfc' || data?.layout === 'transform') return data.faces?.[0]?.typeLine ?? data.typeLine;
   return data?.typeLine ?? faceOf(c, lookup).typeLine;
 }
 

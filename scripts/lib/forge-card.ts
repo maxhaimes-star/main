@@ -187,8 +187,34 @@ export function loadToken(res: string, script: string): TokenData | undefined {
 
 const LAYOUT_MAP: Record<string, Layout> = {
   DoubleFaced: 'transform', Modal: 'modal_dfc', Split: 'split', Adventure: 'adventure',
-  Omen: 'adventure', Prepare: 'adventure', Flip: 'flip',
+  Omen: 'adventure', Prepare: 'prepare', Flip: 'flip',
 };
+
+const frontIndexCache = new Map<string, Map<string, string>>();
+
+/**
+ * "CopyFaceFrom:<card name>" (a Prepare card's spell that is a reprint, e.g. Emeritus of Truce // Swords to
+ * Plowshares): replace the line with the named card's front face, so the face has its name, cost, types and spell.
+ */
+export function expandCopyFaces(text: string, res: string): string {
+  if (!/^CopyFaceFrom:/m.test(text)) return text;
+  let index = frontIndexCache.get(res);
+  if (!index) {
+    index = new Map();
+    for (const full of listCardFiles(res)) {
+      const m = /^Name:(.*)$/m.exec(fs.readFileSync(full, 'utf8'));
+      if (m && !index.has(m[1].trim().toLowerCase())) index.set(m[1].trim().toLowerCase(), full);
+    }
+    frontIndexCache.set(res, index);
+  }
+  return text.replace(/^CopyFaceFrom:(.*)$/m, (line, name: string) => {
+    const file = index!.get(name.trim().toLowerCase());
+    if (!file) return line;
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    const end = lines.findIndex((l) => l.trim() === 'ALTERNATE' || /^SPECIALIZE/.test(l.trim()));
+    return (end < 0 ? lines : lines.slice(0, end)).join('\n').trim();
+  });
+}
 
 /** Token script names a card script references (explicit TokenScript$ plus implicit Clue/Treasure/…). */
 export function tokenScriptsOf(text: string, allOracle: string): string[] {
