@@ -22,7 +22,7 @@ import {
   isLandCard, landPlayError, peekDestinationError, planAutoPay, strictActionError, summoningSick,
 } from '../engine/strict.ts';
 import { maxHandSize, mayPlayPermission } from '../engine/statics.ts';
-import { castSpellAbility, spellAbility, targetSpecs } from '../engine/script.ts';
+import { castSpellAbility, getScript, spellAbility, targetSpecs } from '../engine/script.ts';
 import { answerPregame, inPregame, playerHasPregame, startPregame } from '../engine/pregame.ts';
 import { parseRequirements } from './manapay.ts';
 import {
@@ -162,7 +162,19 @@ function hasStop(state: GameState, pid: string): boolean {
   if (step === 'blockers' && !own && attackers && !state.combat.blockersDeclared) return true;
   if (step === 'damage' && attackers && state.combat.proposal && !state.combat.proposal.confirmed.includes(pid)) return true;
   if (step === 'main1' && own && state.turn > 0) return true;
+  // Ninjutsu: the attacker gets a chance to swap an unblocked attacker once blockers are declared.
+  if (step === 'blockers' && own && state.combat.blockersDeclared && ninjutsuReady(state, pid)) return true;
   return (own ? p.stops.own : p.stops.opp).includes(step);
+}
+
+/** `pid` has a card with ninjutsu in hand and an unblocked attacker. */
+function ninjutsuReady(state: GameState, pid: string): boolean {
+  const hand = player(state, pid).zones.hand;
+  if (!hand.some((iid) => { const id = state.cards[iid]?.cardId; return !!id && !!getScript(id)?.[0]?.keywords.some((k) => /^Ninjutsu:/.test(k)); })) return false;
+  return state.battlefield.some((id) => {
+    const c = state.cards[id];
+    return c.controller === pid && !!c.attacking && !state.battlefield.some((b) => state.cards[b].blocking === id);
+  });
 }
 
 function enterStep(state: GameState, ctx: Ctx, step: Step) {

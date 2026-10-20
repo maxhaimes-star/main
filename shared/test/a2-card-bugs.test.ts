@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  activatedAbilitiesOf, applyAction, castability, createGame, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
+  abilityUsability, activatedAbilitiesOf, applyAction, castability, createGame, type Ctx, evalCount, type GameAction, type GameState, manaOptionsFor, matchCard, moveCard, viewFor,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -314,5 +314,63 @@ describe('Undermountain Adventurer: its mana ability adds mana', () => {
     g.cards[ua].tapped = false;
     P(g, 'a').counters.dungeons = 1;
     expect(manaOptionsFor(g, ua, getCard).map((o) => o.produces)).toEqual(['GGGGGG']);
+  });
+});
+
+describe('A2.3: Ninjutsu', () => {
+  function attackUnblocked(extra: string[] = []) {
+    const { g, ctx } = setup(['fallen_shinobi', 'goblin_guide', ...extra], [], 7, 'basic_island');
+    const gg = put(g, ctx, 'a', 'goblin_guide');
+    const fs = toZone(g, ctx, 'a', 'fallen_shinobi', 'hand');
+    for (const l of ['basic_island', 'basic_island', 'basic_island']) put(g, ctx, 'a', l);
+    put(g, ctx, 'a', 'basic_swamp');
+    const idx = activatedAbilitiesOf('fallen_shinobi', 0).find((e) => e.keyword === 'Ninjutsu')!.index;
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: gg, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    return { g, ctx, gg, fs, idx };
+  }
+
+  it('the attacker gets priority in the declare blockers step and can ninjutsu (auto-paid from lands)', () => {
+    const { g, ctx, gg, fs, idx } = attackUnblocked(['basic_swamp']);
+    // Ninjutsu isn't possible before blockers are declared.
+    expect(abilityUsability(g, 'a', fs, idx, getCard).ok).toBe(false);
+    for (let k = 0; k < 30 && !(g.step === 'blockers' && g.combat.blockersDeclared && g.priority === 'a'); k++) {
+      if (g.pending.length) { answer(g, ctx); continue; }
+      if (g.step === 'blockers' && !g.combat.blockersDeclared) { act(g, ctx, 'b', { t: 'confirmBlockers' }); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect([g.step, g.combat.blockersDeclared, g.priority]).toEqual(['blockers', true, 'a']);
+    expect(abilityUsability(g, 'a', fs, idx, getCard).ok).toBe(true);
+    expect(abilityUsability(viewFor(g, 'a') as never, 'a', fs, idx, getCard).ok).toBe(true);
+    act(g, ctx, 'a', { t: 'activate', iid: fs, text: '', ability: idx, targets: [[{ kind: 'card', iid: gg }]] });
+    expect(g.cards[gg].zone).toBe('hand');
+    drain(g, ctx);
+    expect(g.cards[fs].zone).toBe('battlefield');
+    expect(g.cards[fs].tapped).toBe(true);
+    expect(logText(g)).toMatch(/Fallen Shinobi enters tapped and attacking/);
+    // Combat damage: the ninja hits, its combat-damage trigger exiles the top two cards of Bob's library.
+    for (let k = 0; k < 30 && g.step !== 'main2'; k++) {
+      if (g.pending.length) { answer(g, ctx); continue; }
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    expect(P(g, 'b').life, logText(g)).toBe(15);
+    expect(logText(g)).toMatch(/Fallen Shinobi: \w+, \w+ → exile/);
+  });
+
+  it("a blocked attacker can't be returned", () => {
+    const { g, ctx } = setup(['fallen_shinobi', 'goblin_guide'], ['goblin_guide'], 7, 'basic_island');
+    const gg = put(g, ctx, 'a', 'goblin_guide');
+    const bg = put(g, ctx, 'b', 'goblin_guide');
+    const fs = toZone(g, ctx, 'a', 'fallen_shinobi', 'hand');
+    const idx = activatedAbilitiesOf('fallen_shinobi', 0).find((e) => e.keyword === 'Ninjutsu')!.index;
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: gg, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    for (let k = 0; k < 30 && g.step !== 'blockers'; k++) { if (g.pending.length) { answer(g, ctx); continue; } act(g, ctx, g.priority, { t: 'pass' }); }
+    act(g, ctx, 'b', { t: 'declareBlocker', iid: bg, attacker: gg });
+    act(g, ctx, 'b', { t: 'confirmBlockers' });
+    P(g, 'a').manaPool = { U: 1, B: 1, C: 2 };
+    expect(applyAction(g, 'a', { t: 'activate', iid: fs, text: '', ability: idx, targets: [[{ kind: 'card', iid: gg }]] }, ctx)).toBeTruthy();
   });
 });
