@@ -3,6 +3,7 @@ import { CUBE } from '@ojb/shared/src/cube.ts';
 import { navigate } from './App.tsx';
 import { api, saveSeat } from './net.ts';
 import { MyDecks } from './MyDecks.tsx';
+import { parseRoomInput } from '@ojb/shared/src/roomcode.ts';
 
 export function Home() {
   const [name, setName] = useState(() => localStorage.getItem('ojb:name') ?? '');
@@ -23,9 +24,11 @@ export function Home() {
   }
 
   function join() {
-    const id = code.trim().replace(/.*\/r\//, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
-    if (!id) return setErr('Paste a room link or code');
+    const id = parseRoomInput(code);
+    if (!id) return setErr('Type the room code (like KQMB) or paste the invite link');
     remember();
+    // With a name already typed, the room page joins straight away (Room.tsx).
+    if (name.trim()) try { sessionStorage.setItem('ojb:autojoin', id); } catch { /* ignore */ }
     navigate(`/r/${id}`);
   }
 
@@ -43,7 +46,7 @@ export function Home() {
           </div>
           <div>
             <h3>Join a friend</h3>
-            <label>Room link or code<input value={code} onChange={(e) => setCode(e.target.value)} placeholder="https://…/r/abc123" onKeyDown={(e) => e.key === 'Enter' && join()} /></label>
+            <label>Room code or link<input className={/[/.:]/.test(code) ? '' : 'room-code-input'} value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. KQMB" autoCapitalize="characters" autoComplete="off" spellCheck={false} onKeyDown={(e) => e.key === 'Enter' && join()} /></label>
             <button onClick={join}>Join</button>
           </div>
         </div>
