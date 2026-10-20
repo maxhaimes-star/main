@@ -26,6 +26,40 @@ export function cardPower(card: CardData): number {
   return v;
 }
 
+/**
+ * The "must-pick" tier: cards so far above the rest that a drafter takes them whatever their colours.
+ * Curated (Power 9, fast mana, the usual cube bombs), in rough priority order.
+ */
+export const MUST_PICK_LIST = [
+  // Power 9 and friends
+  'black_lotus', 'ancestral_recall', 'time_walk', 'mox_sapphire', 'mox_jet', 'mox_ruby', 'mox_emerald', 'mox_pearl', 'timetwister',
+  // Fast mana
+  'mana_crypt', 'sol_ring', 'mana_vault', 'jeweled_lotus', 'mana_drain', 'grim_monolith', 'chrome_mox', 'mox_diamond', 'lotus_petal',
+  // Lands
+  'library_of_alexandria', 'strip_mine', 'bazaar_of_baghdad', 'mishras_workshop', 'gaeas_cradle', 'the_tabernacle_at_pendrell_vale',
+  // Spells and threats
+  'minds_desire', 'tinker', 'yawgmoths_will', 'demonic_tutor', 'vampiric_tutor', 'sneak_attack', 'show_and_tell', 'channel', 'balance',
+  'necropotence', 'wheel_of_fortune', 'treasure_cruise', 'force_of_will', 'oath_of_druids', 'recurring_nightmare', 'survival_of_the_fittest',
+  'ragavan_nimble_pilferer', 'oko_thief_of_crowns', 'uro_titan_of_natures_wrath', 'wrenn_and_six', 'jace_the_mind_sculptor',
+  'the_one_ring', 'orcish_bowmasters', 'sheoldred_the_apocalypse', 'grief', 'griselbrand', 'emrakul_the_aeons_torn', 'hogaak_arisen_necropolis',
+  'skullclamp', 'urzas_saga', 'expressive_iteration', 'dack_fayden', 'true_name_nemesis', 'fable_of_the_mirror_breaker',
+] as const;
+export const MUST_PICK: ReadonlySet<string> = new Set(MUST_PICK_LIST);
+/** Any card at or above this power rating (cardPower, 0..1) is a must-pick too. */
+export const MUST_PICK_POWER = 0.95;
+
+/** A card a bot never passes: on the curated list, or rated at least MUST_PICK_POWER. Basic lands never are. */
+export function isMustPick(card: CardData): boolean {
+  if (card.supertypes.includes('Basic') && card.types.includes('Land')) return false;
+  return MUST_PICK.has(card.id) || cardPower(card) >= MUST_PICK_POWER;
+}
+
+/** Priority among must-picks: curated order first, then power. Lower is better. */
+export function mustPickPriority(card: CardData): number {
+  const i = (MUST_PICK_LIST as readonly string[]).indexOf(card.id);
+  return i >= 0 ? i : MUST_PICK_LIST.length + (1 - cardPower(card));
+}
+
 export function heuristicRank(card: CardData, rarity: Rarity = 'C'): number {
   if (card.supertypes.includes('Basic') && card.types.includes('Land')) return 9999;
   let r = RARITY_BASE[rarity] ?? 400;

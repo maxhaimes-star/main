@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CUBE, getCard } from '../src/cube.ts';
-import { cardScore, DEFAULT_SETTINGS, draftPick, draftTick, finishPoolsWithBots, highlightCard, leaveSeat, reclaimSeat, type RoomState, setDraftMain, startDraft, multisetDiff } from '../src/index.ts';
+import { botPick, cardScore, DEFAULT_SETTINGS, draftPick, draftTick, finishPoolsWithBots, highlightCard, leaveSeat, reclaimSeat, type RoomState, setDraftMain, startDraft, multisetDiff } from '../src/index.ts';
+import { isMustPick } from '../src/power.ts';
 import { seeded } from './helpers.ts';
 
 function room(n: number, humans: number, over: Partial<RoomState['settings']> = {}): RoomState {
@@ -31,7 +32,9 @@ describe('draft auto-pick (timer runs out)', () => {
       startDraft(r, CUBE.list, seeded(seed), getCard, 0);
       const d = r.draft!;
       const pack = d.queues[0][0].slice();
-      const best = pack.slice().sort((x, y) => cardScore(getCard(y)!, [], getCard) - cardScore(getCard(x)!, [], getCard))[0];
+      // Best-rated: a must-pick bomb if the pack has one, else the highest score for the player's picks.
+      const bombs = pack.filter((id) => isMustPick(getCard(id)!));
+      const best = bombs.length ? botPick(pack, [], getCard, () => 0) : pack.slice().sort((x, y) => cardScore(getCard(y)!, [], getCard) - cardScore(getCard(x)!, [], getCard))[0];
       draftTick(r, 30_000, getCard, () => 0.999);
       expect(d.picks[0]).toEqual([best]);
     }

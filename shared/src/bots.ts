@@ -7,7 +7,7 @@ import { type CardData, type Color, parseManaSymbols, COLORS } from './cards.ts'
 import type { Deck } from './room.ts';
 import type { CardLookup, Rng } from './draft.ts';
 import { emptyDeck, multisetDiff } from './deckutil.ts';
-import { cardPower } from './power.ts';
+import { cardPower, isMustPick, mustPickPriority } from './power.ts';
 
 const isLand = (c: CardData) => c.types.includes('Land');
 const isCreature = (c: CardData) => c.types.includes('Creature');
@@ -107,6 +107,9 @@ export function cardScore(card: CardData, picks: string[], lookup: CardLookup): 
 }
 
 export function botPick(pack: string[], picks: string[], lookup: CardLookup, rng: Rng): string {
+  // Never pass a super busted card, whatever its colours: take the best of them.
+  const busted = pack.map((id) => ({ id, c: lookup(id) })).filter((x) => x.c && isMustPick(x.c));
+  if (busted.length) return busted.sort((a, b) => mustPickPriority(a.c!) - mustPickPriority(b.c!))[0].id;
   const prof = pickProfile(picks, lookup);
   let best = pack[0];
   let bestScore = -Infinity;
