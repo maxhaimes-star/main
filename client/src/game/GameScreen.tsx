@@ -11,7 +11,7 @@ import { type AutoSettings, noteHoldClick, sourceName, useAutoPass, useAutoSetti
 import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, RevealedZone, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { attackAllCandidates, isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
-import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
+import { MulliganOverlay, PeekModal, ProposalPrompt, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 import { ATTACH_PEEK, COMBAT_SHIFT, fitBoard, STACK_UNITS, TAPPED_UNITS, type BoardSpec, type RowFit } from './boardLayout.ts';
 
 /** Actions never performed on behalf of a controlled player (see engine/turns.ts NEVER_ROUTED); also allowed while controlled. */
@@ -275,6 +275,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
             </div>
           )}
           <FixModeBar />
+          {g.phase === 'playing' && <ProposalPrompt />}
           <PlayerArea pid={opp} top />
           <CenterBar match={match} onLeave={onLeave} auto={auto} setAuto={setAuto} phone={phone} onLog={() => setLogOpen(true)}>
             {layout === 'portrait' && <div className="center-row2">{hint ?? <><Stack yields={auto.yields} setAuto={setAuto} /><PassButton okRef={okRef} /></>}</div>}
@@ -941,8 +942,39 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
   );
 }
 
+/**
+ * Proposals the opponent must agree to (like fix mode): Scry 1, discard at random (me / opponent) and, in fix mode,
+ * shuffle a card from my hand into my library.
+ */
+function proposeItems(ctx: GameCtx): MenuItem[] {
+  const { g, me, opp, act, pickOption, toast } = ctx;
+  if (!me || g.phase !== 'playing') return [];
+  const busy = !!g.proposal;
+  const send = async (a: GameAction) => { const err = await act(a); if (err) toast(err); };
+  const name = (pid: string) => g.players.find((p) => p.pid === pid)?.name ?? '?';
+  const hand = g.players.find((p) => p.pid === me)?.zones.hand ?? [];
+  const items: MenuItem[] = [
+    { label: 'Scry 1 (ask opponent)', disabled: busy, onClick: () => send({ t: 'propose', kind: 'scry1' }) },
+    { label: 'I discard a card at random (ask opponent)', disabled: busy || !hand.length, onClick: () => send({ t: 'propose', kind: 'discardRandom', target: me }) },
+    { label: `${name(opp)} discards a card at random (ask)`, disabled: busy, onClick: () => send({ t: 'propose', kind: 'discardRandom', target: opp }) },
+  ];
+  if (fixModeOn(g) || !isStrictGame(g)) {
+    items.push({
+      label: 'Shuffle a card from hand into library… (ask opponent)', disabled: busy || !hand.length, onClick: async () => {
+        const iid = await pickOption('Shuffle which card into your library?', hand.map((i) => {
+          const c = g.cards[i];
+          return { value: i, label: c && !isHidden(c) ? faceOf(c, getCard).name : 'Card' };
+        }));
+        if (iid) await send({ t: 'propose', kind: 'shuffleIntoLibrary', iid });
+      },
+    });
+  }
+  return items;
+}
+
 function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
-  const { g, me, opp, act, openMenu, undo } = useGame();
+  const gctx = useGame();
+  const { g, me, opp, act, openMenu, undo } = gctx;
   const phone = useLayout() !== 'desktop';
   const myTurn = g.activePlayer === me;
   const havePriority = g.priority === me && g.phase === 'playing';
@@ -997,6 +1029,7 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
           { label: 'Pass to end of turn', onClick: () => act({ t: 'passUntilEOT' }) },
           { label: 'Undo', disabled: !g.canUndo, onClick: undo },
           ...(!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) ? [{ label: 'Fix board (ask opponent)', onClick: () => act({ t: 'requestFixMode' } as never) }] : []),
+          { label: 'Propose (opponent agrees)', sub: proposeItems(gctx) },
         ], 'Actions')}>⋯</button>
       )}
       {me && g.phase === 'playing' && !phone && (
@@ -1004,6 +1037,8 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
           {myTurn && <button className="tiny" onClick={() => act({ t: 'nextTurn' })} title="Skip to the end of your turn">End turn</button>}
           <button className="tiny" onClick={() => act({ t: 'passUntilEOT' })} title="F6 / Ctrl+Space: auto-pass until end of turn">Pass to EOT</button>
           {!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) && <button className="tiny" title="Ask your opponent to let you fix the board by hand" onClick={() => act({ t: 'requestFixMode' } as never)}>Fix board</button>}
+          <button className="tiny propose-btn" title="Ask your opponent to agree to: scry 1, a random discard, or (fix mode) shuffling a card into your library"
+            onClick={(e) => openMenu(e.clientX, e.clientY, proposeItems(gctx), 'Propose')}>Propose…</button>
           <button className="tiny undo-btn" disabled={!g.canUndo} onClick={undo} title="Ctrl+Z (closes any open popup first)">Undo</button>
           <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
             { label: 'Stops: gold dot = your turn, red dot = opponent\'s turn. Edit both under "Stops".', disabled: true },
