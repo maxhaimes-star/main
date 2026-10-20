@@ -7,6 +7,7 @@ import type { RoomProps } from './Room.tsx';
 import { CubeCard, getCard, PreviewPanel, setImageSource, useImageSource } from './cards.tsx';
 import { api, download } from './net.ts';
 import { MyDecks } from './MyDecks.tsx';
+import { InviteBar } from './Invite.tsx';
 import { BotLobbyOption } from './BotControls.tsx';
 import { cobraIdOf, deleteCube, loadCubes, saveCube, type SavedCube } from './cubelib.ts';
 
@@ -73,8 +74,6 @@ export function Lobby({ view, send }: RoomProps) {
   const s = view.settings;
   const set = (patch: Partial<RoomSettings>) => send({ t: 'updateSettings', settings: patch });
   const humans = view.players.filter((p) => !p.isBot);
-  const link = `${location.origin}/r/${view.id}`;
-  const [copied, setCopied] = useState(false);
   const [showCube, setShowCube] = useState(false);
   const imgSrc = useImageSource();
   const ev = eventOf(s);
@@ -115,11 +114,7 @@ export function Lobby({ view, send }: RoomProps) {
     <div className="lobby">
       <div className="lobby-main">
         <h1>{view.name}</h1>
-        <div className="share">
-          <span>Invite friends:</span>
-          <code>{link}</code>
-          <button onClick={() => { navigator.clipboard?.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? 'Copied!' : 'Copy link'}</button>
-        </div>
+        <InviteBar roomId={view.id} roomName={view.name} />
 
         <h3>Players ({humans.length})</h3>
         <ul className="players">
