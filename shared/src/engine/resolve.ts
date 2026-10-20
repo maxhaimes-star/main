@@ -419,6 +419,8 @@ function amount(state: GameState, ctx: Ctx, r: Run, raw: string | undefined, dfl
   if (s.startsWith('+')) s = s.slice(1);
   else if (s.startsWith('-')) { sign = -1; s = s.slice(1); }
   if (/^\d+$/.test(s)) return sign * parseInt(s, 10);
+  const rolled = r.chosen?.vars?.[s]; // ResultSVar$ (a die roll earlier in this chain)
+  if (rolled != null) return sign * rolled;
   const announced = r.item.auto?.extra?.[s]; // Announce$ values (Intrepid Adversary's NumTimes)
   if (announced != null && /^-?\d+$/.test(announced)) return sign * parseInt(announced, 10);
   // An SVar name, or an inline variable ("NumCards$ PlayerCountRegisteredOpponents$HasPropertyLostLifeThisTurn").

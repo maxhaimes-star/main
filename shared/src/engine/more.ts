@@ -77,6 +77,26 @@ function cmp(a: number, expr: string | undefined, right: (s: string) => number |
   }
 }
 
+/** The ResultSubAbilities$ SVar for a die result: "1:A,2-5:B,Else:C" / "Even:A,Odd:B". */
+export function rollResult(spec: string | undefined, n: number): string | undefined {
+  let other: string | undefined;
+  for (const part of (spec ?? '').split(',')) {
+    const k = part.indexOf(':');
+    if (k < 0) continue;
+    const range = part.slice(0, k).trim();
+    const svar = part.slice(k + 1).trim();
+    if (/^Else$/i.test(range)) { other = svar; continue; }
+    if (/^Even$/i.test(range)) { if (n % 2 === 0) return svar; continue; }
+    if (/^Odd$/i.test(range)) { if (n % 2 === 1) return svar; continue; }
+    const m = /^(\d+)(?:-(\d+))?(\+)?$/.exec(range);
+    if (!m) continue;
+    const lo = parseInt(m[1], 10);
+    const hi = m[3] ? Infinity : m[2] != null ? parseInt(m[2], 10) : lo;
+    if (n >= lo && n <= hi) return svar;
+  }
+  return other;
+}
+
 // ------------------------------------------------------------------ pendings
 
 type MData = { kind: 'more'; m: string; cont: AutoCont; pid: string } & Record<string, unknown>;
@@ -190,14 +210,17 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       return 'wait';
     }
     case 'RollDice': {
-      const sides = parseInt(p.Sides ?? '6', 10) || 6;
-      const n = 1 + Math.floor(ctx.rng() * sides);
-      log(state, ctx, r.controller, `${pname(state, r.controller)} rolls a ${n} (d${sides}, ${r.sourceName}).`);
-      for (const part of (p.ResultSubAbilities ?? '').split(',')) {
-        const [range, svar] = part.split(':').map((s) => s.trim());
-        const [lo, hi] = range.split('-').map((x) => parseInt(x, 10));
-        if (n >= lo && n <= (Number.isNaN(hi) ? lo : hi)) { r.splice(svar); break; }
-      }
+      // Roll Amount$ dice with Sides$ sides (+ Modifier$). The total picks a ResultSubAbilities$ entry ("1-9:SVar",
+      // "20:SVar", "Else:SVar"; EvenOddResults$ "Even:SVar,Odd:SVar") and is stored in ResultSVar$ for later steps.
+      const sides = r.amount(p.Sides ?? '6', 6) || 6;
+      const count = Math.max(1, r.amount(p.Amount ?? '1', 1) ?? 1);
+      const rolls = Array.from({ length: count }, () => 1 + Math.floor(ctx.rng() * sides));
+      const mod = p.Modifier ? r.amount(p.Modifier, 0) ?? 0 : 0;
+      const n = (p.UseHighestRoll ? Math.max(...rolls) : rolls.reduce((a, b) => a + b, 0)) + mod;
+      log(state, ctx, r.controller, `${pname(state, r.controller)} rolls ${count > 1 ? rolls.join(' + ') : `a ${rolls[0]}`}${mod ? ` ${mod > 0 ? '+' : '-'} ${Math.abs(mod)} = ${n}` : count > 1 ? ` = ${n}` : ''} (${count > 1 ? count : ''}d${sides}, ${r.sourceName}).`);
+      if (p.ResultSVar) (r.chosen.vars ??= {})[p.ResultSVar.trim()] = n;
+      const sub = rollResult(p.ResultSubAbilities, n);
+      if (sub && r.svars[sub]) r.splice(sub);
       return 'ok';
     }
     case 'FlipCoin': {
