@@ -67,7 +67,7 @@ describe('rooms', () => {
     expect(m.sideboarding).toBe(true);
   });
 
-  it('free mulligan: proposed and accepted through the room; kept for the next game of the match', () => {
+  it('free mulligan: proposed and accepted through the room; game 2 has none unless proposed again', () => {
     const rooms = new Rooms();
     const host = rooms.create('Test', 'Max');
     const friend = rooms.join(host.roomId, 'Sam')!;
@@ -92,7 +92,56 @@ describe('rooms', () => {
     rooms.handle(rec, host.pid, { t: 'readyNext', matchId: m.id });
     rooms.handle(rec, friend.pid, { t: 'readyNext', matchId: m.id });
     expect(m.gameNumber).toBe(2);
-    expect(m.game!.freeMulligan?.on).toBe(true);
+    for (let i = 0; i < 20 && m.game!.pregame; i++) { const q = m.game!.pending[0]; game({ t: 'choose', id: q.id, value: 'no' }, q.pid); }
+    // Game 2: no free mulligan carried over, no "another 6" grant either.
+    expect(m.game!.freeMulligan?.on).toBeFalsy();
+    expect(m.game!.proposal ?? null).toBeNull();
+    expect(m.game!.players.every((p) => !p.extraFreeMulligans && p.mulligans === 0)).toBe(true);
+    // Proposed and agreed again in game 2: free again.
+    expect(game({ t: 'requestFreeMulligan' }, host.pid)).toBeNull();
+    expect(game({ t: 'answerProposal', accept: true }, friend.pid)).toBeNull();
+    expect(game({ t: 'mulligan' }, friend.pid)).toBeNull();
+    expect(game({ t: 'keep' }, friend.pid)).toBeNull();
+    expect(m.game!.players.find((p) => p.pid === friend.pid)!.needsBottom).toBe(0);
+  });
+
+  it('free mulligans, a second free mulligan and another 6 agreed in game 1 are all reset in game 2', () => {
+    const rooms = new Rooms();
+    const host = rooms.create('Test', 'Max');
+    const friend = rooms.join(host.roomId, 'Sam')!;
+    const rec = rooms.rooms.get(host.roomId)!;
+    rooms.handle(rec, host.pid, { t: 'updateSettings', settings: { mode: 'sealed', seats: 2, sealedPacks: 3 } });
+    rooms.handle(rec, host.pid, { t: 'start' });
+    for (const p of [host.pid, friend.pid]) {
+      rooms.handle(rec, p, { t: 'saveDeck', deck: { main: rec.state.pools[p].slice(0, 23), side: [], basics: { W: 0, U: 0, B: 0, R: 17, G: 0 } }, ready: true });
+    }
+    rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, friend.pid], bestOf: 3 });
+    const m = rec.state.matches[0];
+    const game = (action: GameAction, pid: string) => rooms.handle(rec, pid, { t: 'game', matchId: m.id, action });
+    const pregame = () => { for (let i = 0; i < 20 && m.game!.pregame; i++) { const q = m.game!.pending[0]; game({ t: 'choose', id: q.id, value: 'no' }, q.pid); } };
+    pregame();
+    expect(game({ t: 'requestFreeMulligan' }, host.pid)).toBeNull();
+    expect(game({ t: 'answerProposal', accept: true }, friend.pid)).toBeNull();
+    expect(game({ t: 'propose', kind: 'freeMulligan' }, friend.pid)).toBeNull();
+    expect(game({ t: 'answerProposal', accept: true }, host.pid)).toBeNull();
+    expect(m.game!.freeMulligan?.count).toBe(2);
+    for (let i = 0; i < 3; i++) expect(game({ t: 'mulligan' }, host.pid)).toBeNull();
+    expect(game({ t: 'propose', kind: 'another6' }, host.pid)).toBeNull();
+    expect(game({ t: 'answerProposal', accept: true }, friend.pid)).toBeNull();
+    expect(m.game!.players.find((p) => p.pid === host.pid)!.extraFreeMulligans).toBe(1);
+    expect(game({ t: 'keep' }, host.pid)).toBeNull();
+    expect(m.game!.players.find((p) => p.pid === host.pid)!.needsBottom).toBe(1);
+    expect(game({ t: 'keep' }, friend.pid)).toBeNull();
+    expect(game({ t: 'concede' }, friend.pid)).toBeNull();
+    rooms.handle(rec, host.pid, { t: 'readyNext', matchId: m.id });
+    rooms.handle(rec, friend.pid, { t: 'readyNext', matchId: m.id });
+    expect(m.gameNumber).toBe(2);
+    pregame();
+    expect(m.game!.freeMulligan?.on).toBeFalsy();
+    expect(m.game!.players.every((p) => !p.extraFreeMulligans)).toBe(true);
+    expect(game({ t: 'mulligan' }, host.pid)).toBeNull();
+    expect(game({ t: 'keep' }, host.pid)).toBeNull();
+    expect(m.game!.players.find((p) => p.pid === host.pid)!.needsBottom).toBe(1); // no free mulligan in game 2
   });
 
   it('fills a draft with bots and drafts to completion via ticks', () => {

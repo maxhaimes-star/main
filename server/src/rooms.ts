@@ -452,9 +452,8 @@ export class Rooms {
       const pl = s.players.find((p) => p.id === pid);
       return { pid, name: pl?.name ?? '?', deck: match.decks[pid].main, side: match.decks[pid].side, ...(pl?.isBot && !pl.away ? { bot: true } : {}) };
     };
-    const prev = match.game?.freeMulligan; // agreed once (one or two free mulligans): stays for the rest of the match
+    // Each game starts fresh: free mulligans and "another 6" must be proposed and agreed again (they don't carry over).
     match.game = createGame(`${match.id}-${match.gameNumber}`, [seat(match.players[0]), seat(match.players[1])], starting, { rng, lookup: getCard, now }, { strict: true }); // rules-enforced (Arena-style)
-    if (prev?.on) match.game.freeMulligan = { on: true, requestedBy: null, count: prev.count ?? 1 };
   }
 
   private gameOver(match: Match) {
