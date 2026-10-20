@@ -73,7 +73,7 @@ export function controls(state: Pick<GameState, 'controlledBy'>, viewer: string 
   return !!viewer && !!cb?.active && cb.by === viewer && cb.pid === pid;
 }
 
-const NEVER_ROUTED = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan']);
+const NEVER_ROUTED = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan', 'propose', 'answerProposal', 'cancelProposal']);
 
 /**
  * Which player an action is performed as. Returns the acting player id, or an error.

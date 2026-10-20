@@ -241,7 +241,7 @@ export function botNeedsToAct(g: GameState | GameView, pid: string): boolean {
   if (!p || p.conceded) return false;
   if (g.undoRequest && g.undoRequest !== pid) return true;
   if (g.fixMode && !g.fixMode.on && g.fixMode.requestedBy && g.fixMode.requestedBy !== pid) return true;
-  if (g.freeMulligan && !g.freeMulligan.on && g.freeMulligan.requestedBy && g.freeMulligan.requestedBy !== pid && g.phase === 'mulligan') return true;
+  if (g.proposal && g.proposal.by !== pid) return true; // free mulligan, another 6, scry 1 ... (answerProposal)
   // Before the opening hands (Arcane Savant, engine/pregame.ts): only the questions; mulligans wait for them.
   if (g.phase === 'mulligan' && (g.pregame || g.pending.length)) return g.pending.some((q) => q.pid === pid);
   if (g.phase === 'mulligan') return !p.kept || p.needsBottom > 0;
@@ -281,8 +281,11 @@ export function decideBotAction(v: View, pid: string, mem: BotMemory, opts: BotO
     return ok({ t: 'answerUndo', accept }) ?? ok({ t: 'answerUndo', accept: !accept });
   }
   if (v.fixMode && !v.fixMode.on && v.fixMode.requestedBy && v.fixMode.requestedBy !== pid) return ok({ t: 'answerFixMode', accept: true }) ?? ok({ t: 'answerFixMode', accept: false });
+  if (v.proposal && v.proposal.by !== pid) {
+    const accept = acceptProposal(v, v.proposal);
+    return ok({ t: 'answerProposal', accept }) ?? ok({ t: 'answerProposal', accept: !accept });
+  }
   if (v.phase === 'mulligan') {
-    if (v.freeMulligan && !v.freeMulligan.on && v.freeMulligan.requestedBy && v.freeMulligan.requestedBy !== pid) return ok({ t: 'answerFreeMulligan', accept: true }) ?? ok({ t: 'answerFreeMulligan', accept: false });
     // Pre-game questions (Arcane Savant: which sideboard card to exile) come before the mulligan decision.
     const pre = v.pending.find((x) => x.pid === pid);
     if (pre) return answerPending(ctx, pre);
@@ -311,6 +314,15 @@ export function decideBotAction(v: View, pid: string, mem: BotMemory, opts: BotO
 }
 
 interface Ctx { v: View; pid: string; mem: BotMemory; L: Lookup; level: BotLevel; cap: number }
+
+/**
+ * The bot's answer to the opponent's proposal: it agrees to the house rules and fixes (free mulligans, scry 1, a random
+ * discard, shuffling a card away in fix mode) and to one "another 6" per game, so a human can't mulligan forever.
+ */
+function acceptProposal(v: View, prop: NonNullable<View['proposal']>): boolean {
+  if (prop.kind === 'another6') return (v.players.find((p) => p.pid === prop.by)?.extraFreeMulligans ?? 0) < 1;
+  return true;
+}
 
 function firstOk(ctx: Ctx, list: GameAction[]): GameAction | null {
   for (const a of list) if (!failed(ctx.mem, ctx.v, actionKey(a))) return a;

@@ -463,7 +463,8 @@ describe('12: free mulligan (both players agree)', () => {
     const { g, ctx } = fresh();
     expect(applyAction(g, 'a', { t: 'answerFreeMulligan', accept: true }, ctx)).toBeTruthy();
     act(g, ctx, 'a', { t: 'requestFreeMulligan' });
-    expect(g.freeMulligan?.on).toBe(false);
+    expect(g.freeMulligan?.on).toBeFalsy();
+    expect(g.proposal?.kind).toBe('freeMulligan');
     expect(applyAction(g, 'a', { t: 'answerFreeMulligan', accept: true }, ctx)).toBeTruthy(); // not your own request
     act(g, ctx, 'b', { t: 'answerFreeMulligan', accept: true });
     expect(g.freeMulligan?.on).toBe(true);

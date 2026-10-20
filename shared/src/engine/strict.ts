@@ -26,7 +26,7 @@ import { activateMana, manaPlansFor } from './mana.ts';
 import { stateBasedActions } from './resolve.ts';
 import { abilityAt, abilityLine, activatedAbilitiesOf, getScript, scriptRef } from './script.ts';
 import { noteTapped } from './manatriggers.ts';
-import { activateRestriction, adjustCost, manaConvertApplies, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
+import { activateRestriction, adjustCost, blockRestriction, manaConvertApplies, castRestriction, extraLandPlays, mayPlayPermission, type StaticsState } from './statics.ts';
 import { activationError, castTimingError } from './timing.ts';
 
 type AnyState = GameState | GameView;
@@ -557,6 +557,24 @@ export function blockError(state: GameState, blocker: string, attacker: string, 
   if (kw(a, 'Fear') && !bArtifact && !colorsOf(b, lookup).includes('B')) return `${an} has fear — only artifact and/or black creatures can block it`;
   if (kw(a, 'Intimidate') && !bArtifact && !colorsOf(b, lookup).some((x) => colorsOf(a, lookup).includes(x))) return `${an} has intimidate`;
   return null;
+}
+
+/**
+ * Can `pid` legally block at least one attacker right now (declare blockers step, strict checks: an untapped creature,
+ * evasion, static restrictions)? Auto-pass, F6 and the strict "No blockers" skip never skip this decision.
+ */
+export function canBlockAny(state: AnyState, pid: string, lookup: Lookup = getCard): boolean {
+  const attackers = state.battlefield.filter((iid) => { const c = visibleCard(state, iid); return !!c?.attacking && c.controller !== pid; });
+  if (!attackers.length) return false;
+  return state.battlefield.some((iid) => {
+    const b = visibleCard(state, iid);
+    if (!b || b.controller !== pid || b.tapped || !isCreature(b, lookup, state as StaticsState)) return false;
+    return attackers.some((a) => {
+      try {
+        return !blockError({ ...asGame(state), step: 'blockers' }, iid, a, lookup) && !blockRestriction(state as StaticsState, iid, a, lookup);
+      } catch { return true; } // unknown: let the player decide
+    });
+  });
 }
 
 /** Whole-block legality when blockers are confirmed: menace. */

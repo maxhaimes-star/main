@@ -452,9 +452,9 @@ export class Rooms {
       const pl = s.players.find((p) => p.id === pid);
       return { pid, name: pl?.name ?? '?', deck: match.decks[pid].main, side: match.decks[pid].side, ...(pl?.isBot && !pl.away ? { bot: true } : {}) };
     };
-    const freeMulligan = !!match.game?.freeMulligan?.on; // agreed once: stays for the rest of the match
+    const prev = match.game?.freeMulligan; // agreed once (one or two free mulligans): stays for the rest of the match
     match.game = createGame(`${match.id}-${match.gameNumber}`, [seat(match.players[0]), seat(match.players[1])], starting, { rng, lookup: getCard, now }, { strict: true }); // rules-enforced (Arena-style)
-    if (freeMulligan) match.game.freeMulligan = { on: true, requestedBy: null };
+    if (prev?.on) match.game.freeMulligan = { on: true, requestedBy: null, count: prev.count ?? 1 };
   }
 
   private gameOver(match: Match) {

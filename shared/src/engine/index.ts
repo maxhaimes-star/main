@@ -65,7 +65,7 @@ export {
 export { controls, sagaOf, uniqueTriggerSupport } from './turns.ts';
 // Strict rules enforcement (state.strict / state.fixMode): Arena-style legality checks and auto-pay.
 export {
-  abilityUsability, attackError, handClick, autoPayPreview, blockError, blockersError, castability, castManaCost, isLandCard, isStrict, fixModeOn,
+  abilityUsability, attackError, handClick, autoPayPreview, blockError, blockersError, canBlockAny, castability, castManaCost, isLandCard, isStrict, fixModeOn,
   landPlayError, landPlaysLeft, manaSources, MANUAL_ACTIONS, planAutoPay, priorityError, summoningSick,
 } from './strict.ts';
 export { extraLandPlays, maxHandSize, mayPlayPermission } from './statics.ts';
