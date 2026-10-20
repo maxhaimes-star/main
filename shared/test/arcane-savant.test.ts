@@ -172,6 +172,25 @@ describe('Arcane Savant: when it enters', () => {
     expect(exiled(g, 'a').sort()).toEqual(['lightning_bolt', 'ponder']);
   });
 
+  it('copies a modal spell: modes are chosen one at a time (Mystic Confluence repeats a mode)', () => {
+    const { g, ctx } = setup({ sideA: ['mystic_confluence'] });
+    pregame(g, ctx, 'mystic_confluence');
+    keepAll(g, ctx);
+    castSavant(g, ctx);
+    for (let i = 0; i < 6 && !g.pending.length; i++) act(g, ctx, g.priority, { t: 'pass' });
+    act(g, ctx, 'a', { t: 'choose', id: g.pending[0].id, value: 'yes' });
+    for (let k = 0; k < 3; k++) {
+      const q = g.pending[0];
+      expect(q.prompt).toMatch(/choose a mode/);
+      act(g, ctx, 'a', { t: 'choose', id: q.id, value: 'DBDraw' });
+    }
+    expect(g.pending).toHaveLength(0);
+    const hand = g.players[0].zones.hand.length;
+    expect(g.stack[g.stack.length - 1].text).toBe('Mystic Confluence');
+    for (let i = 0; i < 6 && g.stack.length; i++) act(g, ctx, g.priority, { t: 'pass' });
+    expect(g.players[0].zones.hand.length).toBe(hand + 3);
+  });
+
   it('declining leaves nothing behind', () => {
     const { g, ctx } = setup({ sideA: ['lightning_bolt'] });
     pregame(g, ctx, 'lightning_bolt');

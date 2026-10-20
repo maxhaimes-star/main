@@ -1132,11 +1132,22 @@ export function castDuringResolution(state: GameState, ctx: Ctx, pid: string, ii
   const d: MData = { kind: 'more', m: 'castTargets', cont: cont ?? (null as unknown as AutoCont), pid, iid, via, modes: undefined, cost: extra.cost ?? '', ...(extra.after ? { after: extra.after } : {}), ...(extra.x != null ? { x: extra.x } : {}), ...(extra.copyFrom ? { copyFrom: extra.copyFrom } : {}) };
   if (sp?.ability.api === 'Charm' && sp.ability.choices?.length) {
     const ab = sp.ability;
-    ask(state, ctx, pid, `${via}: ${cardName(c, ctx.lookup)} — choose ${ab.charmMax === 1 ? 'a mode' : 'the modes'}`,
-      ab.choices!.map((ch) => ({ value: ch.name, label: ch.ability.description })), { ...d, m: 'castModes', picked: [], min: ab.charmMin ?? 1, max: ab.charmMax ?? 1 });
+    askCastMode(state, ctx, { ...d, m: 'castModes', picked: [], min: ab.charmMin ?? 1, max: ab.charmMax ?? 1, repeat: ab.params.CanRepeatModes === 'True' });
     return true;
   }
   return castTargetsStep(state, ctx, d);
+}
+
+/** Ask for the next mode of a modal spell cast during a resolution (one at a time, up to CharmNum$; Mystic Confluence repeats). */
+function askCastMode(state: GameState, ctx: Ctx, d: MData) {
+  const c = state.cards[d.iid as string];
+  const ab = c?.cardId ? spellAbility(c.cardId, 0)?.ability : undefined;
+  const picked = d.picked as string[];
+  const max = d.max as number;
+  const opts = (ab?.choices ?? []).filter((ch) => d.repeat || !picked.includes(ch.name)).map((ch) => ({ value: ch.name, label: ch.ability.description }));
+  if (picked.length >= (d.min as number) && picked.length > 0) opts.push({ value: 'done', label: 'Done choosing modes' });
+  const left = max - picked.length;
+  ask(state, ctx, d.pid as string, `${d.via}: ${c ? cardName(c, ctx.lookup) : 'the spell'} — choose ${max === 1 ? 'a mode' : `a mode (${left} of ${max} left)`}`, opts, d);
 }
 
 function castTargetsStep(state: GameState, ctx: Ctx, d: MData): boolean {
@@ -1151,7 +1162,7 @@ function castTargetsStep(state: GameState, ctx: Ctx, d: MData): boolean {
       continueAfterCast(state, ctx, d);
       return !!d.cont;
     }
-    ask(state, ctx, d.pid, `${d.via}: choose targets for ${cardName(c, ctx.lookup)}`, [{ value: 'cancel', label: "Don't cast it" }], d,
+    ask(state, ctx, d.pid, `${d.via}: choose targets for ${cardName(c, ctx.lookup)}`, [{ value: 'cancel', label: "Don't cast it" }], { ...d, m: 'castTargets' },
       { targets: { specs, sourceIid: c.iid, controller: d.pid, label: cardName(c, ctx.lookup) } });
     return true;
   }
@@ -1371,8 +1382,8 @@ export function answerMorePending(state: GameState, ctx: Ctx, pend: Pending, val
     case 'castModes': {
       const picked = d.picked as string[];
       if (value !== 'done') picked.push(value);
-      d.modes = [...picked];
-      castTargetsStep(state, ctx, d);
+      if (value !== 'done' && picked.length < (d.max as number)) { askCastMode(state, ctx, d); return null; }
+      castTargetsStep(state, ctx, { ...d, m: 'castTargets', modes: [...picked] });
       return null;
     }
     case 'castTargets': {
