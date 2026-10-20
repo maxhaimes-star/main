@@ -233,6 +233,8 @@ export class Rooms {
           if (!pl) return 'Unknown player';
           if (pl.away) return `${pl.name} left — a bot is only holding their seat`;
           if (!s.decks[p] || deckSize(s.decks[p]) < 1) return `${pl.name} hasn't built a deck yet`;
+          // Nobody (the host included) can start a match for a player who hasn't said their deck is ready.
+          if (!pl.isBot && !s.decks[p].ready) return `${pl.name} is not ready yet (still building their deck)`;
         }
         if (s.matches.some((m) => !m.winner && (m.players.includes(a) || m.players.includes(b)))) return 'One of those players is already in a match';
         if (s.settings.mode === 'constructed') {

@@ -204,10 +204,12 @@ export function MatchList({ view, send, onWatch, ready, onReady }: { view: RoomP
       {isHost && humans.length >= 2 && (
         <div className="pairing">
           <small>Host: pair two players</small>
-          <select value={pa} onChange={(e) => setPa(e.target.value)}><option value="">…</option>{view.players.filter((p) => !p.isBot).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+          <select value={pa} onChange={(e) => setPa(e.target.value)}><option value="">…</option>{view.players.filter((p) => !p.isBot).map((p) => <option key={p.id} value={p.id}>{p.name}{isReady(p.id) ? ' ✅' : ' (building)'}</option>)}</select>
           vs
-          <select value={pb} onChange={(e) => setPb(e.target.value)}><option value="">…</option>{view.players.filter((p) => !p.isBot).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-          <button disabled={!pa || !pb} onClick={() => send({ t: 'createMatch', players: [pa as string, pb as string], bestOf })}>Pair</button>
+          <select value={pb} onChange={(e) => setPb(e.target.value)}><option value="">…</option>{view.players.filter((p) => !p.isBot).map((p) => <option key={p.id} value={p.id}>{p.name}{isReady(p.id) ? ' ✅' : ' (building)'}</option>)}</select>
+          <button disabled={!pa || !pb || pa === pb || !isReady(pa) || !isReady(pb)} title={pa && pb && (!isReady(pa) || !isReady(pb)) ? 'Both players must tick "Deck ready" first' : undefined}
+            onClick={() => send({ t: 'createMatch', players: [pa as string, pb as string], bestOf })}>Pair</button>
+          {pa && pb && (!isReady(pa) || !isReady(pb)) && <small className="muted"> Waiting for {[pa, pb].filter((x) => !isReady(x)).map(name).join(' and ')} to be ready.</small>}
         </div>
       )}
       {view.matches.length > 0 && <h4>Matches</h4>}
