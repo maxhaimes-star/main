@@ -6,7 +6,7 @@ import type { ParsedAbility } from './types.ts';
 /** Effect APIs executed by more.ts. */
 export const MORE_APIS = new Set([
   'Branch', 'RepeatEach', 'Repeat', 'GenericChoice', 'ChooseCard', 'ChooseNumber', 'TapOrUntap', 'Amass', 'Proliferate', 'Connive', 'Recruit', 'Empower', 'Discover', '_DiscoverHand', 'Fight',
-  'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'DamageResolve',
+  'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'FlipCoin', 'DamageResolve',
   'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType', '_Throne',
   'AddPhase', '_Madness', '_ToGraveyard', '_Replicate', '_FlashSac', '_Fading', '_CumUpkeep', '_Cascade', '_Storm', '_LivingWeapon', '_Ravenous', '_Backup', '_PutBottom',
 ]);
@@ -58,6 +58,7 @@ export function moreReason(step: ParsedAbility): string | null | undefined {
     case 'ChooseCard': return null;
     case 'Play': return null;
     case 'CopySpellAbility': return null;
+    case 'FlipCoin': return p.FlipUntilYouLose || p.Amount || p.RememberResult || p.RememberNumber || p.RememberLoser || p.ForEachPlayer ? 'FlipCoin (several flips)' : null;
     case 'AddPhase': return p.ExtraPhase === 'Combat' ? null : `AddPhase (${p.ExtraPhase})`;
   }
   return null;
