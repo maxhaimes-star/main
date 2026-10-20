@@ -763,8 +763,12 @@ function planSpell(ctx: Ctx, iid: string, c: CardInstance, d: CardData, face: nu
       const pick = sp2.length ? pickTargets(ctx, sp2, pid, iid, ch.ability.description, ab, false, x ?? 0, [ch.name]) : { targets: [], value: 1 };
       return { name: ch.name, ok: !!pick, value: pick?.value ?? -1 };
     }).filter((m) => m.ok).sort((a, b) => b.value - a.value);
-    if (scoredModes.length < min) return null;
-    modes = scoredModes.slice(0, min).map((m) => m.name);
+    // CanRepeatModes$ (Mystic / Fiery Confluence): the best usable mode fills the remaining choices.
+    const repeat = ab.params.CanRepeatModes === 'True';
+    if (scoredModes.length < min && !(repeat && scoredModes.length)) return null;
+    modes = Array.from({ length: min }, (_v, k) => scoredModes[repeat ? Math.min(k, scoredModes.length - 1) : k].name);
+    const order = ab.choices.map((ch) => ch.name);
+    modes.sort((a, b) => order.indexOf(a) - order.indexOf(b));
   }
   if (ab) {
     specs = safe(() => targetSpecs(ab, modes), [] as TargetSpec[]);

@@ -34,7 +34,7 @@ import { CUBE, getCard } from '../shared/src/cube.ts';
 import {
   abilitiesOfInstance, activatedAbilitiesOf, adjustCost, applyAction, castOptions, type CardData, type Color, createGame, type Ctx,
   effectivePT, faceOf, landPlaysAllowed, landPlaysLeft, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
-  parseManaSymbols, type Pending, castSpellAbility, type TargetRef, type TargetSpec, targetSpecs, viewFor,
+  parseManaSymbols, type Pending, castSpellAbility, charmLimits, type TargetRef, type TargetSpec, targetSpecs, viewFor,
   type BotLevel, type BotMemory, botNeedsToAct, botStep, newBotMemory,
 } from '../shared/src/index.ts';
 
@@ -290,9 +290,11 @@ function castPlays(G: Game, pid: string): Play[] {
             const sp = castSpellAbility(c.cardId!, face ?? 0, o.id);
             let modes: string[] | undefined;
             if (sp?.ability.choices?.length) {
-              const lo = sp.ability.charmMin ?? 1, hi = Math.min(sp.ability.charmMax ?? 1, sp.ability.choices.length);
-              const n = lo + Math.floor(rng() * (hi - lo + 1));
-              modes = shuffled(rng, sp.ability.choices.map((ch) => ch.name)).slice(0, n);
+              const lim = charmLimits(g, sp.ability, pid, getCard);
+              const n = lim.min + Math.floor(rng() * (lim.max - lim.min + 1));
+              const names = sp.ability.choices.map((ch) => ch.name);
+              // A mode may repeat (Mystic Confluence): pick with replacement.
+              modes = lim.repeat ? Array.from({ length: n }, () => pick(rng, names)) : shuffled(rng, names).slice(0, n);
             }
             const specs = sp ? targetSpecs(sp.ability, modes) : [];
             const targets = specs.length ? chooseTargets(rng, g, specs, pid, iid) : [];

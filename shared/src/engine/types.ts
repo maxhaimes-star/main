@@ -47,6 +47,8 @@ export interface ParsedAbility {
   /** Charm only: how many modes to choose (CharmNum$ / MinCharmNum$). */
   charmMin?: number;
   charmMax?: number;
+  /** Charm only: CharmNum$ is a variable (Flame of Anor): charmMax is the minimum, play.ts charmLimits() the value now. */
+  charmMaxVar?: string;
   /** The face's SVars (for variables like X). */
   svars?: Record<string, string>;
 }

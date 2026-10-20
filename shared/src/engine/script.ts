@@ -246,6 +246,8 @@ export function parseAbility(line: string, svars: Record<string, string>, cardNa
     }
     const n = parseInt(params.CharmNum ?? '1', 10);
     ab.charmMax = Number.isNaN(n) ? 1 : n;
+    // CharmNum$ Count$Compare Y GE1.2.1 (Flame of Anor: two modes if you control a Wizard): see play.ts charmLimits().
+    if (Number.isNaN(n) && params.CharmNum) ab.charmMaxVar = params.CharmNum;
     const m = parseInt(params.MinCharmNum ?? String(ab.charmMax), 10);
     ab.charmMin = Number.isNaN(m) ? ab.charmMax : m;
   }

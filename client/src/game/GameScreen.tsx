@@ -68,8 +68,8 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; title?: string } | null>(null);
   const [mode, setMode] = useState<Mode>(null);
   const [prompt, setPrompt] = useState<PromptState>(null);
-  const [modes, setModes] = useState<{ label: string; options: { value: string; label: string }[]; min: number; max: number; resolve: (v: string[] | null) => void } | null>(null);
-  const pickModes = useCallback((label: string, options: { value: string; label: string }[], min: number, max: number) => new Promise<string[] | null>((resolve) => setModes({ label, options, min, max, resolve })), []);
+  const [modes, setModes] = useState<{ label: string; options: { value: string; label: string }[]; min: number; max: number; repeat?: boolean; resolve: (v: string[] | null) => void } | null>(null);
+  const pickModes = useCallback((label: string, options: { value: string; label: string }[], min: number, max: number, repeat?: boolean) => new Promise<string[] | null>((resolve) => setModes({ label, options, min, max, repeat, resolve })), []);
   const [picker, setPicker] = useState<{ title: string; options: PickOption[]; resolve: (v: string | null) => void } | null>(null);
   const pickOption = useCallback((title: string, options: PickOption[]) => new Promise<string | null>((resolve) => setPicker({ title, options, resolve })), []);
   const [dividing, setDividing] = useState<{ title: string; total: number | undefined; targets: { key: string; label: string }[]; validate: (d: Record<string, number>) => string | null; resolve: (v: Record<string, number> | null) => void } | null>(null);

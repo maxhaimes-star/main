@@ -437,3 +437,168 @@ describe('A1.3: Cosima, God of the Voyage', () => {
     expect(g.stack.filter((s) => /Cosima|voyage/i.test(s.text))).toHaveLength(0);
   });
 });
+
+// ------------------------------------------------------------------ A1.4: modal spells
+
+const MODAL = CUBE.cards.filter((c) => (castSpellAbility(c.id, 0)?.ability.choices?.length ?? 0) > 0).map((c) => c.id);
+
+/** A board for modal spells: lands of every color, creatures and an artifact for each player, creature cards in a's graveyard. */
+function modalBoard(id: string, extraA: string[] = []) {
+  const extra = [id, ...extraA, ...BASICS.flatMap((b) => Array(4).fill(b)), 'giver_of_runes', 'goblin_guide', 'giver_of_runes', 'mind_stone', 'opt', 'opt'];
+  const { g, ctx } = setup(extra, ['giver_of_runes', 'goblin_guide', 'mind_stone', 'lightning_bolt'], 'basic_mountain', 'basic_mountain');
+  for (const b of BASICS) lands(g, ctx, 'a', b, 4);
+  lands(g, ctx, 'b', 'basic_mountain', 4);
+  const mine = put(g, ctx, 'a', 'giver_of_runes');
+  put(g, ctx, 'a', 'mind_stone');
+  const theirs = [put(g, ctx, 'b', 'giver_of_runes'), put(g, ctx, 'b', 'goblin_guide')];
+  const art = put(g, ctx, 'b', 'mind_stone');
+  const dead = [toZone(g, ctx, 'a', 'giver_of_runes', 'graveyard', [mine]), toZone(g, ctx, 'a', 'goblin_guide', 'graveyard')];
+  const iid = toZone(g, ctx, 'a', id, 'hand');
+  for (const o of g.players[0].zones.library.filter((x) => g.cards[x].cardId === 'opt').slice(0, 2)) moveCard(g, ctx, o, 'hand');
+  return { g, ctx, iid, mine, theirs, art, dead };
+}
+
+/** b casts Lightning Bolt at a (so there is a spell to counter); a gets priority back. */
+function oppBolt(g: GameState, ctx: Ctx): string {
+  const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+  g.priority = 'b';
+  act(g, ctx, 'b', { t: 'cast', iid: bolt, targets: [[{ kind: 'player', pid: 'a' }]] });
+  expect(g.priority).toBe('a');
+  return bolt;
+}
+
+const noManual = (g: GameState) => g.log.filter((l) => /by hand|Not automated|manual/i.test(l.text)).map((l) => l.text);
+
+function combos(names: string[], k: number, repeat: boolean): string[][] {
+  if (k === 0) return [[]];
+  const out: string[][] = [];
+  names.forEach((n, i) => { for (const rest of combos(repeat ? names.slice(i) : names.slice(i + 1), k - 1, repeat)) out.push([n, ...rest]); });
+  return out;
+}
+
+describe('A1.4: modal spells (Charms, Commands, Confluences, escalate, "choose one or more")', () => {
+  it('the cube has these modal spells', () => {
+    expect(MODAL.sort()).toEqual(['abrade', 'collective_brutality', 'cryptic_command', 'farewell', 'fiery_confluence', 'flame_of_anor', 'izzet_charm', 'kolaghans_command', 'mystic_confluence', 'prismari_command', 'rip_apart', 'sheoldreds_edict'].sort());
+  });
+
+  for (const id of MODAL) {
+    it(`${id}: every legal choice of modes casts, takes targets per mode and resolves with no manual step`, () => {
+      const ab = castSpellAbility(id, 0)!.ability;
+      const names = ab.choices!.map((c) => c.name);
+      const repeat = ab.params.CanRepeatModes === 'True';
+      const max = id === 'flame_of_anor' ? 1 : ab.charmMax ?? 1;
+      let tried = 0;
+      for (let k = ab.charmMin ?? 1; k <= max; k++) {
+        for (const modes of combos(names, k, repeat)) {
+          const { g, ctx, iid } = modalBoard(id);
+          const counters = modes.some((m) => /Counter/.test(m));
+          if (counters) oppBolt(g, ctx);
+          const targets = autoTargets(g, iid, 0, modes);
+          if (targets?.some((t, n) => t.length < (targetSpecs(ab, modes)[n]?.min ?? 0))) continue;
+          const err = applyAction(g, 'a', { t: 'cast', iid, modes, targets }, ctx);
+          expect(err, `${id} ${modes.join('+')}`).toBeNull();
+          drain(g, ctx, (q) => q.options.find((o) => o.value === 'decline')?.value ?? q.options[0].value);
+          expect(noManual(g), `${id} ${modes.join('+')}`).toEqual([]);
+          expect(g.cards[iid].zone, `${id} ${modes.join('+')}\n${logTail(g)}`).toBe('graveyard');
+          expect(g.stack).toHaveLength(0);
+          tried++;
+        }
+      }
+      expect(tried).toBeGreaterThan(0);
+    });
+  }
+
+  it('a mode can be chosen only once unless the card says so; the number of modes is checked', () => {
+    const { g, ctx, iid } = modalBoard('cryptic_command');
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDraw'], targets: [] }, ctx)).toMatch(/twice/);
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw'], targets: [] }, ctx)).toMatch(/mode/);
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBTapAll', 'DBReturn'], targets: [] }, ctx)).toBeTruthy();
+    expect(g.cards[iid].zone).toBe('hand');
+  });
+
+  it('Mystic Confluence: draw three times', () => {
+    const { g, ctx, iid } = modalBoard('mystic_confluence');
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDraw', 'DBDraw'], targets: [] });
+    drain(g, ctx);
+    expect(g.players[0].zones.hand.length, logTail(g)).toBe(hand - 1 + 3);
+  });
+
+  it('Mystic Confluence: return two different creatures and draw (a target per mode instance)', () => {
+    const { g, ctx, iid, theirs } = modalBoard('mystic_confluence');
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBReturn', 'DBDraw', 'DBReturn'], targets: [card(theirs[0])[0], card(theirs[1])[0]] });
+    drain(g, ctx);
+    expect(g.cards[theirs[0]].zone, logTail(g)).toBe('hand');
+    expect(g.cards[theirs[1]].zone).toBe('hand');
+    expect(g.players[0].zones.hand.length).toBe(hand - 1 + 1);
+  });
+
+  it('Mystic Confluence: counter unless they pay {3}, twice; modes resolve in printed order whatever the order chosen', () => {
+    const { g, ctx, iid } = modalBoard('mystic_confluence');
+    const bolt = oppBolt(g, ctx);
+    const life = g.players[0].life;
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBCounter', 'DBCounter'], targets: [card(bolt)[0], card(bolt)[0]] });
+    const start = g.log.length;
+    // b has 4 Mountains, one tapped for the Bolt: pays {3} once, can't pay the second time.
+    drain(g, ctx, (q) => q.options.find((o) => o.value === 'pay')?.value ?? q.options[0].value);
+    expect(g.cards[bolt].zone, logTail(g, 25)).toBe('graveyard');
+    expect(g.players[0].life, logTail(g, 25)).toBe(life);
+    expect(g.players[0].life).toBe(life); // countered
+    expect(g.players[0].zones.hand.length).toBe(hand - 1 + 1);
+    const text = g.log.slice(start).map((l) => l.text).join('\n');
+    expect(text.indexOf('draws'), text).toBeGreaterThan(text.lastIndexOf('pays'));
+  });
+
+  it('Fiery Confluence: 2 damage to each opponent three times', () => {
+    const { g, ctx, iid } = modalBoard('fiery_confluence');
+    const life = g.players[1].life;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDamageOpponents', 'DBDamageOpponents', 'DBDamageOpponents'], targets: [] });
+    drain(g, ctx);
+    expect(g.players[1].life, logTail(g)).toBe(life - 6);
+  });
+
+  it('Fiery Confluence: destroy two artifacts and 1 damage to each creature', () => {
+    const { g, ctx, iid, art, theirs } = modalBoard('fiery_confluence');
+    const myArt = g.battlefield.find((x) => g.cards[x].cardId === 'mind_stone' && g.cards[x].controller === 'a')!;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDestroy', 'DBDamageCreatures', 'DBDestroy'], targets: [card(art)[0], card(myArt)[0]] });
+    drain(g, ctx);
+    expect(g.cards[art].zone, logTail(g)).toBe('graveyard');
+    expect(g.cards[myArt].zone).toBe('graveyard');
+    expect(g.cards[theirs[1]].damage).toBe(1); // 1 damage to each creature
+  });
+
+  it('Kolaghan\'s Command: return a creature card and 2 damage to a creature', () => {
+    const { g, ctx, iid, dead, theirs } = modalBoard('kolaghans_command');
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDamage', 'DBReturn'], targets: [card(dead[0])[0], card(theirs[1])[0]] });
+    drain(g, ctx);
+    expect(g.cards[dead[0]].zone, logTail(g)).toBe('hand');
+    expect(g.cards[theirs[1]].zone).toBe('graveyard');
+  });
+
+  it('Collective Brutality: escalate — each mode beyond the first costs a discard', () => {
+    const { g, ctx, iid, theirs } = modalBoard('collective_brutality');
+    const hand = g.players[0].zones.hand.length;
+    const life = [g.players[0].life, g.players[1].life];
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDiscard', 'DBPump', 'DBDrain'], targets: [[{ kind: 'player', pid: 'b' }], card(theirs[0])[0], [{ kind: 'player', pid: 'b' }]] });
+    drain(g, ctx);
+    expect(g.players[0].zones.hand.length, logTail(g, 15)).toBe(hand - 1 - 2);
+    expect(g.cards[theirs[0]].zone).toBe('graveyard');
+    expect(g.players[0].life).toBe(life[0] + 2);
+    expect(g.players[1].life).toBe(life[1] - 2);
+  });
+
+  it('Flame of Anor: one mode, or two if you control a Wizard', () => {
+    const { g, ctx, iid, art, theirs } = modalBoard('flame_of_anor', ['grim_lavamancer']);
+    const t = [[{ kind: 'player' as const, pid: 'a' }], card(art)[0]];
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDestroy'], targets: t }, ctx)).toBeTruthy();
+    put(g, ctx, 'a', 'grim_lavamancer');
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDestroy'], targets: t });
+    drain(g, ctx);
+    expect(g.cards[art].zone, logTail(g)).toBe('graveyard');
+    expect(g.players[0].zones.hand.length).toBe(hand - 1 + 2);
+    expect(applyAction(g, 'a', { t: 'cast', iid: toZone(g, ctx, 'a', 'flame_of_anor', 'hand'), modes: ['DBDraw', 'DBDestroy', 'DBDamage'], targets: [...t, card(theirs[0])[0]] }, ctx)).toBeTruthy();
+  });
+});

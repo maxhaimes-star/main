@@ -1,5 +1,5 @@
 import {
-  activatedAbilities, castableFaces, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
+  activatedAbilities, castableFaces, charmLimits, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
@@ -164,7 +164,10 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
   const sa = manual ? undefined : safeSpell(c?.cardId, face ?? 0);
   if (sa?.ability.choices?.length) {
     const ch = sa.ability.choices;
-    const picked = await base.pickModes(card?.name ?? 'Choose modes', ch.map((m) => ({ value: m.name, label: m.ability.description || m.ability.api })), sa.ability.charmMin ?? 1, sa.ability.charmMax ?? 1);
+    // Mode count now (Flame of Anor: two with a Wizard) and whether a mode may repeat (Mystic Confluence).
+    let lim = { min: sa.ability.charmMin ?? 1, max: sa.ability.charmMax ?? 1, repeat: sa.ability.params.CanRepeatModes === 'True' };
+    try { if (base.me) lim = charmLimits(base.g as never, sa.ability, base.me, getCard); } catch { /* keep the printed numbers */ }
+    const picked = await base.pickModes(card?.name ?? 'Choose modes', ch.map((m) => ({ value: m.name, label: m.ability.description || m.ability.api })), lim.min, lim.max, lim.repeat);
     if (!picked) return;
     modes = picked;
   }

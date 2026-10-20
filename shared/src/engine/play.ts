@@ -9,7 +9,7 @@ import { FOREIGN_BASE, foreignAbility } from './grants.ts';
 import { hasGrantedAbility } from './animate.ts';
 import { divisionError } from './divide.ts';
 import { afterActivation, checkActivation, specialAction } from './keyword-play.ts';
-import { isValidTarget } from './targets.ts';
+import { isValidTarget, matchCard } from './targets.ts';
 import { activateRestriction, adjustCost, manaConvertApplies } from './statics.ts';
 import { activationError, recordActivation } from './timing.ts';
 import type { AutoInfo, ParsedAbility, TargetRef, TargetSpec } from './types.ts';
@@ -54,14 +54,35 @@ export function checkTargets(state: GameState, ab: ParsedAbility, modes: string[
   return { targets, targetZones };
 }
 
-function charmModes(ab: ParsedAbility, modes: string[] | undefined): string | null {
+/**
+ * How many modes `pid` may choose for a modal ability right now, and whether a mode may be chosen more than once
+ * (CanRepeatModes$: Mystic Confluence, Fiery Confluence). CharmNum$ may be a variable: "Count$Compare Y GE1.2.1"
+ * with Y = "Count$Valid Card.Wizard+YouCtrl" (Flame of Anor: two modes if you control a Wizard).
+ */
+export function charmLimits(state: Pick<GameState, 'battlefield' | 'cards'>, ab: ParsedAbility, pid: string, lookup: Ctx['lookup']): { min: number; max: number; repeat: boolean } {
+  let max = ab.charmMax ?? 1;
+  const m = ab.charmMaxVar ? /^Count\$Compare (\w+) (LT|LE|EQ|NE|GE|GT)(-?\d+)\.(-?\d+)\.(-?\d+)$/.exec(ab.charmMaxVar) : null;
+  const sv = m ? ab.svars?.[m[1]] : undefined;
+  const valid = sv ? /^Count\$Valid (.+)$/.exec(sv) : null;
+  if (m && valid) {
+    const n = state.battlefield.filter((iid) => state.cards[iid] && matchCard(state.cards[iid] as CardInstance, valid[1], { controller: pid, lookup }) === true).length;
+    const k = parseInt(m[3], 10);
+    const ok = { LT: n < k, LE: n <= k, EQ: n === k, NE: n !== k, GE: n >= k, GT: n > k }[m[2] as 'LT'];
+    max = parseInt(ok ? m[4] : m[5], 10);
+  }
+  const min = Math.min(ab.charmMin ?? 1, max);
+  return { min, max: ab.params.CanRepeatModes === 'True' ? max : Math.min(max, ab.choices?.length ?? max), repeat: ab.params.CanRepeatModes === 'True' };
+}
+
+function charmModes(state: GameState, ab: ParsedAbility, modes: string[] | undefined, pid: string, lookup: Ctx['lookup']): string | null {
   if (!modes) return null;
   for (let a: ParsedAbility | undefined = ab; a; a = a.sub) {
     if (a.api !== 'Charm' || !a.choices) continue;
     const names = a.choices.map((c) => c.name);
+    const { min, max, repeat } = charmLimits(state, a, pid, lookup);
     if (modes.some((m) => !names.includes(m))) return 'Unknown mode';
-    if (new Set(modes).size !== modes.length) return 'A mode was chosen twice';
-    if (modes.length < (a.charmMin ?? 1) || modes.length > (a.charmMax ?? 1)) return `Choose ${a.charmMin === a.charmMax ? a.charmMax : `${a.charmMin}–${a.charmMax}`} mode(s)`;
+    if (!repeat && new Set(modes).size !== modes.length) return 'A mode was chosen twice';
+    if (modes.length < min || modes.length > max) return `Choose ${min === max ? max : `${min}–${max}`} mode(s)`;
   }
   return null;
 }
@@ -77,7 +98,7 @@ export function prepareCast(state: GameState, inst: CardInstance, pid: string, a
   if (!sp) return {};
   const specs = targetSpecs(sp.ability, a.modes);
   if (specs.length && a.targets === undefined) return {};
-  const modeErr = charmModes(sp.ability, a.modes);
+  const modeErr = charmModes(state, sp.ability, a.modes, pid, ctx.lookup);
   if (modeErr) return { error: modeErr };
   const name = getScript(inst.cardId)?.[face]?.name ?? 'That spell';
   const res = checkTargets(state, sp.ability, a.modes, a.targets ?? [], pid, inst.iid, ctx, name);

@@ -191,7 +191,7 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
       return { cards: [], players: live.filter((p) => !ctrls.has(p)) };
     }
     case 'TargetedAndYou': return { cards: [], players: [...new Set([...tgt().players, r.controller])] };
-    case 'TargetedController': {
+    case 'TargetedController': case 'ThisTargetedController': {
       const t = parentTargets(r, i);
       const ps = t.map((ref) => (ref.kind === 'card' ? ctrlOf(ref.iid) : ref.kind === 'player' ? ref.pid : r.lki[ref.id]?.controller ?? state.stack.find((s) => s.id === ref.id)?.controller));
       return { cards: [], players: [...new Set(ps.filter((x): x is string => !!x))] };

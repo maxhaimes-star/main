@@ -301,6 +301,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .modes-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .mode-opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
 .mode-opt.sel { border-color: var(--accent); }
+.mode-opt.mode-repeat { align-items: center; cursor: default; }
+.mode-opt .mode-count { min-width: 2.2em; text-align: center; }
 .trigger-badge { font-size: 10px; text-transform: uppercase; background: var(--accent); color: #000; border-radius: 3px; padding: 0 4px; margin-right: 4px; }
 .pending-skip { top: 44px; }
 
