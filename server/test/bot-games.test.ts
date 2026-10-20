@@ -68,6 +68,12 @@ describe('bot vs bot through the room path', () => {
     const g = () => match.game!;
     expect(g().players.find((p) => p.pid === bot.id)!.bot).toBe(true);
     const driver = new BotDriver(rooms);
+    // A random sealed pool may hold Arcane Savant with sideboard instants: the human declines its pre-game question.
+    for (let i = 0; i < 40 && g().pregame; i++) {
+      const q = g().pending.find((x) => x.pid === host.pid);
+      if (q) rooms.handle(rec, host.pid, { t: 'game', matchId: match.id, action: { t: 'choose', id: q.id, value: 'no' } });
+      else driver.step(rec, match);
+    }
     rooms.handle(rec, host.pid, { t: 'game', matchId: match.id, action: { t: 'keep' } });
     for (let i = 0; i < 10 && driver.step(rec, match); i++) { /* bot mulligans / keeps */ }
     expect(g().phase).toBe('playing');

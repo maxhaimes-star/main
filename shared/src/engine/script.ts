@@ -396,7 +396,8 @@ export function flatten(ab: ParsedAbility, modes?: string[]): ParsedAbility[] {
   const out: ParsedAbility[] = [];
   for (let a: ParsedAbility | undefined = ab; a; a = a.sub) {
     if (a.api === 'Charm' && a.choices && modes) {
-      for (const ch of a.choices) if (modes.includes(ch.name)) out.push(...flatten(ch.ability, modes));
+      // A mode chosen more than once (CanRepeatModes$: Mystic Confluence) runs once per choice.
+      for (const ch of a.choices) for (const m of modes) if (m === ch.name) out.push(...flatten(ch.ability, modes));
     } else out.push(a);
   }
   return out;

@@ -123,6 +123,8 @@ export interface GamePlayer {
   lost?: string;
   /** A computer opponent (shared/src/ai/player.ts). */
   bot?: boolean;
+  /** Cards noted for a name (Forge NoteCards$ / NotedFor<name>: the cards Arcane Savant exiled before the game), by name -> iids. */
+  notes?: Record<string, string[]>;
 }
 
 export interface LogEntry { at: number; pid: string | null; text: string }
@@ -222,6 +224,11 @@ export interface GameState {
   strict?: boolean;
   /** "Fix board" escape hatch: manual tools (and `force`) are allowed while on. Turned on when the opponent accepts. */
   fixMode?: { on: boolean; requestedBy: string | null };
+  /**
+   * Before the opening hands (engine/pregame.ts, K:MayEffectFromOpeningDeck — Arcane Savant): the cards still to ask
+   * about, and the players whose library is shuffled and hand drawn once the questions are answered. Mulligans wait.
+   */
+  pregame?: { queue: { pid: string; iid: string }[]; deferred: string[] };
   /** "Free mulligan" house rule: both players agreed that each player's first mulligan doesn't cost a card. */
   freeMulligan?: { on: boolean; requestedBy: string | null };
 }

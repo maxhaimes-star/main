@@ -54,6 +54,8 @@ describe('rooms', () => {
     const m = rec.state.matches[0];
     const g = m.game!;
     expect(g.strict).toBe(true);
+    // A random sealed pool may hold Arcane Savant with sideboard instants: decline its pre-game question.
+    for (let i = 0; i < 20 && g.pregame; i++) { const q = g.pending[0]; rooms.handle(rec, q.pid, { t: 'game', matchId: m.id, action: { t: 'choose', id: q.id, value: 'no' } }); }
     rooms.handle(rec, host.pid, { t: 'game', matchId: m.id, action: { t: 'keep' } });
     rooms.handle(rec, friend.pid, { t: 'game', matchId: m.id, action: { t: 'keep' } });
     expect(rooms.handle(rec, host.pid, { t: 'game', matchId: m.id, action: { t: 'life', pid: friend.pid, delta: -20 } })).toMatch(/fix mode/);
@@ -78,6 +80,7 @@ describe('rooms', () => {
     rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, friend.pid], bestOf: 3 });
     const m = rec.state.matches[0];
     const game = (action: GameAction, pid: string) => rooms.handle(rec, pid, { t: 'game', matchId: m.id, action });
+    for (let i = 0; i < 20 && m.game!.pregame; i++) { const q = m.game!.pending[0]; game({ t: 'choose', id: q.id, value: 'no' }, q.pid); } // Arcane Savant in a random pool
     expect(game({ t: 'requestFreeMulligan' }, host.pid)).toBeNull();
     expect(game({ t: 'answerFreeMulligan', accept: true }, friend.pid)).toBeNull();
     expect(m.game!.freeMulligan?.on).toBe(true);
@@ -196,5 +199,29 @@ describe('rooms', () => {
     const g = rec.state.matches[0].game!;
     expect(g.players[0].zones.hand).toHaveLength(7);
     expect(g.players[0].zones.library).toHaveLength(33);
+  });
+
+  it("a saved deck's sideboard reaches the game: Arcane Savant asks before the opening hands", () => {
+    const rooms = new Rooms();
+    const host = rooms.create('Test', 'Max');
+    const friend = rooms.join(host.roomId, 'Sam')!;
+    const rec = rooms.rooms.get(host.roomId)!;
+    expect(rooms.handle(rec, host.pid, { t: 'updateSettings', settings: { mode: 'constructed', format: 'Freeform' } })).toBeNull();
+    expect(rooms.handle(rec, host.pid, { t: 'start' })).toBeNull();
+    const savant = { main: ['arcane_savant'], side: ['lightning_bolt', 'questing_beast'], basics: { W: 0, U: 39, B: 0, R: 0, G: 0 } };
+    const plain = { main: [], side: [], basics: { W: 0, U: 0, B: 0, R: 40, G: 0 } };
+    expect(rooms.handle(rec, host.pid, { t: 'submitSavedDeck', deck: savant })).toBeNull();
+    expect(rooms.handle(rec, friend.pid, { t: 'submitSavedDeck', deck: plain })).toBeNull();
+    expect(rooms.handle(rec, host.pid, { t: 'createMatch', players: [host.pid, friend.pid], bestOf: 1 })).toBeNull();
+    const match = rec.state.matches[0];
+    const g = match.game!;
+    const me = g.players.find((p) => p.pid === host.pid)!;
+    expect(me.zones.hand).toHaveLength(0);
+    const q = g.pending.find((x) => x.pid === host.pid)!;
+    expect(q.options.filter((o) => o.value !== 'no').map((o) => g.cards[o.value].cardId)).toEqual(['lightning_bolt']);
+    const bolt = q.options.find((o) => o.value !== 'no')!.value;
+    expect(rooms.handle(rec, host.pid, { t: 'game', matchId: match.id, action: { t: 'choose', id: q.id, value: bolt } })).toBeNull();
+    expect(me.zones.exile).toEqual([bolt]);
+    expect(me.zones.hand).toHaveLength(7);
   });
 });

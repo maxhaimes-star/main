@@ -7,6 +7,7 @@
  * next call tries something else and the bot never hangs on an action the engine refuses.
  *
  * Heuristics (cheap, no search):
+ *   - before the game: Arcane Savant's pre-game exile takes the best instant / sorcery of the sideboard
  *   - mulligans: keep 2–5 landers (1–5 after a mulligan), at most two mulligans; bottom extra lands / expensive cards
  *   - main phase: play the land that fixes the hand's colors, then cast the most valuable castable spell (auto-pay)
  *   - targets: harmful effects at the opponent's biggest threat (burn at what it kills, at the face when lethal),
@@ -241,6 +242,8 @@ export function botNeedsToAct(g: GameState | GameView, pid: string): boolean {
   if (g.undoRequest && g.undoRequest !== pid) return true;
   if (g.fixMode && !g.fixMode.on && g.fixMode.requestedBy && g.fixMode.requestedBy !== pid) return true;
   if (g.freeMulligan && !g.freeMulligan.on && g.freeMulligan.requestedBy && g.freeMulligan.requestedBy !== pid && g.phase === 'mulligan') return true;
+  // Before the opening hands (Arcane Savant, engine/pregame.ts): only the questions; mulligans wait for them.
+  if (g.phase === 'mulligan' && (g.pregame || g.pending.length)) return g.pending.some((q) => q.pid === pid);
   if (g.phase === 'mulligan') return !p.kept || p.needsBottom > 0;
   const cb = g.controlledBy?.active ? g.controlledBy : null;
   if (cb && cb.pid === pid) return false; // the opponent plays this turn for us (Mindslaver)
@@ -280,6 +283,10 @@ export function decideBotAction(v: View, pid: string, mem: BotMemory, opts: BotO
   if (v.fixMode && !v.fixMode.on && v.fixMode.requestedBy && v.fixMode.requestedBy !== pid) return ok({ t: 'answerFixMode', accept: true }) ?? ok({ t: 'answerFixMode', accept: false });
   if (v.phase === 'mulligan') {
     if (v.freeMulligan && !v.freeMulligan.on && v.freeMulligan.requestedBy && v.freeMulligan.requestedBy !== pid) return ok({ t: 'answerFreeMulligan', accept: true }) ?? ok({ t: 'answerFreeMulligan', accept: false });
+    // Pre-game questions (Arcane Savant: which sideboard card to exile) come before the mulligan decision.
+    const pre = v.pending.find((x) => x.pid === pid);
+    if (pre) return answerPending(ctx, pre);
+    if (v.pregame || v.pending.length) return null;
     return mulliganAction(ctx, self);
   }
   if (v.phase !== 'playing') return null;
@@ -429,7 +436,9 @@ function rankOptions(ctx: Ctx, q: Pending): string[] {
       const mine = (card.zone === 'battlefield' ? card.controller : card.owner) === pid;
       const cv = card.zone === 'battlefield' ? stats(v, val, L).value : cardValue(v, pid, val, L);
       const cleanup = /cleanup|hand size/i.test(q.prompt);
-      if (/legend rule/i.test(q.prompt)) s += (/tapped/.test(lbl) ? 0 : 1) + cv * 0.01;
+      // A card from our sideboard (Arcane Savant's pre-game exile): the most powerful one, to cast for free later.
+      if (card.zone === 'sideboard' && mine) s += 5 + cv;
+      else if (/legend rule/i.test(q.prompt)) s += (/tapped/.test(lbl) ? 0 : 1) + cv * 0.01;
       else if (cleanup || harmful) s += mine ? 10 - cv : cv; // lose our worst / the opponent's best
       else s += mine ? cv : -cv + 5;
     } else if (/^(yes|pay|ok|keep|reveal|untap)$/i.test(val)) {

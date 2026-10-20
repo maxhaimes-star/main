@@ -4,10 +4,14 @@
  *
  *   npx tsx scripts/playtest.ts [games=100] [firstSeed=1] [--turns=30] [--json=out.json] [--quiet]
  *                               [--pool=cube|standard|set:CODE[+CODE...]] [--force=card_id,card_id] [--ai[=easy|normal]]
+ *                               [--side=N]
  *
  * --pool draws the random decks from the card database (data/carddb, server/src/carddb.ts) instead of the cube:
  * Standard-legal cards, or the cards of one or more sets. --force puts these cards into every deck (when their
  * colors fit), to exercise specific cards.
+ *
+ * --side=N gives each deck a sideboard of N other random cards of the pool (at least a few instants / sorceries), so
+ * "before the game" choices from the sideboard (Arcane Savant, engine/pregame.ts) are exercised.
  *
  * --ai: both seats are played by the computer opponent (shared/src/ai/player.ts) instead of the random agents, so the
  * same checks run on the bot that people play against.
@@ -496,13 +500,25 @@ function checkLeaks(G: Game) {
 
 export interface GameResult { seed: number; turns: number; actions: number; winner: string | null; end: 'win' | 'turns' | 'stall' | 'actions'; issues: Issue[]; decks: string[][] }
 
-export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: number; leakEvery?: number; trace?: boolean; pool?: CardData[]; force?: CardData[]; ai?: BotLevel } = {}): GameResult {
+/** A random sideboard of `n` pool cards not in `deck` (half instants / sorceries when there are enough). Own rng: decks don't change. */
+export function randomSide(seed: number, deck: string[], n: number, pool: CardData[] = CUBE.cards): string[] {
+  if (n <= 0) return [];
+  const rng = seeded(seed * 104729 + 7);
+  const inDeck = new Set(deck);
+  const rest = shuffled(rng, pool.filter((c) => !inDeck.has(c.id) && !c.types.includes('Land')));
+  const spells = rest.filter((c) => c.types.includes('Instant') || c.types.includes('Sorcery')).slice(0, Math.ceil(n / 2));
+  const others = rest.filter((c) => !spells.includes(c)).slice(0, n - spells.length);
+  return [...spells, ...others].map((c) => c.id);
+}
+
+export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: number; leakEvery?: number; trace?: boolean; pool?: CardData[]; force?: CardData[]; ai?: BotLevel; side?: number } = {}): GameResult {
   const rng = seeded(seed * 7919 + 13);
   const maxTurns = opts.maxTurns ?? 30;
   const stallAfter = opts.stallAfter ?? 400;
   const d1 = randomDeck(rng, opts.pool, opts.force), d2 = randomDeck(rng, opts.pool, opts.force);
   const ctx: Ctx = { rng: seeded(seed), lookup: getCard, now: 0 };
-  const g = createGame(`pt${seed}`, [{ pid: 'p1', name: 'Bot1', deck: d1.deck, side: [] }, { pid: 'p2', name: 'Bot2', deck: d2.deck, side: [] }], rng() < 0.5 ? 'p1' : 'p2', ctx);
+  const s1 = randomSide(seed * 2, d1.deck, opts.side ?? 0, opts.pool), s2 = randomSide(seed * 2 + 1, d2.deck, opts.side ?? 0, opts.pool);
+  const g = createGame(`pt${seed}`, [{ pid: 'p1', name: 'Bot1', deck: d1.deck, side: s1 }, { pid: 'p2', name: 'Bot2', deck: d2.deck, side: s2 }], rng() < 0.5 ? 'p1' : 'p2', ctx);
   const G: Game = { g, ctx, rng, seed, issues: [], context: '(game)', strict: 'strict' in g && !!(g as { strict?: boolean }).strict, activations: 0, activationTurn: 0, trail: [] };
   const seen = new WeakSet<object>();
   for (const l of g.log) seen.add(l);
@@ -510,7 +526,7 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
   let actions = 0, sinceProgress = 0, lastTurn = -1, lastStep = '';
   let end: GameResult['end'] = 'actions';
   const mems: Record<string, BotMemory> = Object.fromEntries(g.players.map((p, i) => [p.pid, newBotMemory(seed * 31 + i)]));
-  if (!opts.ai) for (const p of g.players) act(G, p.pid, { t: 'keep' });
+  if (!opts.ai && !g.pregame) for (const p of g.players) act(G, p.pid, { t: 'keep' });
   while (actions < 20000) {
     actions++;
     ctx.now = actions;
@@ -562,6 +578,9 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
       // Engine-opened look windows other than scry / surveil are cards the player has to sort by hand.
       if (p.peek!.mode !== 'scry' && p.peek!.mode !== 'surveil') G.issues.push({ kind: 'manual', card: cardIn(p.peek!.label ?? '') ?? G.context, text: `look-at-the-top window (${p.peek!.mode}): ${p.peek!.label ?? '?'}`, seed, turn: g.turn });
       if (!resolvePeek(G, p.pid)) { p.peek = null; }
+    } else if (g.phase === 'mulligan') {
+      // After the pre-game choices (Arcane Savant): keep.
+      for (const p of g.players) if (!p.kept) act(G, p.pid, { t: 'keep' });
     } else if (g.phase === 'playing') {
       // Empty library draw = loss (rule 704.5b) when the engine doesn't handle it.
       priorityAction(G, g.priority);
@@ -678,7 +697,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (unknown.length) throw new Error(`Unknown --force cards: ${unknown.join(', ')}`);
   const aiFlag = args.find((a) => a === '--ai' || a.startsWith('--ai='));
   const ai = aiFlag ? ((aiFlag.split('=')[1] ?? 'normal') as BotLevel) : undefined;
-  const s = playtest(n, seed, { maxTurns: parseInt(flag('turns') ?? '30', 10), trace: args.includes('--trace'), ...(pool ? { pool } : {}), ...(force.length ? { force } : {}), ...(ai ? { ai } : {}) });
+  const s = playtest(n, seed, { maxTurns: parseInt(flag('turns') ?? '30', 10), trace: args.includes('--trace'), ...(pool ? { pool } : {}), ...(force.length ? { force } : {}), ...(ai ? { ai } : {}), ...(flag('side') ? { side: parseInt(flag('side')!, 10) } : {}) });
   console.log(formatReport(s, parseInt(flag('top') ?? '40', 10)));
   console.log(`(${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   const out = flag('json');
