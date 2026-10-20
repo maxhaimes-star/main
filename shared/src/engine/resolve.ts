@@ -106,6 +106,19 @@ export function addSplice(cont: AutoCont, at: number, svar: string, opts: { reme
   return n;
 }
 
+/**
+ * A library search that reveals the card it finds ("search your library for an instant or sorcery card, reveal it":
+ * Mystical Tutor, Enlightened Tutor, Expedition Map): Reveal$ True, "reveal" in its text, or a search for a card of a
+ * given type put into a hand or on top of a library (so the opponent can check the type). NoReveal$ True never reveals.
+ */
+function searchReveals(step: ParsedAbility, dest: Zone): boolean {
+  const p = step.params;
+  if (p.NoReveal === 'True') return false;
+  if (p.Reveal === 'True' || /\breveal/i.test(p.SpellDescription ?? '')) return true;
+  const type = (p.ChangeType ?? 'Card').trim();
+  return (dest === 'hand' || dest === 'library') && !/^Card(\.YouOwn|\.YouCtrl)?$/.test(type);
+}
+
 function contAt(r: Run, next: number): AutoCont {
   return JSON.parse(JSON.stringify({ item: r.item, next, targets: r.targets, lki: r.lki, remembered: r.remembered, splices: r.splices, lateTargets: r.lateTargets, unless: r.unless, chosen: r.chosen })) as AutoCont;
 }
@@ -924,11 +937,15 @@ function extApi(state: GameState, ctx: Ctx, r: Run, i: number, remember: (iids: 
 
 type StepResult = 'ok' | 'wait';
 
+/** Test / audit hook: called as each step of an automated chain is reached (scripts/chain-audit.ts). */
+export const chainProbe: { onStep?: (item: StackItem, step: ParsedAbility) => void } = {};
+
 function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const step = r.steps[i];
   const p = step.params;
   const me = player(state, r.controller);
   r.cur = i;
+  chainProbe.onStep?.(r.item, step);
   const reason = unsupportedReason(step);
   if (step.api === 'Effect' && p.AILogic === 'CantRegenerate') return 'ok'; // "can't be regenerated": nothing to do
   if (reason) {
@@ -1161,7 +1178,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const created = startPicks(state, ctx, [{
           kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional,
           dest, params: p, ...(host ? { untilHost: host } : {}), ...(origin === 'hand' && ownerPid !== chooserPid ? { reveal: ownerPid } : {}),
-          ...(search && p.Shuffle !== 'False' ? { shuffle: ownerPid } : {}),
+          ...(search && p.Shuffle !== 'False' ? { shuffle: ownerPid } : {}), ...(search && searchReveals(step, dest) ? { revealChosen: true } : {}),
           label: `${r.sourceName}: ${search ? `search for ${p.ChangeTypeDesc ? `a ${p.ChangeTypeDesc}` : 'a card'} to put` : 'choose a card to put'} ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
         if (!created && search && p.Shuffle !== 'False') shuffleLibrary(state, chooser, ctx.rng);

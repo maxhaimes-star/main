@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
+  activatedAbilitiesOf, applyAction, createGame, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard, viewFor,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -84,4 +84,31 @@ describe('A2.1: Jack-in-the-Mox (RollDice result sub-abilities)', () => {
       }
     });
   }
+});
+
+describe('A2.4: tutors that say "reveal" reveal the found card', () => {
+  function tutor(id: string, find: string, land = 'basic_island') {
+    const { g, ctx } = setup([id, find], [], 7, land);
+    for (let k = 0; k < 3; k++) put(g, ctx, 'a', land);
+    const t = toZone(g, ctx, 'a', id, 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: t });
+    drain(g, ctx, (q) => q.options.find((o) => g.cards[o.value]?.cardId === find)?.value ?? q.options[0].value);
+    return { g, found: P(g, 'a').zones.library[0] };
+  }
+
+  it('Mystical Tutor: the instant is revealed to the opponent, shown in the Revealed zone, and put on top', () => {
+    const { g, found } = tutor('mystical_tutor', 'lightning_bolt');
+    expect(g.cards[found].cardId).toBe('lightning_bolt');
+    expect(g.cards[found].revealedTo).toContain('b');
+    const rv = viewFor(g, 'b').reveals ?? [];
+    expect(rv.some((r) => r.by === 'a' && r.cards.some((c) => c.cardId === 'lightning_bolt')), JSON.stringify(rv)).toBe(true);
+    expect(logText(g)).toMatch(/reveals Lightning Bolt/);
+  });
+
+  it("Vampiric Tutor (no reveal) doesn't reveal the card", () => {
+    const { g, found } = tutor('vampiric_tutor', 'lightning_bolt', 'basic_swamp');
+    expect(g.cards[found].cardId).toBe('lightning_bolt');
+    expect(g.cards[found].revealedTo).not.toContain('b');
+    expect((viewFor(g, 'b').reveals ?? []).length).toBe(0);
+  });
 });
