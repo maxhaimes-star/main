@@ -7,6 +7,7 @@ import {
   CONSTRUCTED_FORMATS, type CardPayload, botDeck, BOT_LEVELS, type BotLevel,
 } from '@ojb/shared';
 import { CUBE, getCard, isCubeCard } from '@ojb/shared/src/cube.ts';
+import { seededRng } from '@ojb/shared/src/boosters.ts';
 import { carddbAvailable, formatLegality, getCardById, resolveDeck } from './carddb.ts';
 import { cardPayload, checkBoosterSet, ensureCards, installCardDb, setBooster } from './roomcards.ts';
 
@@ -129,6 +130,7 @@ export class Rooms {
         s.decks = {};
         s.matches = [];
         delete s.prints;
+        delete s.seed;
         return null;
       }
       case 'pick': {
@@ -323,8 +325,11 @@ export class Rooms {
       const err = this.checkSets(s.settings.setCodes);
       if (err) return err;
     }
+    // Every event is dealt from a fresh random seed (kept on the room so a deal can be reproduced).
+    const seed = crypto.randomBytes(4).readUInt32BE();
+    const deal = seededRng(seed);
     // Random seating, like a real draft table.
-    const order = players.map((p) => ({ p, r: rng() })).sort((x, y) => x.r - y.r).map((x, i) => ({ ...x.p, seat: i }));
+    const order = players.map((p) => ({ p, r: deal() })).sort((x, y) => x.r - y.r).map((x, i) => ({ ...x.p, seat: i }));
     s.players = order;
     const list = cubeList(s, CUBE.list);
     const n = order.length;
@@ -332,7 +337,7 @@ export class Rooms {
       if (s.settings.source === 'set' && s.settings.mode === 'draft') {
         const prints: Record<string, string> = {};
         const rounds = s.settings.setCodes.map((code) => order.map(() => {
-          const b = setBooster(code, rng);
+          const b = setBooster(code, deal);
           for (const [k, v] of Object.entries(b.prints)) prints[k] ??= v;
           return b.ids;
         }));
@@ -343,7 +348,7 @@ export class Rooms {
         const prints: Record<string, string> = {};
         const codes = s.settings.setCodes;
         const pools = order.map(() => Array.from({ length: s.settings.sealedPacks }, (_, i) => {
-          const b = setBooster(codes[i % codes.length], rng);
+          const b = setBooster(codes[i % codes.length], deal);
           for (const [k, v] of Object.entries(b.prints)) prints[k] ??= v;
           return b.ids;
         }).flat());
@@ -351,16 +356,17 @@ export class Rooms {
         startSealedWithPools(s, pools);
       } else if (s.settings.mode === 'draft') {
         if (n * s.settings.packs * s.settings.packSize > list.length) return `Not enough cards: ${n} × ${s.settings.packs} × ${s.settings.packSize} > ${list.length}`;
-        startDraft(s, list, rng, getCard, now);
+        startDraft(s, list, deal, getCard, now);
       } else if (s.settings.mode === 'sealed') {
         if (n * s.settings.sealedPacks * s.settings.sealedPackSize > list.length) return 'Not enough cards in the cube for that many sealed pools';
-        startSealed(s, list, rng, getCard);
+        startSealed(s, list, deal, getCard);
       } else {
-        startAuction(s, list, rng, getCard, now);
+        startAuction(s, list, deal, getCard, now);
       }
     } catch (e) {
       return (e as Error).message;
     }
+    s.seed = seed;
     this.afterPools(s);
     return null;
   }

@@ -186,6 +186,8 @@ export interface RoomState {
   pools: Record<string, string[]>;
   decks: Record<string, Deck>;
   matches: Match[];
+  /** The random seed the current event's packs were dealt from (a fresh one for every event). */
+  seed?: number;
   /** Printing per card id for set events ("DMU:94"), so images show the right art. */
   prints?: Record<string, string>;
   chat: ChatMessage[];
