@@ -23,6 +23,7 @@ import {
 } from '../engine/strict.ts';
 import { maxHandSize, mayPlayPermission } from '../engine/statics.ts';
 import { castSpellAbility, spellAbility, targetSpecs } from '../engine/script.ts';
+import { answerPregame, inPregame, playerHasPregame, startPregame } from '../engine/pregame.ts';
 import { parseRequirements } from './manapay.ts';
 import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
@@ -38,6 +39,7 @@ export { moveCard, player } from './state.ts';
 export interface GameSeat { pid: string; name: string; deck: string[]; side: string[]; /** A computer opponent (shown with a "Bot" badge). */ bot?: boolean }
 
 const HISTORY_LIMIT = 25;
+const PREGAME_WAIT = 'Waiting for the choices made before the game (revealed cards)';
 const DEFAULT_STOPS: GamePlayer['stops'] = {
   own: ['main1', 'main2'],
   opp: ['end'],
@@ -75,6 +77,7 @@ export function createGame(id: string, seats: GameSeat[], startingPlayer: string
     strict: opts.strict ?? true,
     fixMode: { on: false, requestedBy: null },
   };
+  const deferred: string[] = [];
   for (const seat of seats) {
     const p: GamePlayer = {
       pid: seat.pid, name: seat.name, life: 20, counters: {},
@@ -87,10 +90,13 @@ export function createGame(id: string, seats: GameSeat[], startingPlayer: string
     state.players.push(p);
     for (const cardId of seat.deck) p.zones.library.push(newInstance(state, ctx.rng, seat.pid, 'library', cardId).iid);
     for (const cardId of seat.side) p.zones.sideboard.push(newInstance(state, ctx.rng, seat.pid, 'sideboard', cardId).iid);
+    // "Before you shuffle your deck to start the game" (Arcane Savant): shuffle and draw once the player decided.
+    if (playerHasPregame(state, p.pid, ctx.lookup)) { deferred.push(p.pid); continue; }
     shuffleLibrary(state, p, ctx.rng);
     drawCards(state, p, 7);
   }
   log(state, ctx, null, `Game begins. ${player(state, startingPlayer).name} will play first.`);
+  if (deferred.length) startPregame(state, ctx, deferred);
   return state;
 }
 
@@ -514,6 +520,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     // ---------------- mulligans
     case 'mulligan': {
       if (state.phase !== 'mulligan' || me.kept) return 'Not deciding on a hand';
+      if (inPregame(state)) return PREGAME_WAIT;
       for (const iid of [...me.zones.hand]) moveCard(state, ctx, iid, 'library');
       shuffleLibrary(state, me, ctx.rng);
       drawCards(state, me, 7);
@@ -523,6 +530,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
     case 'keep': {
       if (state.phase !== 'mulligan' || me.kept) return 'Not deciding on a hand';
+      if (inPregame(state)) return PREGAME_WAIT;
       me.kept = true;
       me.needsBottom = Math.min(freeMulliganOn(state) ? Math.max(0, me.mulligans - 1) : me.mulligans, me.zones.hand.length);
       log(state, ctx, pid, `${name} keeps ${7 - me.needsBottom}.`);
@@ -810,6 +818,8 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       return null;
     }
     case 'choose': {
+      const pg = answerPregame(state, ctx, pid, a.id, a.value); // before the game (Arcane Savant)
+      if (pg !== undefined) return pg;
       let sp = answerStrictPending(state, ctx, pid, a.id, a.value);
       if (sp === undefined) sp = answerCleanupDiscard(state, ctx, pid, a.id, a.value);
       if (sp !== undefined) return sp;

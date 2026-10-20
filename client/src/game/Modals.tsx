@@ -166,6 +166,16 @@ export function MulliganOverlay() {
   const waiting = p.kept && p.needsBottom === 0;
   const free = !!g.freeMulligan?.on;
   const freeReq = !free ? g.freeMulligan?.requestedBy ?? null : null;
+  // Before the opening hands: cards revealed from the deck (Arcane Savant) — the question itself is a pending modal.
+  if (g.pregame) {
+    const mine = g.pending.some((q) => q.pid === me);
+    return (
+      <div className="mulligan pregame">
+        <h2>{g.startingPlayer === me ? 'You are on the play.' : 'You are on the draw.'}</h2>
+        <p className="muted">{mine ? 'Before the game: make your choice for the card in your deck.' : `Before the game: waiting for ${others.map((o) => o.name).join(', ') || 'your opponent'} to decide…`}</p>
+      </div>
+    );
+  }
   return (
     <div className="mulligan">
       <h2>{g.startingPlayer === me ? 'You are on the play.' : 'You are on the draw.'} {p.mulligans > 0 && `Mulligans: ${p.mulligans}`}</h2>

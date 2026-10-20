@@ -49,7 +49,7 @@ for (const card of CUBE.cards) {
     });
     for (const line of f.statics) for (const g of staticGaps(parseStatic(line, f.svars))) gaps.push(`static: ${g}`);
     for (const line of f.replacements) { const g = replacementGap(line, f.svars); if (g) gaps.push(`replacement: ${g}`); }
-    for (const k of f.keywords) { const g = keywordGap(k); if (g) gaps.push(`keyword: ${g}`); }
+    for (const k of f.keywords) { const g = keywordGap(k, f.svars); if (g) gaps.push(`keyword: ${g}`); }
   });
   rows.push({ name: card.name, gaps: [...new Set(gaps)] });
 }

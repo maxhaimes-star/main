@@ -84,5 +84,7 @@ export function viewFor(state: GameState, viewer: string | null): GameView {
   // Reveals: only to those who were shown the cards (or own them); spectators see public ones.
   const everyone = state.players.map((p) => p.pid);
   const visibleReveals = (reveals ?? []).filter((r) => (viewer ? r.to.includes(viewer) : everyone.every((x) => r.to.includes(x))));
-  return { ...rest, reveals: visibleReveals, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
+  // Pre-game questions: the library iids stay on the server.
+  const pregame = state.pregame ? { pregame: { queue: [], deferred: state.pregame.deferred } } : {};
+  return { ...rest, ...pregame, reveals: visibleReveals, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
 }

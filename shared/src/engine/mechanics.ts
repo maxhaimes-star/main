@@ -1,4 +1,5 @@
 import { TRIGGER_KEYWORDS } from './kwtriggers.ts';
+import { PREGAME_KEYWORD, pregameKeywordSupported } from './pregame.ts';
 
 /**
  * Keyword mechanics (Forge K: lines): which ones the engine handles, for coverage tools.
@@ -26,12 +27,16 @@ export const HANDLED_KEYWORDS = new Set([
   // Splice onto Arcane: the cube's only Arcane spell is Through the Breach itself, so there is nothing to splice onto.
   'Splice',
   // No effect in a two-player cube game.
-  'Companion', 'CARDNAME can be your commander.', 'Choose a Background', 'MayEffectFromOpeningDeck',
+  'Companion', 'CARDNAME can be your commander.', 'Choose a Background',
 ]);
 
-/** Why a K: line isn't handled automatically (null = handled). */
-export function keywordGap(k: string): string | null {
+/**
+ * Why a K: line isn't handled automatically (null = handled). `svars`: the face's SVars, for keywords that name an
+ * ability chain (MayEffectFromOpeningDeck: Arcane Savant's pre-game exile, engine/pregame.ts).
+ */
+export function keywordGap(k: string, svars?: Record<string, string>): string | null {
   const head = k.split(':')[0].trim();
+  if (head === PREGAME_KEYWORD) return pregameKeywordSupported(k, svars) ? null : head;
   if (HANDLED_KEYWORDS.has(head) || /^Protection from /.test(head)) return null;
   return head;
 }

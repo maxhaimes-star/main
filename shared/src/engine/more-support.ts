@@ -56,7 +56,8 @@ export function moreReason(step: ParsedAbility): string | null | undefined {
     case 'Repeat': return p.RepeatSubAbility ? null : 'Repeat';
     case 'GenericChoice': return p.Choices ? null : 'GenericChoice';
     case 'ChooseCard': return null;
-    case 'Play': return null;
+    // CopyCard$ True: cast a copy of a Valid$ card in ValidZone$ (Arcane Savant).
+    case 'Play': return p.CopyCard === 'True' && (p.Defined || !p.Valid || !p.ValidZone) ? 'Play (CopyCard)' : null;
     case 'CopySpellAbility': return null;
     case 'AddPhase': return p.ExtraPhase === 'Combat' ? null : `AddPhase (${p.ExtraPhase})`;
   }

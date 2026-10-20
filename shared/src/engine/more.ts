@@ -101,6 +101,8 @@ export function cardFilter(state: GameState, r: MoreRun, valid: string): (c: Car
     rest = rest.replace(/\+?IsImprinted/g, () => { checks.push((c) => (r.chosen.imprinted ?? []).includes(c.iid)); return ''; });
     rest = rest.replace(/\+?ChosenCard/g, () => { checks.push((c) => (r.chosen.cards ?? []).includes(c.iid)); return ''; });
     rest = rest.replace(/\+?IsRemembered/g, () => { checks.push((c) => remembered.has(c.iid)); return ''; });
+    // Cards noted for a name (NoteCards$ ... NoteCardsFor$: Arcane Savant's pre-game exile, engine/pregame.ts).
+    rest = rest.replace(/\+?NotedFor(\w+)/g, (_m, nm: string) => { checks.push((c) => notedFor(state, r.controller, nm).includes(c.iid)); return ''; });
     rest = rest.replace(/\+?DrawnThisTurn/g, () => ''); // not tracked: any card in hand
     rest = rest.replace(/\.$/, '').replace(/\.\+/, '.');
     return { valid: rest || 'Card', checks };
@@ -1006,6 +1008,8 @@ function play(state: GameState, ctx: Ctx, r: MoreRun): Result {
   const p = r.step.params;
   let cards: string[];
   if (p.Defined === 'ExiledWith') cards = r.sourceIid ? [...(state.remembered?.[r.sourceIid] ?? [])] : [];
+  // Valid$ cards in ValidZone$ (Arcane Savant: "a card you exiled with cards named Arcane Savant").
+  else if (!p.Defined && p.Valid && p.ValidZone) cards = p.ValidZone.split(',').flatMap((z) => zoneCards(state, z));
   else cards = r.defined(p.Defined ?? 'Remembered')?.cards ?? [];
   cards = cards.filter((iid) => state.cards[iid] && state.cards[iid].zone !== 'battlefield' && state.cards[iid].zone !== 'stack');
   if (p.Valid) { const f = cardFilter(state, r, p.Valid); cards = cards.filter((x) => f(state.cards[x])); }
@@ -1013,8 +1017,59 @@ function play(state: GameState, ctx: Ctx, r: MoreRun): Result {
   if (!cards.length) { log(state, ctx, r.controller, `${r.sourceName}: no card to play.`); return 'ok'; }
   const who = p.Controller ? r.defined(p.Controller)?.players[0] ?? r.controller : p.DefinedPlayer ? r.defined(p.DefinedPlayer)?.players[0] ?? r.controller : r.controller;
   const free = p.WithoutManaCost === 'True' || !p.PlayCost;
-  const d: MData = { kind: 'more', m: 'play', cont: r.contAt(r.index + 1), pid: who, queue: cards, free, cost: p.PlayCost ?? '', optional: p.Optional === 'True' || p.OptionalDecider != null, source: r.sourceName };
+  // CopyCard$ True: a copy of the card is cast; the card itself stays where it is.
+  const copy = p.CopyCard === 'True';
+  const d: MData = { kind: 'more', m: 'play', cont: r.contAt(r.index + 1), pid: who, queue: cards, free, cost: p.PlayCost ?? '', optional: p.Optional === 'True' || p.OptionalDecider != null, source: r.sourceName, ...(copy ? { copy: true } : {}) };
+  // Amount$ N with more candidates: the player picks which (and casts it right away).
+  const n = /^\d+$/.test(p.Amount ?? '') ? parseInt(p.Amount!, 10) : undefined;
+  if (n != null && cards.length > n) {
+    const names = new Set<string>();
+    const opts = cards.filter((x) => { const k = state.cards[x].cardId ?? x; if (names.has(k)) return false; names.add(k); return true; })
+      .map((x) => ({ value: x, label: `${copy ? 'Copy and cast' : 'Cast'} ${nm(state, ctx, x)}` }));
+    ask(state, ctx, who, `${r.sourceName}: choose a card to ${copy ? 'copy — you may cast the copy' : 'cast'}${free && !p.PlayCost ? ' without paying its mana cost' : ''}`,
+      [...opts, { value: 'no', label: "Don't" }], { ...d, m: 'playPick', left: n });
+    return 'wait';
+  }
   return askPlay(state, ctx, d) ? 'wait' : 'ok';
+}
+
+/** Cards `pid` noted for `name` (GamePlayer.notes: NoteCards$ / NoteCardsFor$, engine/pregame.ts). */
+export function notedFor(state: GameState, pid: string, name: string): string[] {
+  return state.players.find((x) => x.pid === pid)?.notes?.[name] ?? [];
+}
+
+/**
+ * A copy of a card to cast (Play CopyCard$ True): a token with the card's characteristics, so it ceases to exist when
+ * it leaves the stack. It is created "on the stack" (the cast puts it there; continueAfterCast removes it when it
+ * isn't cast).
+ */
+function castableCopy(state: GameState, ctx: Ctx, pid: string, iid: string): CardInstance {
+  const src = state.cards[iid];
+  const f = faceOf(src, ctx.lookup);
+  const data: TokenData = { name: f.name, typeLine: f.typeLine, colors: (f.colors ?? []) as TokenData['colors'], oracle: f.oracle, keywords: f.keywords, ...(f.power != null ? { power: f.power } : {}), ...(f.toughness != null ? { toughness: f.toughness } : {}) };
+  let cid = randomId(ctx.rng);
+  while (state.cards[cid]) cid = randomId(ctx.rng);
+  const inst: CardInstance = {
+    iid: cid, cardId: src.cardId, token: data, owner: pid, controller: pid, zone: 'stack', tapped: false, faceDown: false, transformed: false,
+    counters: {}, damage: 0, tempPT: [0, 0], permPT: [0, 0], summoningSick: false, noUntap: false, revealedTo: [],
+  };
+  state.cards[cid] = inst;
+  return inst;
+}
+
+/** Cast the card `iid` of a Play question (or a copy of it, CopyCard$ True); `rest` are offered afterwards. */
+function playOne(state: GameState, ctx: Ctx, d: MData, iid: string, rest: string[], x?: number) {
+  const cost = playCost(state, ctx, d, iid);
+  const after = rest.length ? { ...d, m: 'play', queue: rest } : undefined;
+  const extra = { cost: cost && d.cost ? (d.cost as string) : '', after, ...(x != null ? { x } : {}) };
+  if (d.copy) {
+    const from = state.cards[iid].zone;
+    const cp = castableCopy(state, ctx, d.pid, iid);
+    log(state, ctx, d.pid, `${pname(state, d.pid)} copies ${nm(state, ctx, iid)} (${d.source}).`);
+    castDuringResolution(state, ctx, d.pid, cp.iid, `${d.source}, a copy`, d.cont, { ...extra, copyFrom: from });
+    return;
+  }
+  castDuringResolution(state, ctx, d.pid, iid, d.source as string, d.cont, extra);
 }
 
 /** Ask about the next card to play. Returns true when a question is open (or the chain was resumed). */
@@ -1034,8 +1089,9 @@ function askPlay(state: GameState, ctx: Ctx, d: MData): boolean {
       [...xs.map((x) => ({ value: `x:${x}`, label: `Cast ${nm(state, ctx, iid)} with X=${x}` })), { value: 'no', label: "Don't" }], { ...d, queue });
     return true;
   }
-  ask(state, ctx, d.pid, `${d.source}: cast ${nm(state, ctx, iid)}${cost ? ` by paying ${cost}` : ' without paying its mana cost'}?`,
-    [{ value: 'yes', label: `Cast ${nm(state, ctx, iid)}` }, { value: 'no', label: "Don't" }], { ...d, queue });
+  const what = d.copy ? `a copy of ${nm(state, ctx, iid)}` : nm(state, ctx, iid);
+  ask(state, ctx, d.pid, `${d.source}: cast ${what}${cost ? ` by paying ${cost}` : ' without paying its mana cost'}?`,
+    [{ value: 'yes', label: `Cast ${what}` }, { value: 'no', label: "Don't" }], { ...d, queue });
   return true;
 }
 
@@ -1062,7 +1118,7 @@ function playCost(state: GameState, ctx: Ctx, d: MData, iid: string): string | n
  * (data.m 'castTargets'), then the spell goes on the stack and the resolution continues with `cont`.
  * Returns true when a question was asked.
  */
-export function castDuringResolution(state: GameState, ctx: Ctx, pid: string, iid: string, via: string, cont: AutoCont | undefined, extra: { cost?: string; after?: MData; x?: number } = {}): boolean {
+export function castDuringResolution(state: GameState, ctx: Ctx, pid: string, iid: string, via: string, cont: AutoCont | undefined, extra: { cost?: string; after?: MData; x?: number; copyFrom?: Zone } = {}): boolean {
   const c = state.cards[iid];
   if (!c) { if (cont) resumeAuto(state, ctx, cont); return !!cont; }
   if (faceOf(c, ctx.lookup).types.includes('Land')) {
@@ -1073,7 +1129,7 @@ export function castDuringResolution(state: GameState, ctx: Ctx, pid: string, ii
     return !!cont;
   }
   const sp = c.cardId ? spellAbility(c.cardId, 0) : undefined;
-  const d: MData = { kind: 'more', m: 'castTargets', cont: cont ?? (null as unknown as AutoCont), pid, iid, via, modes: undefined, cost: extra.cost ?? '', ...(extra.after ? { after: extra.after } : {}), ...(extra.x != null ? { x: extra.x } : {}) };
+  const d: MData = { kind: 'more', m: 'castTargets', cont: cont ?? (null as unknown as AutoCont), pid, iid, via, modes: undefined, cost: extra.cost ?? '', ...(extra.after ? { after: extra.after } : {}), ...(extra.x != null ? { x: extra.x } : {}), ...(extra.copyFrom ? { copyFrom: extra.copyFrom } : {}) };
   if (sp?.ability.api === 'Charm' && sp.ability.choices?.length) {
     const ab = sp.ability;
     ask(state, ctx, pid, `${via}: ${cardName(c, ctx.lookup)} — choose ${ab.charmMax === 1 ? 'a mode' : 'the modes'}`,
@@ -1122,7 +1178,7 @@ function finishCast(state: GameState, ctx: Ctx, d: MData, targets: TargetRef[][]
     payCostNow(state, ctx, pid, undefined, toks, typeof d.x === 'number' ? d.x : 0);
   }
   const x = typeof d.x === 'number' ? d.x : undefined;
-  const from = c.zone;
+  const from = (d.copyFrom as Zone | undefined) ?? c.zone;
   c.faceDown = false;
   detach(state, c);
   c.zone = 'stack';
@@ -1152,6 +1208,8 @@ function finishCast(state: GameState, ctx: Ctx, d: MData, targets: TargetRef[][]
 }
 
 function continueAfterCast(state: GameState, ctx: Ctx, d: MData) {
+  // A copy that wasn't cast (no legal targets, declined) ceases to exist.
+  if (d.copyFrom && state.cards[d.iid as string] && !state.stack.some((s) => s.iid === d.iid)) delete state.cards[d.iid as string];
   if (d.after) { askPlay(state, ctx, d.after as MData); return; }
   if (d.cont) resumeAuto(state, ctx, d.cont);
 }
@@ -1297,13 +1355,17 @@ export function answerMorePending(state: GameState, ctx: Ctx, pend: Pending, val
       const [iid, ...rest] = d.queue as string[];
       const xm = /^x:(\d+)$/.exec(value);
       if ((value === 'yes' || xm) && iid) {
-        const cost = playCost(state, ctx, d, iid);
         // The remaining cards (if any) are offered after this one is on the stack.
-        castDuringResolution(state, ctx, d.pid, iid, d.source as string, d.cont, { cost: cost && d.cost ? (d.cost as string) : '', after: rest.length ? { ...d, queue: rest } : undefined, ...(xm ? { x: parseInt(xm[1], 10) } : {}) });
+        playOne(state, ctx, d, iid, rest, xm ? parseInt(xm[1], 10) : undefined);
         return null;
       }
-      if (iid) log(state, ctx, d.pid, `${who} doesn't cast ${nm(state, ctx, iid)} (${d.source}).`);
+      if (iid) log(state, ctx, d.pid, `${who} doesn't cast ${d.copy ? 'a copy of ' : ''}${nm(state, ctx, iid)} (${d.source}).`);
       askPlay(state, ctx, { ...d, queue: rest });
+      return null;
+    }
+    case 'playPick': {
+      if (value === 'no' || !state.cards[value]) { log(state, ctx, d.pid, `${who} doesn't cast anything (${d.source}).`); resumeAuto(state, ctx, d.cont); return null; }
+      playOne(state, ctx, { ...d, m: 'play' }, value, []);
       return null;
     }
     case 'castModes': {
