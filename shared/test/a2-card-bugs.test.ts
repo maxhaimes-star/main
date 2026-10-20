@@ -174,3 +174,64 @@ describe('A2.5: Shrines count only the Shrine subtype', () => {
     expect(offered).not.toContain('sanctum_weaver');
   });
 });
+
+describe('A2.6: Chrome Mox (imprint, then mana of an imprinted color)', () => {
+  function castMox(imprint: string | null, hand: string[]) {
+    const { g, ctx } = setup(['chrome_mox', ...hand], [], 7, 'basic_island');
+    const mox = toZone(g, ctx, 'a', 'chrome_mox', 'hand');
+    for (const h of hand) toZone(g, ctx, 'a', h, 'hand', P(g, 'a').zones.hand.slice());
+    act(g, ctx, 'a', { t: 'cast', iid: mox });
+    drain(g, ctx, (q) => {
+      if (imprint === null) return q.options.find((o) => /no|don't|decline|none|skip/i.test(o.label) || o.value === 'none' || o.value === 'no')?.value ?? q.options[q.options.length - 1].value;
+      return q.options.find((o) => g.cards[o.value]?.cardId === imprint)?.value ?? q.options.find((o) => /yes/i.test(o.label) || o.value === 'yes')?.value ?? q.options[0].value;
+    });
+    return { g, ctx, mox };
+  }
+
+  it('imprints a nonartifact, nonland card and taps for its color', () => {
+    const { g, ctx, mox } = castMox('lightning_bolt', ['lightning_bolt', 'counterspell']);
+    expect(g.battlefield).toContain(mox);
+    const bolt = P(g, 'a').zones.exile.find((i) => g.cards[i].cardId === 'lightning_bolt');
+    expect(bolt, logText(g)).toBeTruthy();
+    const opts = manaOptionsFor(g, mox, getCard);
+    expect(opts.map((o) => o.produces)).toEqual(['R']);
+    act(g, ctx, 'a', { t: 'activateMana', iid: mox, option: opts[0].id });
+    expect(P(g, 'a').manaPool.R).toBe(1);
+  });
+
+  it('only nonartifact, nonland cards can be imprinted', () => {
+    const { g } = setup(['chrome_mox', 'lightning_bolt', 'mox_diamond'], [], 7, 'basic_island');
+    const ctx: Ctx = { rng: seeded(7), lookup: getCard, now: 0 };
+    const mox = toZone(g, ctx, 'a', 'chrome_mox', 'hand');
+    toZone(g, ctx, 'a', 'lightning_bolt', 'hand');
+    toZone(g, ctx, 'a', 'mox_diamond', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: mox });
+    const offered: string[] = [];
+    drain(g, ctx, (q) => { for (const o of q.options) if (g.cards[o.value]) offered.push(g.cards[o.value].cardId!); return q.options[0].value; });
+    expect(offered).toContain('lightning_bolt');
+    expect(offered).not.toContain('mox_diamond');
+    expect(offered).not.toContain('basic_island');
+  });
+
+  it('without an imprinted card it adds nothing', () => {
+    const { g, mox } = castMox(null, ['lightning_bolt']);
+    expect(g.battlefield).toContain(mox);
+    expect(manaOptionsFor(g, mox, getCard)).toEqual([]);
+  });
+
+  it('auto-pay uses the Chrome Mox mana', () => {
+    const { g, ctx, mox } = castMox('lightning_bolt', ['lightning_bolt', 'lightning_bolt']);
+    const bolt = P(g, 'a').zones.hand.find((i) => g.cards[i].cardId === 'lightning_bolt')!;
+    expect(g.battlefield.filter((i) => g.cards[i].controller === 'a')).toEqual([mox]);
+    act(g, ctx, 'a', { t: 'cast', iid: bolt, targets: [[{ kind: 'player', pid: 'b' }]] });
+    expect(g.cards[mox].tapped).toBe(true);
+    drain(g, ctx);
+    expect(P(g, 'b').life).toBe(17);
+  });
+
+  it('leaving the battlefield forgets the imprint', () => {
+    const { g, ctx, mox } = castMox('lightning_bolt', ['lightning_bolt']);
+    moveCard(g, ctx, mox, 'hand');
+    expect(g.cards[mox].imprinted ?? []).toEqual([]);
+  });
+});

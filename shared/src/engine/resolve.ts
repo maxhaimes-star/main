@@ -863,6 +863,13 @@ export function exiledWithSource(state: GameState, src: string | undefined): str
   ].filter((x) => state.cards[x]?.zone === 'exile');
 }
 
+/** Imprint$ True: the source permanent keeps the exiled cards (Chrome Mox's "the exiled card's colors"). */
+function imprintOn(state: GameState, item: StackItem, iids: string[]) {
+  const src = item.sourceIid ? state.cards[item.sourceIid] : undefined;
+  if (!src || src.zone !== 'battlefield') return;
+  src.imprinted = [...new Set([...(src.imprinted ?? []), ...iids.filter((x) => state.cards[x]?.zone === 'exile')])];
+}
+
 function rememberOnCard(state: GameState, item: StackItem, iids: string[]) {
   const src = item.sourceIid ?? item.iid;
   if (!src || item.kind === 'spell') return;
@@ -1205,7 +1212,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       }
       if (untilHost && exiled.length) addEffect(state, ctx, { kind: 'exiled', controller: r.controller, until: 'hostLeaves', hostIid: untilHost, cards: exiled });
       remember(cards.filter((x) => state.cards[x]));
-      if (p.Imprint === 'True') r.chosen = { ...(r.chosen ?? {}), imprinted: cards.filter((x) => state.cards[x]) };
+      if (p.Imprint === 'True') { r.chosen = { ...(r.chosen ?? {}), imprinted: cards.filter((x) => state.cards[x]) }; imprintOn(state, r.item, r.chosen.imprinted!); }
       if (p.Shuffle === 'True') for (const pid of new Set(cards.map((x) => state.cards[x]?.owner).filter(Boolean) as string[])) shuffleLibrary(state, player(state, pid), ctx.rng);
       const destLabel = dest === 'library' ? 'its owner\'s library' : dest === 'battlefield' ? 'the battlefield' : `${dest}`;
       log(state, ctx, r.controller, moved.length ? `${r.sourceName}: ${moved.join(', ')} → ${destLabel}.` : `${r.sourceName}: nothing to move.`);
@@ -2193,7 +2200,10 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
           rememberOnCard(state, data.cont.item, data.cont.remembered);
         }
         // Imprint$ True (Currency Converter: "if it's a land card ..."): later steps refer to the chosen card as Imprinted.
-        if (data.cont && p.Imprint === 'True' && state.cards[value]) data.cont.chosen = { ...(data.cont.chosen ?? {}), imprinted: [...(data.cont.chosen?.imprinted ?? []), value] };
+        if (data.cont && p.Imprint === 'True' && state.cards[value]) {
+          data.cont.chosen = { ...(data.cont.chosen ?? {}), imprinted: [...(data.cont.chosen?.imprinted ?? []), value] };
+          imprintOn(state, data.cont.item, [value]);
+        }
         const hidden = (z: Zone) => (z === 'hand' || z === 'library') && !data.revealChosen;
         const moved = state.cards[value];
         if (data.revealChosen && moved) { moved.revealedTo = state.players.map((q) => q.pid); log(state, ctx, pid, `${who.name} reveals ${nm}.`); }

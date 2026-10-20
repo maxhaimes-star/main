@@ -71,6 +71,8 @@ export interface CardInstance {
   tempKeywords?: string[];
   /** How it was cast (kicked, evoked, flashback...). Kept while on the stack and when it resolves onto the battlefield. */
   castInfo?: CastInfo;
+  /** Cards exiled with this permanent's imprint ability (Chrome Mox); forgotten when it leaves the battlefield. */
+  imprinted?: string[];
   /** Rooms on the battlefield: the unlocked doors (0 = left, 1 = right), engine/script.ts roomScript. */
   unlocked?: number[];
 }

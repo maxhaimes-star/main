@@ -5,7 +5,9 @@
  * effects (tap, sacrifice, pay life, discard your hand, mana in the cost, "deals 2 damage to you").
  * Lands without a scripted mana ability (basics, duals) tap for their basic land types.
  *
- * Not covered: Chrome Mox (imprint isn't tracked — use the manual tap), loyalty abilities that add
+ * Chrome Mox: ManaReflected of the imprinted card's colors (CardInstance.imprinted).
+ *
+ * Not covered: other ManaReflected abilities (Exotic Orchard ...), loyalty abilities that add
  * mana, City of Traitors' "sacrifice when you play another land" (a trigger).
  */
 import { foreignManaLines } from './grants.ts';
@@ -62,7 +64,7 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
   // Mana abilities other permanents grant it (Joraga Treespeaker, Goldspan Dragon): engine/grants.ts.
   if ('effects' in state || 'battlefield' in state) for (const g of foreignManaLines(state as unknown as StaticsState, c.iid, lookup)) lines.push([g.line, g.id, g.svars, g.name]);
   if (face || lines.length) lines.forEach(([line, index, svars, faceName]) => {
-    if (!/^\s*AB\$\s*Mana\b/.test(line)) return;
+    if (!/^\s*AB\$\s*Mana(Reflected)?\b/.test(line)) return;
     const ab = parseAbility(line, svars ?? face?.svars ?? {}, faceName ?? face?.name ?? name);
     if (!ab || ab.params.Planeswalker === 'True') return;
     scripted = true;
@@ -92,7 +94,18 @@ function plan(state: CountState, c: CardInstance, lookup: Lookup): Planned[] {
     if (ab.params.RestrictValid) base.sideEffects.push(`Spend only on: ${ab.params.RestrictValid}`);
     const produced = (ab.params.Produced ?? '').trim();
     let choices: string[];
-    if (produced === 'Any') choices = ANY;
+    if (ab.api === 'ManaReflected') {
+      // "Add one mana of any of the exiled card's colors" (Chrome Mox): the colors of the imprinted cards still in exile.
+      if (ab.params.Valid !== 'Defined.Imprinted' || ab.params.ColorOrType !== 'Color') return;
+      const colors = new Set<string>();
+      for (const x of (c as CardInstance).imprinted ?? []) {
+        const ic = state.cards[x] as CardInstance | undefined;
+        if (ic?.zone !== 'exile' || !ic.cardId) continue;
+        for (const col of lookup(ic.cardId)?.colors ?? []) colors.add(col);
+      }
+      choices = ANY.filter((x) => colors.has(x));
+      if (!choices.length) return;
+    } else if (produced === 'Any') choices = ANY;
     else if (/^Combo /.test(produced)) choices = produced.slice(6).split(/\s+/).filter((x) => /^[WUBRGC]$/.test(x));
     else if (/^[WUBRGC]( [WUBRGC])*$/.test(produced)) choices = [produced.replace(/ /g, '')];
     else return;
