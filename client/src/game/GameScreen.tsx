@@ -604,6 +604,10 @@ function Zones({ p }: { p: ViewPlayer }) {
   const gyDrop = useDrop((iid) => dropTo(ctx, iid, 'graveyard'));
   const exDrop = useDrop((iid) => dropTo(ctx, iid, 'exile'));
   const revealedTop = p.zones.library.filter((iid) => !isHidden(g.cards[iid]));
+  // Cards you can cast from here right now (an adventurer on its adventure, flashback, impulse draw ...).
+  const castableIn = (ids: string[]) => (isMe ? ids.filter((iid) => !isHidden(g.cards[iid]) && castability(g, me, iid)?.ok) : []);
+  const gyCastable = castableIn(p.zones.graveyard).length;
+  const exCastable = castableIn(p.zones.exile).length;
 
   const n = (label: string, f: (n: number) => GameAction, d = 1) => async () => { const v = await ask(label, d); if (v != null && v > 0) act(f(v)); };
   const libMenu = (e: React.MouseEvent) => openMenu(e.clientX, e.clientY, [
@@ -626,17 +630,19 @@ function Zones({ p }: { p: ViewPlayer }) {
         <span className="zlabel">Lib {p.libraryCount}</span>
         {revealedTop.length > 0 && <div className="revealed-top" onMouseEnter={() => { const c = g.cards[revealedTop[0]]; if (!isHidden(c)) setPreview({ face: faceOf(c, getCard) }); }}>top: {revealedTop.map((i) => { const c = g.cards[i]; return isHidden(c) ? '?' : faceOf(c, getCard).name; }).join(', ')}</div>}
       </div>
-      <div className={`zone gy ${gyDrop.over ? 'drop-over' : ''}`} {...gyDrop.props} onClick={() => openZone(p.pid, 'graveyard')} title="Graveyard"
+      <div className={`zone gy ${gyDrop.over ? 'drop-over' : ''} ${gyCastable ? 'castable' : ''}`} {...gyDrop.props} onClick={() => openZone(p.pid, 'graveyard')} title={gyCastable ? `Graveyard: ${gyCastable} card${gyCastable === 1 ? '' : 's'} you can cast now` : 'Graveyard'}
         onMouseEnter={() => { const c = topGy ? g.cards[topGy] : undefined; if (c && !isHidden(c)) setPreview({ face: faceOf(c, getCard) }); }}>
         {topGy && !isHidden(g.cards[topGy]) ? <CardImage face={faceOf(g.cards[topGy] as never, getCard)} /> : <div className="empty-zone">GY</div>}
         <span className="zone-count">{p.zones.graveyard.length}</span>
         <span className="zlabel">GY {p.zones.graveyard.length}</span>
+        {gyCastable > 0 && <span className="zone-castable">▶ {gyCastable}</span>}
       </div>
-      <div className={`zone ex ${exDrop.over ? 'drop-over' : ''}`} {...exDrop.props} onClick={() => openZone(p.pid, 'exile')} title="Exile"
+      <div className={`zone ex ${exDrop.over ? 'drop-over' : ''} ${exCastable ? 'castable' : ''}`} {...exDrop.props} onClick={() => openZone(p.pid, 'exile')} title={exCastable ? `Exile: ${exCastable} card${exCastable === 1 ? '' : 's'} you can cast now` : 'Exile'}
         onMouseEnter={() => { const c = topEx ? g.cards[topEx] : undefined; if (c && !isHidden(c) && !c.faceDown) setPreview({ face: faceOf(c, getCard) }); }}>
         {topEx && !isHidden(g.cards[topEx]) && !g.cards[topEx].faceDown ? <CardImage face={faceOf(g.cards[topEx] as never, getCard)} /> : <div className="empty-zone">Exile</div>}
         <span className="zone-count">{p.zones.exile.length}</span>
         <span className="zlabel">Ex {p.zones.exile.length}</span>
+        {exCastable > 0 && <span className="zone-castable">▶ {exCastable}</span>}
       </div>
     </div>
   );

@@ -295,6 +295,13 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
       const u = abilityUsable(g, me, iid, e.index);
       items.push(u && !u.ok ? { label, disabled: true, hint: u.reason ?? "Can't unlock now" } : { label, hint: door?.manaCost, onClick: () => act({ t: 'activate', iid, text: label, ability: e.index }) });
     }
+    // Prepare cards: while prepared, its controller may cast a copy of its spell (face 1).
+    if (c.counters.prepared && c.controller === me && card?.faces?.[1]?.name && (card.layout === 'prepare' || card.layout === 'adventure')) {
+      const spell = card.faces[1];
+      const u = castability(g, me, iid, 1);
+      const label = `Cast a copy of ${spell.name}`;
+      items.push(u && !u.ok ? { label, disabled: true, hint: u.reason ?? "Can't cast it now" } : { label, hint: spell.manaCost, onClick: () => castWithX(base, iid, 1) });
+    }
     const scripted = all.filter((e) => e.ability.api !== '_Unlock');
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({
       label: `[${l.cost > 0 ? '+' : ''}${l.cost}] ${l.text.slice(0, 70)}${l.text.length > 70 ? '…' : ''}`,

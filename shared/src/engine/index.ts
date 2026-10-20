@@ -41,7 +41,7 @@ export { becomeCopy, tokenCopy } from './copy.ts';
 export { activeEffects } from './effects.ts';
 export { EXT_APIS } from './ext.ts';
 export { isValidTarget, matchCard, matchPlayer } from './targets.ts';
-export { castableFaces, castOptions, parseCost } from './costs.ts';
+export { castableFaces, castOptions, isPrepareCard, parseCost, preparedSpellCast } from './costs.ts';
 export { divisionError } from './divide.ts';
 export { manaOptionsFor } from './mana.ts';
 export { activationError, castTimingError, loyaltyError, sorceryTiming } from './timing.ts';

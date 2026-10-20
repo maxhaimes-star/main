@@ -331,6 +331,19 @@ describe('A1.2: Prepare cards (cast a copy of the spell while prepared)', () => 
     expect(g.players[0].zones.hand.length, logTail(g)).toBe(hand + 3);
     expect(g.cards[iid].counters.prepared).toBeUndefined();
   });
+
+  it('Emeritus of Ideation attacks: exiling eight cards from the graveyard prepares it again', () => {
+    const { g, ctx } = setup(['emeritus_of_ideation'], [], 'basic_island');
+    const em = put(g, ctx, 'a', 'emeritus_of_ideation');
+    const gy = g.players[0].zones.library.slice(0, 9);
+    for (const x of gy) moveCard(g, ctx, x, 'graveyard');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: em, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    drain(g, ctx, (q) => q.options.find((o) => /^(yes|pay)$/.test(o.value))?.value ?? q.options[0].value);
+    expect(g.cards[em].counters.prepared, logTail(g)).toBe(1);
+    expect(g.players[0].zones.graveyard.length, logTail(g)).toBe(1);
+  });
 });
 
 /** Pass priority until a question comes up for `pid` (or `n` passes). */

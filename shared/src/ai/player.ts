@@ -26,7 +26,7 @@ import { effectivePT, faceOf, hasKeyword, isCreature } from '../game/rules.ts';
 import { type CardInstance, type GameAction, type GameState, type GameView, isHidden, type ViewCard, type ViewPlayer } from '../game/types.ts';
 import type { ParsedAbility, Pending, TargetRef, TargetSpec } from '../engine/types.ts';
 import { abilitiesOfInstance } from '../engine/animate.ts';
-import { castableFaces, castOptions } from '../engine/costs.ts';
+import { castableFaces, castOptions, isPrepareCard } from '../engine/costs.ts';
 import { castSpellAbility, flatten, isRoomCard, targetSpecs, type ActivatedEntry } from '../engine/script.ts';
 import { isValidTarget } from '../engine/targets.ts';
 import { attackRestriction, blockRestriction } from '../engine/statics.ts';
@@ -709,6 +709,16 @@ function bestSpell(ctx: Ctx, main: boolean): GameAction | null {
         if (ch) choices.push(ch);
       }
     }
+  }
+  // Prepared permanents: cast a copy of their spell (Skycoach Conductor's All Aboard, Emeritus of Truce's Swords ...).
+  for (const iid of v.battlefield) {
+    const c = visible(v, iid);
+    if (!c?.cardId || c.controller !== pid || !c.counters.prepared) continue;
+    const d = L(c.cardId);
+    if (!d || !isPrepareCard(d) || failed(mem, v, `cast:${iid}:1:`)) continue;
+    if (!safe(() => castability(v, pid, iid, L, 1).ok, false)) continue;
+    const ch = planSpell(ctx, iid, c, d, 1, 'normal', main, opp);
+    if (ch) choices.push(ch);
   }
   if (!choices.length) return null;
   if (ctx.level === 'easy') return choices[Math.floor(rand(mem) * choices.length)].action;

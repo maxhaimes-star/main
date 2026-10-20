@@ -267,7 +267,8 @@ function castPlays(G: Game, pid: string): Play[] {
   const { g, rng } = G;
   const me = g.players.find((p) => p.pid === pid)!;
   const out: Play[] = [];
-  const zones = [...me.zones.hand, ...me.zones.graveyard, ...me.zones.exile, ...g.players.filter((p) => p.pid !== pid).flatMap((p) => p.zones.exile)];
+  const zones = [...me.zones.hand, ...me.zones.graveyard, ...me.zones.exile, ...g.players.filter((p) => p.pid !== pid).flatMap((p) => p.zones.exile),
+    ...g.battlefield.filter((i) => g.cards[i]?.controller === pid && g.cards[i].counters.prepared)]; // prepared permanents: a copy of their spell
   for (const iid of zones) {
     const c = g.cards[iid];
     if (!c?.cardId) continue;
@@ -275,7 +276,7 @@ function castPlays(G: Game, pid: string): Play[] {
     if (!data) continue;
     if (data.types.includes('Land') && !(data.layout === 'modal_dfc')) continue;
     if (c.zone !== 'hand' && c.faceDown) continue;
-    const faces = data.faces && ['modal_dfc', 'adventure', 'split'].includes(data.layout) ? [0, 1] : [undefined];
+    const faces = c.zone === 'battlefield' ? [1] : data.faces && ['modal_dfc', 'adventure', 'split'].includes(data.layout) ? [0, 1] : [undefined];
     for (const face of faces) {
       const typeLine = face != null && data.faces ? data.faces[face].typeLine : data.typeLine;
       if (/\bLand\b/.test(typeLine)) continue;
