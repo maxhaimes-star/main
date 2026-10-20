@@ -13,11 +13,19 @@ import { eventName, namesFor, saveDeck, sourceName } from './decklib.ts';
 
 export interface RoomProps { view: RoomView; send: Send; skew: number }
 
+interface RoomInfo { id: string; name: string; phase: string; host: string | null; players: string[] }
+
 export function Room({ roomId }: { roomId: string }) {
   const [seat, setSeat] = useState(() => loadSeat(roomId));
   const [name, setName] = useState(() => localStorage.getItem('ojb:name') ?? '');
   const [joinErr, setJoinErr] = useState<string | null>(null);
-  const { view, send, fatal, connected, toast, clockSkew } = useRoom(roomId, seat?.token ?? null);
+  const { view, send, fatal, connected, toast, clockSkew, restoring } = useRoom(roomId, seat?.token ?? null, (newId) => {
+    // The server restarted and this room came back under a new code.
+    if (seat) saveSeat(newId, seat);
+    navigate(`/r/${newId}`);
+  });
+  const [info, setInfo] = useState<RoomInfo | 'missing' | null>(null);
+  const [joining, setJoining] = useState(false);
   const [watching, setWatching] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string[]>([]);
   useCardRegistry(); // re-render when card data for non-cube cards arrives
@@ -37,23 +45,47 @@ export function Room({ roomId }: { roomId: string }) {
     if (view) document.title = `${view.name} · OJB Cube`;
   }, [view?.name]);
 
-  async function join() {
-    if (!name.trim()) return setJoinErr('Enter your name');
-    localStorage.setItem('ojb:name', name.trim());
+  // Not joined yet: show which room this is (or that it doesn't exist).
+  useEffect(() => {
+    if (seat) return;
+    let live = true;
+    fetch(`/api/rooms/${roomId}`).then(async (r) => { if (live) setInfo(r.ok ? await r.json() as RoomInfo : 'missing'); }).catch(() => live && setInfo('missing'));
+    return () => { live = false; };
+  }, [roomId, seat]);
+
+  async function join(as = name) {
+    if (!as.trim()) return setJoinErr('Enter your name');
+    try { localStorage.setItem('ojb:name', as.trim()); } catch { /* private mode */ }
+    setJoining(true);
     try {
-      const r = await api<{ token: string; pid: string }>(`/api/rooms/${roomId}/join`, { name });
-      const s = { token: r.token, pid: r.pid, name };
+      const r = await api<{ token: string; pid: string }>(`/api/rooms/${roomId}/join`, { name: as });
+      const s = { token: r.token, pid: r.pid, name: as };
       saveSeat(roomId, s);
       setSeat(s);
-    } catch (e) { setJoinErr((e as Error).message); }
+    } catch (e) { setJoinErr((e as Error).message); } finally { setJoining(false); }
   }
 
+  // Coming from "Join" on the home page with a name typed: join straight away.
+  useEffect(() => {
+    let auto: string | null = null;
+    try { auto = sessionStorage.getItem('ojb:autojoin'); sessionStorage.removeItem('ojb:autojoin'); } catch { /* ignore */ }
+    if (!seat && auto === roomId && name.trim()) void join(name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!seat) {
+    const missing = info === 'missing';
+    const r = info && info !== 'missing' ? info : null;
     return (
-      <div className="home"><div className="home-card">
-        <h2>Join room <code>{roomId}</code></h2>
-        <label>Your name<input autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && join()} maxLength={24} /></label>
-        <button className="primary" onClick={join}>Join</button>
+      <div className="home"><div className="home-card join-card">
+        <h2>{r ? <>Join <em>{r.name}</em></> : 'Join room'} <code className="room-code-input">{roomId}</code></h2>
+        {r && <p className="muted">{r.host ? `Hosted by ${r.host}. ` : ''}{r.players.length} at the table{r.phase !== 'lobby' ? ' — the event has started, you can watch' : ''}.</p>}
+        {missing && <p className="error">No room with code {roomId}. Check the code, or ask the host to open the room again (if the server just restarted, it comes back when the host returns).</p>}
+        <form onSubmit={(e) => { e.preventDefault(); void join(); }}>
+          <label>Your name<input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={24} placeholder="e.g. Max" /></label>
+          <button className="primary" type="submit" disabled={joining}>{joining ? 'Joining…' : 'Join'}</button>
+          <button type="button" onClick={() => navigate('/')}>Home</button>
+        </form>
         {joinErr && <div className="error">{joinErr}</div>}
       </div></div>
     );
@@ -67,7 +99,7 @@ export function Room({ roomId }: { roomId: string }) {
       </div></div>
     );
   }
-  if (!view) return <div className="loading">Connecting…</div>;
+  if (!view) return <div className="loading">{restoring ? 'The server restarted — restoring the room…' : 'Connecting…'}</div>;
 
   const props: RoomProps = { view, send, skew: clockSkew };
   const myMatch = view.matches.find((m) => m.players.includes(view.me) && !dismissed.includes(m.id));
@@ -85,7 +117,7 @@ export function Room({ roomId }: { roomId: string }) {
 
   return (
     <div className="room">
-      {!connected && <div className="banner warn">Reconnecting…</div>}
+      {!connected && <div className="banner warn">{restoring ? 'The server restarted — restoring the room…' : 'Reconnecting…'}</div>}
       {toast && <div className="toast">{toast}</div>}
       {!shownMatch && <AwayBanner view={view} send={send} />}
       {body}

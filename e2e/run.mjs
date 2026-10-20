@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const base = process.argv[2] ?? process.env.BASE_URL ?? 'http://localhost:3001';
 const out = process.argv[3] ?? process.env.E2E_OUT ?? 'test-results';
-const all = ['smoke', 'auction', 'strict', 'engine2', 'layout', 'cubelib', 'decks', 'bot', 'savant'];
+const all = ['smoke', 'auction', 'strict', 'engine2', 'layout', 'cubelib', 'decks', 'bot', 'savant', 'share', 'restore'];
 const want = process.env.SCRIPTS ? process.env.SCRIPTS.split(',') : all;
 const results = [];
 for (const name of want) {
