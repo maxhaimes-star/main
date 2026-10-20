@@ -49,7 +49,7 @@ export const SUPPORTED_MODES = new Set([
 const KNOWN_PARAMS = new Set([
   'Mode', 'Execute', 'TriggerDescription', 'Alone', 'ValidToken', 'CounterType', 'ValidAttackingPlayer', 'ValidDefenders', 'ValidCard', 'ValidCards', 'Origin', 'Destination', 'TriggerZones', 'ValidPlayer', 'Phase',
   'OptionalDecider', 'ValidActivatingPlayer', 'ValidSource', 'ValidTarget', 'Static', 'Secondary', 'CombatDamage', 'IsPresent',
-  'PresentCompare', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
+  'PresentCompare', 'PresentDefined', 'ActivatorThisTurnCast', 'AttackingPlayer', 'CheckSVar', 'SVarCompare', 'Number', 'FirstCardInDrawStep',
   'NotFirstLand', 'NoResolvingCheck', 'ActivationLimit', 'Activator', 'ValidSA', 'CheckDefinedPlayer', 'FirstAttack', 'Delirium', 'ResolvedLimit',
   'ValidDefenders', 'ValidAttackingPlayer', 'ValidToken', 'CounterType', 'SearchOwnLibrary', 'ThisDoor', 'ValidAttacker', 'ValidBlocker',
   'TargetsValid', 'Attacked',
@@ -274,7 +274,11 @@ export function conditionHolds(state: GameState, ctx: Ctx, cond: Record<string, 
     if (/Self\+attackedThisCombat/.test(valid)) { selfAttacked = (env.turnInfo!.activations[`attacked|${sourceIid}`] ?? 0) > 0; valid = 'Creature.attackedThisCombat'; }
     let n = 0;
     let unknown = false;
-    for (const iid of state.battlefield) {
+    // PresentDefined$ Self (Mana Vault: "if this artifact is tapped"): only those objects are checked.
+    const pd = cond.PresentDefined;
+    const pool = !pd ? state.battlefield : pd === 'Self' ? (sourceIid ? [sourceIid] : []) : pd === 'Enchanted' || pd === 'Equipped' ? (host?.attachedTo ? [host.attachedTo] : []) : undefined;
+    if (!pool) unknown = true;
+    for (const iid of (pool ?? []).filter((x) => state.cards[x]?.zone === 'battlefield')) {
       const r = matchCard(state.cards[iid], valid, env);
       if (r === 'unknown') unknown = true;
       else if (r) n++;
@@ -639,7 +643,7 @@ function queueFor(state: GameState, ctx: Ctx, host: Host, index: number, p: Reco
   const auto: AutoInfo = { cardId, face, source: 'trigger', index, targets: [], trigger: hit };
   if (line) auto.line = line; else if (p.Execute) auto.svar = p.Execute;
   const cond: Record<string, string> = {};
-  for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare', 'CheckDefinedPlayer', 'Delirium']) if (p[k]) cond[k] = p[k];
+  for (const k of ['IsPresent', 'PresentCompare', 'PresentDefined', 'CheckSVar', 'SVarCompare', 'CheckDefinedPlayer', 'Delirium']) if (p[k]) cond[k] = p[k];
   if (Object.keys(cond).length && p.NoResolvingCheck !== 'True') hit.condition = cond;
   const name = hostLabel(host, ctx);
   const chain = chainOf(auto);
@@ -801,7 +805,7 @@ function detect(state: GameState, ctx: Ctx) {
           }
           if (p.IsPresent || p.CheckSVar || p.CheckDefinedPlayer || p.Delirium) {
             const cond: Record<string, string> = {};
-            for (const k of ['IsPresent', 'PresentCompare', 'CheckSVar', 'SVarCompare', 'CheckDefinedPlayer', 'Delirium']) if (p[k]) cond[k] = p[k];
+            for (const k of ['IsPresent', 'PresentCompare', 'PresentDefined', 'CheckSVar', 'SVarCompare', 'CheckDefinedPlayer', 'Delirium']) if (p[k]) cond[k] = p[k];
             const holds = conditionHolds(state, ctx, cond, c.controller, c.iid, t.ref?.cardId ?? host.id, t.ref?.face ?? host.face, hit);
             if (holds === false) continue;
             if (holds === 'unknown') { log(state, ctx, c.controller, `Check by hand: ${hostLabel(host, ctx)} may trigger (condition not verified) — ${desc}`); continue; }
