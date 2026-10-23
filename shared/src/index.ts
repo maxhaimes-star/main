@@ -1,6 +1,8 @@
 export * from './cards.ts';
+export { applyCardOverride, applyScriptOverride, cardOverride, overrideNames, CARD_OVERRIDES, type CardOverride } from './overrides.ts';
 export * from './room.ts';
 export * from './draft.ts';
+export { POWER_CARDS, withPower } from './powerup.ts';
 export * from './bots.ts';
 export { cardPower, heuristicRank } from './power.ts';
 export * from './export.ts';

@@ -824,7 +824,7 @@ function changeGeneric(cost: string, delta: number, minMana: number): string {
  * Apply RaiseCost / ReduceCost statics to a mana cost.
  * kind 'Spell': `inst` is the spell being cast (its own EffectZone$ All statics count too). 'Ability': `inst` is the source.
  */
-export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, cost: string, kind: 'Spell' | 'Ability', lookup: Lookup): { cost: string; notes: string[] } {
+export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, cost: string, kind: 'Spell' | 'Ability', lookup: Lookup, opts: { manaAbility?: boolean } = {}): { cost: string; notes: string[] } {
   const c = computed(st, lookup);
   const ev = new Evaluator(st, lookup, true);
   const sources = [...c.statics];
@@ -839,6 +839,9 @@ export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, co
     if (!raise && !s.modes.includes('ReduceCost')) continue;
     const p = s.params;
     if (costKind(p) !== kind || p.Cost || p.Color) continue;
+    // "Abilities ... that aren't mana abilities" (ValidSpell$ Activated.!ManaAbility): mana abilities (engine/mana.ts) are skipped.
+    if (opts.manaAbility && /(!ManaAbility|nonManaAbility)/.test(p.ValidSpell ?? '')) continue;
+    if (!opts.manaAbility && /(^|\.)ManaAbility\b/.test((p.ValidSpell ?? '').replace(/!ManaAbility/g, ''))) continue;
     if (ev.active(s) !== true) continue;
     if (p.Activator === 'You' && pid !== s.controller) continue;
     if (p.Activator === 'Opponent' && pid === s.controller) continue;
@@ -862,6 +865,30 @@ export function adjustCost(st: StaticsState, inst: CardInstance, pid: string, co
   }
   if (!delta) return { cost, notes: [] };
   return { cost: changeGeneric(cost, delta, minMana), notes };
+}
+
+const abilityCostCards = new Map<string, boolean>();
+function hasAbilityCostStatic(id: string): boolean {
+  let v = abilityCostCards.get(id);
+  if (v == null) {
+    v = !!getScript(id)?.some((f) => f.statics.some((l) => /Mode\$ (ReduceCost|RaiseCost)/.test(l) && /Type\$ Ability|ValidSpell\$ Activated/.test(l)));
+    abilityCostCards.set(id, v);
+  }
+  return v;
+}
+
+/**
+ * Cheap check before adjustCost(..., 'Ability') on hot paths (mana abilities during auto-pay): is there a permanent whose
+ * script changes activated-ability costs (Zirda, Forensic Gadgeteer ...)? false = ability costs are as printed.
+ */
+export function mayAdjustAbilityCost(st: StaticsState): boolean {
+  for (const iid of st.battlefield) {
+    const c = st.cards[iid];
+    if (!c || isHidden(c)) continue;
+    const ref = scriptRef(c);
+    if ((ref && hasAbilityCostStatic(ref.cardId.replace(/#doors$/, ''))) || (c.cardId && hasAbilityCostStatic(c.cardId))) return true;
+  }
+  return false;
 }
 
 /** Printed mana cost of a face (0 front, 1 back / adventure / second half). */

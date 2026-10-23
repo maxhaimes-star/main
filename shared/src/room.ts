@@ -39,6 +39,8 @@ export interface RoomSettings {
   customList?: string[];
   /** Name of the imported cube list (display only). */
   customListName?: string;
+  /** "Power up": add the Power Nine, Sol Ring, Mana Vault and Mana Crypt to the cube (powerup.ts). */
+  powerUp?: boolean;
   // Card database sources
   /** Draft/sealed packs from the cube list or from set boosters. */
   source: PackSource;

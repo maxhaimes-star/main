@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CardData, TokenData } from '@ojb/shared/src/cards.ts';
 import { slugify } from '@ojb/shared/src/cards.ts';
+import { applyCardOverride, applyScriptOverride, cardOverride, overrideNames } from '@ojb/shared/src/overrides.ts';
 import type { ForgeFace } from '@ojb/shared/src/engine/types.ts';
 import {
   type BoosterCard, type CardDbMeta, type FormatData, type Rarity, type SearchRow, type SetData,
@@ -73,7 +74,7 @@ function shard<T>(map: Map<number, T>, kind: string, id: string): T {
 export function forEachCard(fn: (c: CardData) => void) {
   for (let n = 0; n < CARDDB_SHARDS; n++) {
     const s = cardShards.get(n) ?? readShard<Record<string, CardData>>('cards', n);
-    for (const c of Object.values(s)) fn(c);
+    for (const c of Object.values(s)) fn(applyCardOverride(c));
   }
 }
 
@@ -92,7 +93,7 @@ function memo<T>(m: Map<string, T | null>, id: string, load: () => T | undefined
 
 export function getCardById(id: string): CardData | undefined {
   if (!carddbAvailable()) return undefined;
-  return memo(cardMemo, id, () => shard(cardShards, 'cards', id)[id]);
+  return memo(cardMemo, id, () => applyCardOverride(shard<Record<string, CardData>>(cardShards, 'cards', id)[id]));
 }
 export function cardsByIds(ids: string[]): Record<string, CardData> {
   const out: Record<string, CardData> = {};
@@ -102,7 +103,7 @@ export function cardsByIds(ids: string[]): Record<string, CardData> {
 /** Forge rules scripts for the engine (ScriptData.cards entry). */
 export function getScript(id: string): ForgeFace[] | undefined {
   if (!carddbAvailable()) return undefined;
-  return memo(scriptMemo, id, () => shard(scriptShards, 'scripts', id)[id]);
+  return memo(scriptMemo, id, () => applyScriptOverride(id, shard<Record<string, ForgeFace[]>>(scriptShards, 'scripts', id)[id]));
 }
 export function getToken(script: string): TokenData | undefined {
   return tokenTable()[script];
@@ -117,6 +118,8 @@ export function resolveCardName(name: string): string | undefined {
   const names = loadJson<Record<string, string>>('names.json');
   const n = name.trim().replace(/\s+\/\/?\s+/, ' // ');
   const lower = n.toLowerCase();
+  const renamed = overrideNames()[lower]; // a custom card's new name, or its printed name (shared/data/overrides.json)
+  if (renamed) return renamed;
   if (names[lower]) return names[lower];
   const slug = slugify(n);
   if (searchIds().has(slug)) return slug;
@@ -124,7 +127,13 @@ export function resolveCardName(name: string): string | undefined {
 }
 
 let idSet: Set<string> | undefined;
-function searchRows(): SearchRow[] { return loadJson<SearchRow[]>('search.json'); }
+function searchRows(): SearchRow[] {
+  const fresh = !cache.has('search.json');
+  const rows = loadJson<SearchRow[]>('search.json');
+  // Overridden cards are listed (and searched) under their new name.
+  if (fresh) for (const r of rows) { const o = cardOverride(r[0]); if (o?.name) r[1] = o.name; }
+  return rows;
+}
 function searchIds(): Set<string> {
   if (!idSet || !cache.has('search.json')) idSet = new Set(searchRows().map((r) => r[0]));
   return idSet;

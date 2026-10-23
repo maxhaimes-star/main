@@ -1,0 +1,37 @@
+{
+  "_doc": "House rules and custom cards on top of Forge's scripts (shared/src/overrides.ts). Keyed by the original card id. A card keeps its id and art (image / localImage of the original card); `name`, `oracle` and script fields replace the originals. `script` lists faces; each given field (abilities, triggers, statics, replacements, keywords, svars, name) replaces that face's field. `original` is the printed name, which still resolves in deck and cube lists.",
+  "cards": {
+    "burning_inquiry": {
+      "original": "Burning Inquiry",
+      "name": "Burning Sensation",
+      "oracle": "Each player draws seven cards, then discards seven cards at random.",
+      "script": [
+        {
+          "name": "Burning Sensation",
+          "abilities": ["SP$ Draw | Defined$ Player | NumCards$ 7 | SubAbility$ DBDiscard7 | SpellDescription$ Each player draws seven cards, then discards seven cards at random."],
+          "svars": { "DBDiscard7": "DB$ Discard | Defined$ Player | Mode$ Random | NumCards$ 7" }
+        }
+      ]
+    },
+    "zirda_the_dawnwaker": {
+      "original": "Zirda, the Dawnwaker",
+      "houseRule": true,
+      "oracle": "Companion — Each permanent card in your starting deck has an activated ability. (If this card is your chosen companion, you may put it into your hand from outside the game for {3} any time you could cast a sorcery.)\nActivated abilities you activate cost {2} less to activate. This effect can reduce the amount of mana an ability costs to activate to zero.\n{1}, {T}: Target creature can't block this turn.",
+      "script": [
+        {
+          "statics": ["Mode$ ReduceCost | ValidCard$ Card | Activator$ You | ValidSpell$ Activated | Amount$ 2 | Description$ Activated abilities you activate cost {2} less to activate. This effect can reduce the amount of mana an ability costs to activate to zero."]
+        }
+      ]
+    },
+    "forensic_gadgeteer": {
+      "original": "Forensic Gadgeteer",
+      "houseRule": true,
+      "oracle": "Whenever you cast an artifact spell, investigate. (Create a Clue token. It's an artifact with \"{2}, Sacrifice this token: Draw a card.\")\nActivated abilities of artifacts you control cost {1} less to activate. This effect can reduce the amount of mana an ability costs to activate to zero.",
+      "script": [
+        {
+          "statics": ["Mode$ ReduceCost | ValidCard$ Artifact.YouCtrl | Type$ Ability | Amount$ 1 | AffectedZone$ Battlefield | Description$ Activated abilities of artifacts you control cost {1} less to activate. This effect can reduce the amount of mana an ability costs to activate to zero."]
+        }
+      ]
+    }
+  }
+}

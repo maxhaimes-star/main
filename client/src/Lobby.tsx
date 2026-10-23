@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { NumberField } from './NumberField.tsx';
-import { CONSTRUCTED_FORMATS, cubeToText, type RoomSettings } from '@ojb/shared';
+import { CONSTRUCTED_FORMATS, cubeToText, overrideNames, type RoomSettings } from '@ojb/shared';
 import type { SetSummary } from '@ojb/shared/src/carddb-types.ts';
 import { CUBE } from '@ojb/shared/src/cube.ts';
 import type { RoomProps } from './Room.tsx';
@@ -197,6 +197,7 @@ export function Lobby({ view, send }: RoomProps) {
               {num('Time to choose a card (sec)', 'nominateTimer', 0, 300)}
             </>}
             {isCube && <label className="setting check"><input type="checkbox" checked={s.colorBalance} disabled={!isHost} onChange={(e) => set({ colorBalance: e.target.checked })} /> Color-balanced packs</label>}
+            {isCube && <label className="setting check" title="Adds Black Lotus, the five Moxen, Ancestral Recall, Time Walk, Timetwister, Mana Vault, Sol Ring and Mana Crypt (any the cube doesn't already have)"><input type="checkbox" data-testid="power-up" checked={!!s.powerUp} disabled={!isHost} onChange={(e) => set({ powerUp: e.target.checked })} /> Power up</label>}
           </div>
         )}
         {isCube && (
@@ -280,7 +281,7 @@ function CustomList({ view, set }: { view: RoomProps['view']; set: (p: Partial<R
       const r = await api<{ deck: { entries: { id: string; count: number }[]; errors: string[] } }>('/api/decks/validate', { text: cubeListText(list) });
       return { ids: r.deck.entries.flatMap((e) => Array(e.count).fill(e.id) as string[]), missing: r.deck.errors.map((e) => e.replace(/^Line \d+: unknown card /, '')) };
     }
-    const byName = new Map(CUBE.cards.map((c) => [c.name.toLowerCase(), c.id]));
+    const byName = new Map([...CUBE.cards.map((c) => [c.name.toLowerCase(), c.id] as const), ...Object.entries(overrideNames())]);
     const ids: string[] = [];
     const miss: string[] = [];
     for (const raw of cubeListText(list).split('\n')) {
