@@ -1029,7 +1029,8 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
           { label: 'Pass to end of turn', onClick: () => act({ t: 'passUntilEOT' }) },
           { label: 'Undo', disabled: !g.canUndo, onClick: undo },
           ...(!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) ? [{ label: 'Fix board (ask opponent)', onClick: () => act({ t: 'requestFixMode' } as never) }] : []),
-          { label: 'Propose (opponent agrees)', sub: proposeItems(gctx) },
+          // A second menu (not a submenu): the phone menu stays short enough not to scroll.
+          { label: 'Propose… (opponent agrees)', onClick: () => openMenu(e.clientX, e.clientY, proposeItems(gctx), 'Propose') },
         ], 'Actions')}>⋯</button>
       )}
       {me && g.phase === 'playing' && !phone && (
