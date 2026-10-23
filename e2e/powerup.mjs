@@ -24,10 +24,10 @@ step('default cube: Power up adds 11 cards (Timetwister is already in it)');
 const base = await cubeSize();
 assert(base > 400, `default cube size looks wrong: ${base}`);
 assert(!(await power.isChecked()), 'Power up should start unchecked');
-await power.check();
+await power.click(); // controlled by the server state: check() would expect an instant change
 await cubeSize(base + 11);
 await shot(A, 'powerup-default');
-await power.uncheck();
+await power.click();
 await cubeSize(base);
 
 step('imported list (with Sol Ring and the old name of Burning Sensation): +11');
@@ -37,13 +37,13 @@ await A.locator('.custom-list textarea').fill('30 Lightning Bolt\n1 Burning Inqu
 await A.getByRole('button', { name: 'Use this list' }).click();
 await A.getByText(/Using 32 cards/).waitFor();
 await cubeSize(32);
-await power.check();
+await power.click(); // controlled by the server state: check() would expect an instant change
 await cubeSize(43);
 
 step('the renamed card shows under its new name in the cube browser');
 await A.getByRole('button', { name: /Browse the cube/ }).click();
 await A.locator('.cube-browser .filters input').fill('Burning Sensation');
-await A.locator('.cube-browser .filters', { hasText: /^.*\b1 cards\b/ }).waitFor();
+await A.locator('.cube-browser .filters .muted', { hasText: /^1 cards/ }).waitFor();
 await shot(A, 'powerup-imported');
 
 await browser.close();
