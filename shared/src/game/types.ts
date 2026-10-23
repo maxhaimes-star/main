@@ -125,6 +125,8 @@ export interface GamePlayer {
   lost?: string;
   /** A computer opponent (shared/src/ai/player.ts). */
   bot?: boolean;
+  /** Extra free mulligans the opponent granted this player ("Request another 6"), on top of state.freeMulligan. */
+  extraFreeMulligans?: number;
   /** Cards noted for a name (Forge NoteCards$ / NotedFor<name>: the cards Arcane Savant exiled before the game), by name -> iids. */
   notes?: Record<string, string[]>;
 }
@@ -231,9 +233,25 @@ export interface GameState {
    * about, and the players whose library is shuffled and hand drawn once the questions are answered. Mulligans wait.
    */
   pregame?: { queue: { pid: string; iid: string }[]; deferred: string[] };
-  /** "Free mulligan" house rule: both players agreed that each player's first mulligan doesn't cost a card. */
-  freeMulligan?: { on: boolean; requestedBy: string | null };
+  /**
+   * "Free mulligan" house rule: both players agreed that each player's first `count` mulligans (1 or 2, default 1)
+   * don't cost a card. Proposed and answered as a Proposal (kind 'freeMulligan').
+   */
+  freeMulligan?: { on: boolean; requestedBy: string | null; count?: number };
+  /** A proposal waiting for the other player's agreement (free mulligan, another 6, scry 1 ...). One at a time. */
+  proposal?: Proposal | null;
 }
+
+/**
+ * Proposals the opponent must agree to (like fix mode):
+ * - freeMulligan: every player's first (or, proposed again, first two) mulligans are free (mulligan phase);
+ * - another6: the proposer, about to go down to 5, mulligans to 6 again (mulligan phase);
+ * - scry1: the proposer scries 1;
+ * - discardRandom: `target` discards a card at random;
+ * - shuffleIntoLibrary (fix mode only): the proposer shuffles card `iid` from their hand into their library.
+ */
+export type ProposalKind = 'freeMulligan' | 'another6' | 'scry1' | 'discardRandom' | 'shuffleIntoLibrary';
+export interface Proposal { kind: ProposalKind; by: string; target?: string; iid?: string; /** Human-readable ("Scry 1"). */ text: string }
 
 /** Stage 2: something that happened during an action (engine-internal; used to detect triggers). */
 export type GameEvent =
@@ -298,9 +316,10 @@ type GameActionBody =
    */
   /** phyrexian: how to pay Phyrexian mana symbols — 'mana' when possible (default; 2 life only for a missing color while
    *  above 2 life) or 'life' (2 life each whenever possible). */
-  | { t: 'cast'; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[]; costOption?: string; kicked?: boolean; force?: boolean; division?: Record<string, number>; phyrexian?: 'mana' | 'life' }
+  /** hold (also on 'activate'): keep priority afterwards (Arena's hold priority / full control) to respond to your own spell. */
+  | { t: 'cast'; hold?: boolean; iid: string; face?: number; x?: number; faceDown?: boolean; targets?: TargetRef[][]; manual?: boolean; modes?: string[]; costOption?: string; kicked?: boolean; force?: boolean; division?: Record<string, number>; phyrexian?: 'mana' | 'life' }
   /** Manual: text (+ loyalty). Automatic: ability = index of the A: line on the card's current face, plus targets. force: ignore timing / limits. */
-  | { t: 'activate'; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number; force?: boolean; division?: Record<string, number> }
+  | { t: 'activate'; hold?: boolean; iid: string; text: string; loyalty?: number; ability?: number; targets?: TargetRef[][]; x?: number; force?: boolean; division?: Record<string, number> }
   /** Activate a mana ability: option = id from manaOptionsFor(). */
   | { t: 'activateMana'; iid: string; option: string }
   | { t: 'choose'; id: string; value: string }
@@ -352,6 +371,10 @@ type GameActionBody =
   /** Mulligan phase: propose / accept a free first mulligan for everyone (both players must agree). */
   | { t: 'requestFreeMulligan' }
   | { t: 'answerFreeMulligan'; accept: boolean }
+  /** Proposals the opponent must agree to (see Proposal); the proposer may withdraw it. */
+  | { t: 'propose'; kind: ProposalKind; target?: string; iid?: string }
+  | { t: 'answerProposal'; accept: boolean }
+  | { t: 'cancelProposal' }
   | { t: 'chat'; text: string };
 
 // ------------------------------------------------------------ client view

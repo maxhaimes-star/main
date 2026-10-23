@@ -18,7 +18,7 @@ import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
 import { enforceAttackRequirements, enforceBlockRestrictions, takeExtraCombat } from '../engine/combat-rules.ts';
 import { noteTapped } from '../engine/manatriggers.ts';
 import {
-  answerStrictPending, attackError, blockError, blockersError, castHelp, castManaCost, reduceGeneric, removeSymbols, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
+  answerStrictPending, attackError, blockError, blockersError, canBlockAny, castHelp, castManaCost, reduceGeneric, removeSymbols, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
   isLandCard, landPlayError, peekDestinationError, planAutoPay, strictActionError, summoningSick,
 } from '../engine/strict.ts';
 import { maxHandSize, mayPlayPermission } from '../engine/statics.ts';
@@ -29,7 +29,7 @@ import {
   type Ctx, detach, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary, turnStats,
 } from './state.ts';
 import {
-  type CardInstance, type GameAction, type GamePlayer, type GameState, type LogEntry, type RevealedCard, type PlayerZone, type StackItem, type Step,
+  type CardInstance, type GameAction, type GamePlayer, type GameState, type LogEntry, type Proposal, type RevealedCard, type PlayerZone, type StackItem, type Step,
   type Zone, PLAYER_ZONES, STEPS,
 } from './types.ts';
 
@@ -138,12 +138,17 @@ const ZONE_LABEL: Record<Zone, string> = {
   stack: 'the stack', command: 'the command zone', sideboard: 'sideboard',
 };
 
-function snapshot(state: GameState): string {
+function snapshot(state: GameState, extra: Partial<GameState> = {}): string {
   const { history: _h, log: _l, reveals: _rv, ...rest } = state;
-  return JSON.stringify(rest);
+  return JSON.stringify({ ...rest, ...extra });
 }
 
-const NOT_UNDOABLE = new Set<GameAction['t']>(['chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek', 'setAutoTriggers', 'requestFixMode', 'answerFixMode', 'endFixMode', 'requestFreeMulligan', 'answerFreeMulligan']);
+const NOT_UNDOABLE = new Set<GameAction['t']>([
+  'chat', 'requestUndo', 'answerUndo', 'setStops', 'lookAtHand', 'peek', 'setAutoTriggers', 'requestFixMode', 'answerFixMode', 'endFixMode',
+  'requestFreeMulligan', 'propose', 'cancelProposal',
+]);
+/** Answering a proposal: only an accepted one changes the game (undo then goes back to before the proposal). */
+const PROPOSAL_ANSWERS = new Set<GameAction['t']>(['answerFreeMulligan', 'answerProposal']);
 
 // ------------------------------------------------------------------ turn structure
 
@@ -153,13 +158,14 @@ function emptyPools(state: GameState) {
 
 function hasStop(state: GameState, pid: string): boolean {
   const p = player(state, pid);
-  if (p.passUntilEOT) return false;
   const own = state.activePlayer === pid;
   const step = state.step;
-  // Combat steps that need a decision always stop for the deciding player.
   const attackers = state.battlefield.some((id) => state.cards[id].attacking);
-  if (step === 'attackers' && own && !state.combat.attackersDeclared) return true;
+  // Declaring blockers is a decision: even "pass until end of turn" (F6) stops for it.
   if (step === 'blockers' && !own && attackers && !state.combat.blockersDeclared) return true;
+  if (p.passUntilEOT) return false;
+  // Combat steps that need a decision always stop for the deciding player.
+  if (step === 'attackers' && own && !state.combat.attackersDeclared) return true;
   if (step === 'damage' && attackers && state.combat.proposal && !state.combat.proposal.confirmed.includes(pid)) return true;
   if (step === 'main1' && own && state.turn > 0) return true;
   // Ninjutsu: the attacker gets a chance to swap an unblocked attacker once blockers are declared.
@@ -227,11 +233,8 @@ function enterStep(state: GameState, ctx: Ctx, step: Step) {
       const any = state.battlefield.some((id) => state.cards[id].attacking);
       if (!any) { enterStep(state, ctx, 'endCombat'); return; }
       if (state.strict) {
-        // Arena-style: no decision to make when the defender has no untapped creature.
-        const canBlock = state.battlefield.some((id) => {
-          const c = state.cards[id];
-          return c.controller !== state.activePlayer && !c.tapped && isCreature(c, ctx.lookup, state);
-        });
+        // Arena-style: no decision to make when the defender has no creature that can legally block an attacker.
+        const canBlock = state.players.some((p) => p.pid !== state.activePlayer && !p.conceded && canBlockAny(state, p.pid, ctx.lookup));
         if (!canBlock) { state.combat.blockersDeclared = true; log(state, ctx, null, 'No blockers.'); }
       }
       break;
@@ -352,7 +355,13 @@ function passPriority(state: GameState, ctx: Ctx, pid: string) {
   }
 }
 
-function giveResponse(state: GameState, actor: string) {
+function giveResponse(state: GameState, actor: string, hold = false) {
+  if (hold) {
+    // Hold priority (Arena): the actor keeps priority to respond to their own spell / ability.
+    state.passed = [];
+    state.priority = actor;
+    return;
+  }
   // After someone puts something on the stack, the next player gets a chance to respond.
   state.passed = [actor];
   state.priority = state.players.length > 1 ? nextPlayer(state, actor) : actor;
@@ -465,7 +474,9 @@ export function applyAction(state: GameState, pid: string, action: GameAction, c
   const strictErr = strictActionError(state, pid, action); // rules enforcement (engine/strict.ts)
   if (strictErr) return strictErr;
   beginAction(state);
-  const before = NOT_UNDOABLE.has(action.t) ? null : snapshot(state);
+  const before = NOT_UNDOABLE.has(action.t) ? null
+    : PROPOSAL_ANSWERS.has(action.t) ? ((action as { accept: boolean }).accept ? snapshot(state, { proposal: null }) : null)
+    : snapshot(state);
   const seen = revealMarks(state);
   const lastLog = state.log[state.log.length - 1];
   const err = reduce(state, me, action, ctx);
@@ -517,8 +528,27 @@ function recordReveals(state: GameState, ctx: Ctx, action: GameAction, before: R
   if (list.length > 60) list.splice(0, list.length - 60);
 }
 
-function freeMulliganOn(state: GameState): boolean {
-  return !!state.freeMulligan?.on;
+/** Free mulligans everyone agreed to (0, 1 or 2). */
+function freeMulliganCount(state: Pick<GameState, 'freeMulligan'>): number {
+  return state.freeMulligan?.on ? state.freeMulligan.count ?? 1 : 0;
+}
+
+/** Mulligans that don't cost `p` a card: the agreed free ones plus "another 6" grants. */
+export function freeMulligansFor(state: Pick<GameState, 'freeMulligan'>, p: Pick<GamePlayer, 'extraFreeMulligans'>): number {
+  return freeMulliganCount(state) + (p.extraFreeMulligans ?? 0);
+}
+
+/** Cards `p` would put on the bottom if they kept now. */
+export function mulliganCost(state: Pick<GameState, 'freeMulligan'>, p: Pick<GamePlayer, 'mulligans' | 'extraFreeMulligans'>): number {
+  return Math.max(0, p.mulligans - freeMulligansFor(state, p));
+}
+
+function doMulligan(state: GameState, ctx: Ctx, me: GamePlayer, note = '') {
+  for (const iid of [...me.zones.hand]) moveCard(state, ctx, iid, 'library');
+  shuffleLibrary(state, me, ctx.rng);
+  drawCards(state, me, 7);
+  me.mulligans++;
+  log(state, ctx, me.pid, `${me.name} mulligans (${me.mulligans})${note}.`);
 }
 
 function card(state: GameState, iid: string): CardInstance | undefined {
@@ -533,18 +563,16 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     case 'mulligan': {
       if (state.phase !== 'mulligan' || me.kept) return 'Not deciding on a hand';
       if (inPregame(state)) return PREGAME_WAIT;
-      for (const iid of [...me.zones.hand]) moveCard(state, ctx, iid, 'library');
-      shuffleLibrary(state, me, ctx.rng);
-      drawCards(state, me, 7);
-      me.mulligans++;
-      log(state, ctx, pid, `${name} mulligans (${me.mulligans}).`);
+      if (state.proposal?.kind === 'another6' && state.proposal.by === pid) state.proposal = null; // went to 5 instead
+      doMulligan(state, ctx, me);
       return null;
     }
     case 'keep': {
       if (state.phase !== 'mulligan' || me.kept) return 'Not deciding on a hand';
       if (inPregame(state)) return PREGAME_WAIT;
       me.kept = true;
-      me.needsBottom = Math.min(freeMulliganOn(state) ? Math.max(0, me.mulligans - 1) : me.mulligans, me.zones.hand.length);
+      me.needsBottom = Math.min(mulliganCost(state, me), me.zones.hand.length);
+      if (state.proposal?.kind === 'another6' && state.proposal.by === pid) state.proposal = null;
       log(state, ctx, pid, `${name} keeps ${7 - me.needsBottom}.`);
       checkMulliganDone(state, ctx);
       return null;
@@ -803,7 +831,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       log(state, ctx, pid, `${name} casts ${a.faceDown ? 'a face-down spell' : face.name}${a.x != null ? ` (X=${a.x})` : ''}${fromText}${tnames.length ? ` targeting ${tnames.join(', ')}` : ''}${paid}.`);
       if (prep.auto) wardReminders(state, ctx, pid, prep.auto.targets);
       finishCast(state, ctx, pid, c, item, prep.plan, payment, a); // cast info, life / sacrifice / exile costs (may ask)
-      giveResponse(state, pid);
+      giveResponse(state, pid, !!a.hold);
       return null;
     }
     case 'activate': {
@@ -813,7 +841,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
         if (!canTouch(state, pid, c) || (c.zone === 'battlefield' && c.controller !== pid)) return "You don't control that card";
         const err = activateAuto(state, ctx, pid, c, a);
         if (err) return err;
-        giveResponse(state, pid);
+        giveResponse(state, pid, !!a.hold);
         return null;
       }
       const banned = a.force || c.zone !== 'battlefield' ? null : activateRestriction(state, c.iid, pid, ctx.lookup); // Phyrexian Revoker ...
@@ -828,7 +856,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       state.stack.push({ id: randomId(ctx.rng), kind: 'ability', sourceIid: c.iid, controller: pid, text: `${src}: ${a.text}` });
       log(state, ctx, pid, `${name} activates ${src}${a.loyalty != null ? ` [${a.loyalty > 0 ? '+' : ''}${a.loyalty}]` : ''}: ${a.text}`);
       if (a.loyalty != null && (c.counters.loyalty ?? 0) <= 0) log(state, ctx, null, `${src} has 0 loyalty.`);
-      giveResponse(state, pid);
+      giveResponse(state, pid, !!a.hold);
       return null;
     }
     case 'choose': {
@@ -1188,30 +1216,19 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       log(state, ctx, pid, `${name} ends fix mode (rules enforced again).`);
       return null;
     }
-    case 'requestFreeMulligan': {
-      if (state.phase !== 'mulligan') return 'Only before the game starts (mulligans)';
-      if (state.freeMulligan?.on) return 'The first mulligan is already free';
-      if (state.players.some((p) => p.kept && p.mulligans > 0)) return 'Someone already kept after a mulligan';
-      if (others(state, pid).length === 0) {
-        state.freeMulligan = { on: true, requestedBy: pid };
-        log(state, ctx, pid, `${name} makes the first mulligan free.`);
-        return null;
-      }
-      state.freeMulligan = { on: false, requestedBy: pid };
-      log(state, ctx, pid, `${name} proposes a free first mulligan for both players.`);
-      return null;
-    }
-    case 'answerFreeMulligan': {
-      const req = state.freeMulligan?.requestedBy;
-      if (!req || state.freeMulligan?.on || req === pid) return 'No free-mulligan proposal to answer';
-      if (state.phase !== 'mulligan') { state.freeMulligan = undefined; return 'The game has already started'; }
-      if (a.accept) {
-        state.freeMulligan = { on: true, requestedBy: req };
-        log(state, ctx, pid, `${name} agrees: each player's first mulligan is free.`);
-      } else {
-        state.freeMulligan = undefined;
-        log(state, ctx, pid, `${name} declines the free mulligan.`);
-      }
+    case 'requestFreeMulligan':
+      return propose(state, ctx, me, { t: 'propose', kind: 'freeMulligan' });
+    case 'answerFreeMulligan':
+      if (state.proposal?.kind !== 'freeMulligan') return 'No free-mulligan proposal to answer';
+      return answerProposal(state, ctx, me, a.accept);
+    case 'propose':
+      return propose(state, ctx, me, a);
+    case 'answerProposal':
+      return answerProposal(state, ctx, me, a.accept);
+    case 'cancelProposal': {
+      if (!state.proposal || state.proposal.by !== pid) return 'You have no proposal to withdraw';
+      log(state, ctx, pid, `${name} withdraws the proposal (${state.proposal.text}).`);
+      state.proposal = null;
       return null;
     }
     case 'chat': {
@@ -1223,10 +1240,123 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
   return 'Unknown action';
 }
 
+// ------------------------------------------------------------------ proposals (the opponent agrees, like fix mode)
+
+function proposalText(state: GameState, me: GamePlayer, a: { kind: Proposal['kind']; target?: string }): string {
+  switch (a.kind) {
+    case 'freeMulligan': return freeMulliganCount(state) ? 'a second free mulligan for both players' : 'a free first mulligan for both players';
+    case 'another6': return `${me.name} mulligans to 6 again instead of 5`;
+    case 'scry1': return `${me.name} scries 1`;
+    case 'discardRandom': return `${player(state, a.target ?? me.pid).name} discards a card at random`;
+    case 'shuffleIntoLibrary': return `${me.name} shuffles a card from their hand into their library`;
+  }
+  return a.kind;
+}
+
+/** Why `me` can't make this proposal now (also re-checked when it is accepted). */
+function proposalError(state: GameState, me: GamePlayer, a: { kind: Proposal['kind']; target?: string; iid?: string }): string | null {
+  switch (a.kind) {
+    case 'freeMulligan': {
+      if (state.phase !== 'mulligan') return 'Only before the game starts (mulligans)';
+      const n = freeMulliganCount(state);
+      if (n >= 2) return 'Two free mulligans are already agreed';
+      if (state.players.some((p) => p.kept && p.mulligans > n)) return 'Someone already kept after a mulligan';
+      return null;
+    }
+    case 'another6':
+      if (state.phase !== 'mulligan') return 'Only before the game starts (mulligans)';
+      if (me.kept) return 'You already kept';
+      if (inPregame(state)) return PREGAME_WAIT;
+      if (mulliganCost(state, me) !== 1) return 'Only when your next mulligan would take you down to 5 cards';
+      return null;
+    case 'scry1':
+      if (state.phase !== 'playing') return 'Only during the game';
+      if (me.peek) return 'Finish looking at your library first';
+      if (!me.zones.library.length) return 'Your library is empty';
+      return null;
+    case 'discardRandom': {
+      if (state.phase !== 'playing') return 'Only during the game';
+      const t = state.players.find((p) => p.pid === (a.target ?? me.pid));
+      if (!t || t.conceded) return 'No such player';
+      if (!t.zones.hand.length) return `${t.name} has no cards in hand`;
+      return null;
+    }
+    case 'shuffleIntoLibrary':
+      if (state.phase !== 'playing') return 'Only during the game';
+      if (state.strict && !fixModeOn(state)) return 'Only in fix mode ("Fix board")';
+      if (!a.iid || !me.zones.hand.includes(a.iid)) return 'Choose a card in your hand';
+      return null;
+  }
+  return 'Unknown proposal';
+}
+
+function propose(state: GameState, ctx: Ctx, me: GamePlayer, a: Extract<GameAction, { t: 'propose' }>): string | null {
+  if (state.proposal) return `Waiting for an answer to: ${state.proposal.text}`;
+  const err = proposalError(state, me, a);
+  if (err) return err;
+  const prop: Proposal = { kind: a.kind, by: me.pid, text: proposalText(state, me, a) };
+  if (a.kind === 'discardRandom') prop.target = a.target ?? me.pid;
+  if (a.kind === 'shuffleIntoLibrary') prop.iid = a.iid;
+  if (others(state, me.pid).length === 0) {
+    // Alone at the table: nobody to ask.
+    log(state, ctx, me.pid, `${me.name}: ${prop.text}.`);
+    return applyProposal(state, ctx, prop);
+  }
+  state.proposal = prop;
+  log(state, ctx, me.pid, `${me.name} proposes: ${prop.text}.`);
+  return null;
+}
+
+function answerProposal(state: GameState, ctx: Ctx, me: GamePlayer, accept: boolean): string | null {
+  const prop = state.proposal;
+  if (!prop || prop.by === me.pid) return 'No proposal to answer';
+  state.proposal = null;
+  if (!accept) { log(state, ctx, me.pid, `${me.name} declines: ${prop.text}.`); return null; }
+  const err = proposalError(state, player(state, prop.by), prop);
+  if (err) { log(state, ctx, null, `The proposal (${prop.text}) no longer applies: ${err}.`); return null; }
+  log(state, ctx, me.pid, `${me.name} agrees: ${prop.text}.`);
+  return applyProposal(state, ctx, prop);
+}
+
+function applyProposal(state: GameState, ctx: Ctx, prop: Proposal): string | null {
+  const by = player(state, prop.by);
+  switch (prop.kind) {
+    case 'freeMulligan': {
+      const count = freeMulliganCount(state) + 1;
+      state.freeMulligan = { on: true, requestedBy: prop.by, count };
+      log(state, ctx, null, count === 1 ? "Each player's first mulligan is free." : "Each player's first two mulligans are free.");
+      return null;
+    }
+    case 'another6':
+      by.extraFreeMulligans = (by.extraFreeMulligans ?? 0) + 1;
+      doMulligan(state, ctx, by, ' — to 6 again');
+      return null;
+    case 'scry1':
+      by.peek = { mode: 'scry', iids: by.zones.library.slice(0, 1), label: 'Scry 1 (agreed)' };
+      log(state, ctx, by.pid, `${by.name} scries 1.`);
+      return null;
+    case 'discardRandom': {
+      const t = player(state, prop.target ?? by.pid);
+      const iid = t.zones.hand[Math.floor(ctx.rng() * t.zones.hand.length)];
+      const nm = cardName(state.cards[iid], ctx.lookup);
+      moveCard(state, ctx, iid, 'graveyard', { cause: 'discard' });
+      log(state, ctx, t.pid, `${t.name} discards ${nm} at random.`);
+      return null;
+    }
+    case 'shuffleIntoLibrary':
+      moveCard(state, ctx, prop.iid!, 'library');
+      shuffleLibrary(state, by, ctx.rng);
+      log(state, ctx, by.pid, `${by.name} shuffles a card from their hand into their library.`);
+      return null;
+  }
+  return null;
+}
+
 /** The 'pass' action: finishes a pending combat declaration, then passes priority. */
 function doPass(state: GameState, ctx: Ctx, pid: string): string | null {
   if (state.step === 'attackers' && state.activePlayer === pid && !state.combat.attackersDeclared) confirmAttackers(state, ctx);
-  if (state.step === 'blockers' && state.activePlayer !== pid && !state.combat.blockersDeclared) {
+  // Blocks are confirmed by passing with an empty stack; passing on a spell / trigger keeps the declaration open.
+  if (state.step === 'blockers' && state.activePlayer !== pid && !state.combat.blockersDeclared && !state.stack.length) {
     const e = state.strict ? blockersError(state, ctx.lookup) : null;
     if (e) return e;
     confirmBlockers(state, ctx, pid);

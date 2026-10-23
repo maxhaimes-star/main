@@ -6,9 +6,25 @@ import { castability, isStrict, safeAbilities } from './engine.ts';
 
 // ------------------------------------------------------------ persisted settings (Arena-style auto-pass / full control / auto-yield)
 
-export interface AutoSettings { autoPass: boolean; fullControl: boolean; yields: string[]; sidePanel: boolean }
+/** hold: keep priority after casting / activating (Arena's hold priority), to respond to your own spell. */
+export interface AutoSettings { autoPass: boolean; fullControl: boolean; yields: string[]; sidePanel: boolean; hold: boolean }
 const KEY = 'ojb:autoSettings';
-const DEFAULTS: AutoSettings = { autoPass: false, fullControl: false, yields: [], sidePanel: true };
+const DEFAULTS: AutoSettings = { autoPass: false, fullControl: false, yields: [], sidePanel: true, hold: false };
+
+/**
+ * Ctrl / Cmd-click on a card: hold priority for the next cast / activation only (Arena). Set by the card click handlers,
+ * consumed by the table's act() when the cast / activate action is sent (after targets / X prompts).
+ */
+export const holdClick = { once: false };
+export function noteHoldClick(e: { ctrlKey?: boolean; metaKey?: boolean }) { holdClick.once = !!(e.ctrlKey || e.metaKey); }
+
+/** Adds `hold: true` to a cast / activate when holding priority (toggle on or a Ctrl/Cmd-click). */
+export function withHold<A extends GameAction>(a: A, settings: Pick<AutoSettings, 'hold'>): A {
+  if (a.t !== 'cast' && a.t !== 'activate') return a;
+  const hold = settings.hold || holdClick.once;
+  holdClick.once = false;
+  return hold ? { ...a, hold: true } : a;
+}
 
 function load(): AutoSettings {
   try {
@@ -76,6 +92,20 @@ export function topYieldName(g: GameView): string | undefined {
 
 const QUIET_STEPS: Step[] = ['upkeep', 'draw', 'beginCombat', 'endCombat', 'end'];
 
+/**
+ * A combat declaration I still have to make: my attackers, or my blockers while I have a creature that can legally block.
+ * Auto-pass and auto-yield never pass then (passing would declare "no attacks" / "no blocks").
+ */
+export function combatDecision(g: GameView, me: string): boolean {
+  if (g.phase !== 'playing') return false;
+  if (g.step === 'attackers' && g.activePlayer === me && !g.combat.attackersDeclared) return true;
+  if (g.step === 'blockers' && g.activePlayer !== me && !g.combat.blockersDeclared && g.battlefield.some((iid) => g.cards[iid]?.attacking)) {
+    const can = shared.canBlockAny as ((g: GameView, pid: string, lookup: typeof getCard) => boolean) | undefined;
+    try { return can ? can(g, me, getCard) : true; } catch { return true; }
+  }
+  return false;
+}
+
 /** My stop list for the current turn type (my turn → stops.own, opponent's turn → stops.opp). */
 export function stopsNow(g: GameView, me: string): Step[] {
   const p = g.players.find((x) => x.pid === me);
@@ -90,6 +120,7 @@ export function stopsNow(g: GameView, me: string): Step[] {
 export function autoPassReason(g: GameView, me: string, settings: AutoSettings, respond: () => boolean): string {
   if (settings.fullControl) return '';
   if (g.phase !== 'playing' || g.priority !== me || g.pending?.length) return '';
+  if (combatDecision(g, me)) return ''; // a decision I need to make: never skipped
   const top = g.stack[g.stack.length - 1];
   if (top) {
     const yn = topYieldName(g);

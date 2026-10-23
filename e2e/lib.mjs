@@ -44,7 +44,7 @@ export const settle = (p, ms = 500) => p.waitForTimeout(ms);
 export const shot = (p, n) => p.screenshot({ path: `${OUT}/${n}.png` });
 
 /** Fresh room with two humans; sealed 1x20 from `list`; both decks = whole pool + suggested lands; game started; both kept. */
-export async function setup(list, tag = 'e') {
+export async function setup(list, tag = 'e', opts = {}) {
   const A = await newPage(), B = await newPage();
   await A.goto(BASE);
   await A.getByLabel('Your name').fill('Max');
@@ -73,6 +73,11 @@ export async function setup(list, tag = 'e') {
     await p.waitForTimeout(600);
   }
   await A.locator('.challenge', { hasText: 'Sam' }).getByRole('button', { name: 'Play' }).click();
+  // opts.keep === false: stop at the mulligan screen (A = Max, B = Sam).
+  if (opts.keep === false) {
+    for (const p of [A, B]) await p.getByRole('button', { name: /^Keep/ }).waitFor();
+    return { A, B, close: async () => { await A.context().close(); await B.context().close(); } };
+  }
   for (const p of [A, B]) await p.getByRole('button', { name: /^Keep/ }).click();
   await A.locator('.center-bar').waitFor();
   await B.locator('.center-bar').waitFor();

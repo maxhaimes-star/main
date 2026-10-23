@@ -7,15 +7,15 @@ import type { RoomProps } from '../Room.tsx';
 import { backFaceOf, CardBack, CardImage, cardFace, getCard, HoverPreview, setHoverZoom, setPreview, useHoverZoom } from '../cards.tsx';
 import { isTouch, useLayout, useLongPress } from '../touch.ts';
 import { hideSheet, showSheet } from '../sheet.tsx';
-import { type AutoSettings, sourceName, useAutoPass, useAutoSettings } from './auto.ts';
+import { type AutoSettings, noteHoldClick, sourceName, useAutoPass, useAutoSettings, withHold } from './auto.ts';
 import { Ctx, ContextMenu, clampedStyle, placeBeside, useClamped, describe, type GameCtx, type MenuItem, type Mode, Prompt, TableCard, useGame, ModesModal, OptionsModal, DivideModal, RevealedZone, type PickOption } from './ui.tsx';
 import { castWithX, defaultAction as defaultActionImpl, menuFor as menuForImpl } from './actions.ts';
 import { attackAllCandidates, isStrict as isStrictGame, autoPayPreview, castability, fixModeOn, fixRequest, landPlaysLeft, manualOk, pendingRevealed, castStatus, AUTO_LABEL, costNote, legalTarget, optionText, safeCastOptions, safeStatics } from './engine.ts';
-import { MulliganOverlay, PeekModal, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
+import { MulliganOverlay, PeekModal, ProposalPrompt, Sideboarding, TokenModal, ZoneViewer } from './Modals.tsx';
 import { ATTACH_PEEK, COMBAT_SHIFT, fitBoard, STACK_UNITS, TAPPED_UNITS, type BoardSpec, type RowFit } from './boardLayout.ts';
 
 /** Actions never performed on behalf of a controlled player (see engine/turns.ts NEVER_ROUTED); also allowed while controlled. */
-const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan']);
+const FREE_ACTIONS = new Set<GameAction['t']>(['chat', 'concede', 'requestUndo', 'answerUndo', 'lookAtHand', 'setStops', 'mulligan', 'keep', 'bottom', 'requestFreeMulligan', 'answerFreeMulligan', 'propose', 'answerProposal', 'cancelProposal']);
 
 type PromptState = { label: string; initial: string; numeric: boolean; resolve: (v: string | null) => void } | null;
 
@@ -89,13 +89,16 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
   const toast = useCallback((msg: string) => { setToastMsg(msg); clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToastMsg(null), 2200); }, []);
 
   const [forceAsk, setForceAsk] = useState<{ error: string; resolve: (yes: boolean) => void } | null>(null);
+  const holdRef = useRef(auto.hold);
+  holdRef.current = auto.hold;
   const rawAct = useCallback(async (action: GameAction): Promise<string | null> => {
     if (controlled && !FREE_ACTIONS.has(action.t)) return `${g.players.find((p) => p.pid === cb!.by)?.name ?? 'Someone'} controls your turn`;
     const a = actAs && !FREE_ACTIONS.has(action.t) && !action.as ? { ...action, as: actAs } as GameAction : action;
     return send({ t: 'game', matchId: match.id, action: a }) as Promise<string | null>;
   }, [send, match.id, actAs, controlled, cb, g.players]);
   // Static restrictions (Teferi, Ensnaring Bridge ...) come back as errors mentioning "force": offer to override.
-  const act = useCallback(async (action: GameAction): Promise<string | null> => {
+  const act = useCallback(async (action0: GameAction): Promise<string | null> => {
+    const action = withHold(action0, { hold: holdRef.current }); // hold priority: toggle or Ctrl/Cmd-click
     const err = await rawAct(action);
     if (err && /force/i.test(err) && (action.t === 'cast' || action.t === 'activate' || action.t === 'declareAttacker' || action.t === 'declareBlocker') && !(action as { force?: boolean }).force) {
       const msg = err.replace(/\s*\((?:cast with|use) force to override\)\.?/i, '').replace(/[.\s]+$/, '');
@@ -272,6 +275,7 @@ function Table({ send, match, g, onLeave }: Pick<RoomProps, 'view' | 'send'> & {
             </div>
           )}
           <FixModeBar />
+          {g.phase === 'playing' && <ProposalPrompt />}
           <PlayerArea pid={opp} top />
           <CenterBar match={match} onLeave={onLeave} auto={auto} setAuto={setAuto} phone={phone} onLog={() => setLogOpen(true)}>
             {layout === 'portrait' && <div className="center-row2">{hint ?? <><Stack yields={auto.yields} setAuto={setAuto} /><PassButton okRef={okRef} /></>}</div>}
@@ -751,7 +755,7 @@ function HandCard({ iid, i = 0, n = 1 }: { iid: string; i?: number; n?: number }
       onMouseLeave={() => { setPayPreview([]); setPreview(null); }}
       onDragStart={(e) => { e.dataTransfer.setData('text/iid', iid); }}
       onMouseEnter={() => { showPay(); setPreview({ face, extra: [usable && !usable.ok ? `Can't cast: ${usable.reason ?? 'not now'}` : undefined, costNote(g, iid, 0, me), st ? AUTO_LABEL[st] : undefined, ...altHints].filter(Boolean).join(' · ') || undefined, backFace: c.cardId && getCard(c.cardId)?.faces ? (() => { const card = getCard(c.cardId!)!; return faceOf({ ...c, transformed: card.layout !== 'adventure' && card.layout !== 'split', castAs: card.layout === 'adventure' || card.layout === 'split' ? card.faces![1].name : undefined }, getCard); })() : undefined }); }}
-      onClick={() => { if (lp.consumed()) return; if (isTouch()) tapCard(iid); else defaultAction(iid); }}
+      onClick={(e) => { if (lp.consumed()) return; noteHoldClick(e); if (isTouch()) tapCard(iid); else defaultAction(iid); }}
       onContextMenu={(e) => { e.preventDefault(); if (!isTouch()) openMenu(e.clientX, e.clientY, menuFor(iid), face.name); }}>
       <CardImage face={face} />
     </div>
@@ -908,10 +912,16 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
       <input type="checkbox" checked={auto.autoPass} onChange={(e) => setAuto({ autoPass: e.target.checked })} /> Auto-pass
     </label>
   );
+  const hold = (
+    <label className={`tgl hold-tgl ${auto.hold ? 'on' : ''}`} title="Hold priority: keep priority after you cast a spell or activate an ability, so you can respond to it yourself (e.g. sacrifice Lion's Eye Diamond with a wheel on the stack). Ctrl/Cmd-click a card to hold for that one spell.">
+      <input type="checkbox" checked={auto.hold} onChange={(e) => setAuto({ hold: e.target.checked })} /> Hold priority
+    </label>
+  );
   if (inline) {
     return (
       <div className="auto-toggles">
         {autoPass}
+        {hold}
         <label className={`tgl ${auto.fullControl ? 'on' : ''}`} title="Stop at every step and never auto-pass">
           <input type="checkbox" checked={auto.fullControl} onChange={(e) => setFullControl(e.target.checked)} /> Full control
         </label>
@@ -923,6 +933,7 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
   return (
     <div className="auto-toggles">
       {autoPass}
+      {hold}
       {auto.fullControl && <span className="tgl on" title="Full control is on">Full control</span>}
       <button className={`tiny settings-btn ${pop ? 'sel' : ''}`} title="Stops (my turn / opponent's turn), full control, hover zoom"
         onClick={(e) => setPop(pop ? null : e.currentTarget.getBoundingClientRect())}>Stops ▾</button>
@@ -931,8 +942,39 @@ function AutoToggles({ auto, setAuto, inline }: { auto: AutoSettings; setAuto: (
   );
 }
 
+/**
+ * Proposals the opponent must agree to (like fix mode): Scry 1, discard at random (me / opponent) and, in fix mode,
+ * shuffle a card from my hand into my library.
+ */
+function proposeItems(ctx: GameCtx): MenuItem[] {
+  const { g, me, opp, act, pickOption, toast } = ctx;
+  if (!me || g.phase !== 'playing') return [];
+  const busy = !!g.proposal;
+  const send = async (a: GameAction) => { const err = await act(a); if (err) toast(err); };
+  const name = (pid: string) => g.players.find((p) => p.pid === pid)?.name ?? '?';
+  const hand = g.players.find((p) => p.pid === me)?.zones.hand ?? [];
+  const items: MenuItem[] = [
+    { label: 'Scry 1 (ask opponent)', disabled: busy, onClick: () => send({ t: 'propose', kind: 'scry1' }) },
+    { label: 'I discard a card at random (ask opponent)', disabled: busy || !hand.length, onClick: () => send({ t: 'propose', kind: 'discardRandom', target: me }) },
+    { label: `${name(opp)} discards a card at random (ask)`, disabled: busy, onClick: () => send({ t: 'propose', kind: 'discardRandom', target: opp }) },
+  ];
+  if (fixModeOn(g) || !isStrictGame(g)) {
+    items.push({
+      label: 'Shuffle a card from hand into library… (ask opponent)', disabled: busy || !hand.length, onClick: async () => {
+        const iid = await pickOption('Shuffle which card into your library?', hand.map((i) => {
+          const c = g.cards[i];
+          return { value: i, label: c && !isHidden(c) ? faceOf(c, getCard).name : 'Card' };
+        }));
+        if (iid) await send({ t: 'propose', kind: 'shuffleIntoLibrary', iid });
+      },
+    });
+  }
+  return items;
+}
+
 function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
-  const { g, me, opp, act, openMenu, undo } = useGame();
+  const gctx = useGame();
+  const { g, me, opp, act, openMenu, undo } = gctx;
   const phone = useLayout() !== 'desktop';
   const myTurn = g.activePlayer === me;
   const havePriority = g.priority === me && g.phase === 'playing';
@@ -987,6 +1029,8 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
           { label: 'Pass to end of turn', onClick: () => act({ t: 'passUntilEOT' }) },
           { label: 'Undo', disabled: !g.canUndo, onClick: undo },
           ...(!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) ? [{ label: 'Fix board (ask opponent)', onClick: () => act({ t: 'requestFixMode' } as never) }] : []),
+          // A second menu (not a submenu): the phone menu stays short enough not to scroll.
+          { label: 'Propose… (opponent agrees)', onClick: () => openMenu(e.clientX, e.clientY, proposeItems(gctx), 'Propose') },
         ], 'Actions')}>⋯</button>
       )}
       {me && g.phase === 'playing' && !phone && (
@@ -994,11 +1038,14 @@ function PassButton({ okRef }: { okRef: React.MutableRefObject<() => void> }) {
           {myTurn && <button className="tiny" onClick={() => act({ t: 'nextTurn' })} title="Skip to the end of your turn">End turn</button>}
           <button className="tiny" onClick={() => act({ t: 'passUntilEOT' })} title="F6 / Ctrl+Space: auto-pass until end of turn">Pass to EOT</button>
           {!fixModeOn(g) && !fixRequest(g) && isStrictGame(g) && <button className="tiny" title="Ask your opponent to let you fix the board by hand" onClick={() => act({ t: 'requestFixMode' } as never)}>Fix board</button>}
+          <button className="tiny propose-btn" title="Ask your opponent to agree to: scry 1, a random discard, or (fix mode) shuffling a card into your library"
+            onClick={(e) => openMenu(e.clientX, e.clientY, proposeItems(gctx), 'Propose')}>Propose…</button>
           <button className="tiny undo-btn" disabled={!g.canUndo} onClick={undo} title="Ctrl+Z (closes any open popup first)">Undo</button>
           <button className="tiny" onClick={(e) => openMenu(e.clientX, e.clientY, [
             { label: 'Stops: gold dot = your turn, red dot = opponent\'s turn. Edit both under "Stops".', disabled: true },
             { label: 'Right-click a phase to toggle a stop for the current turn type.', disabled: true },
             { label: 'Right-click a trigger on the stack to always yield to it.', disabled: true },
+            { label: 'Ctrl/Cmd-click a card (or turn on "Hold priority") to keep priority after casting it.', disabled: true },
           ], 'Help')}>?</button>
         </div>
       )}
