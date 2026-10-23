@@ -86,5 +86,14 @@ export function viewFor(state: GameState, viewer: string | null): GameView {
   const visibleReveals = (reveals ?? []).filter((r) => (viewer ? r.to.includes(viewer) : everyone.every((x) => r.to.includes(x))));
   // Pre-game questions: the library iids stay on the server.
   const pregame = state.pregame ? { pregame: { queue: [], deferred: state.pregame.deferred } } : {};
-  return { ...rest, ...pregame, reveals: visibleReveals, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
+  // "Exiled with <permanent>" links of face-up exiled cards are public (Agatha's Soul Cauldron grants the exiled
+  // creatures' abilities: the client needs them to offer those abilities).
+  const publicRemembered: Record<string, string[]> = {};
+  for (const [k, ids] of Object.entries(state.remembered ?? {})) {
+    const src = k.startsWith('exiled|') ? k.slice(7) : k;
+    if (state.cards[src]?.zone !== 'battlefield') continue;
+    const shown = ids.filter((x) => state.cards[x]?.zone === 'exile' && !state.cards[x].faceDown);
+    if (shown.length) publicRemembered[k] = shown;
+  }
+  return { ...rest, ...pregame, ...(Object.keys(publicRemembered).length ? { remembered: publicRemembered } : {}), reveals: visibleReveals, pending: pendingView, players, cards, canUndo: history.length > 0, me: state.players.some((p) => p.pid === viewer) ? viewer : null };
 }

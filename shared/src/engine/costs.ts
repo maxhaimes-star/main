@@ -280,10 +280,11 @@ function optionDefs(state: GameState, c: CardInstance, pid: string, face: number
 }
 
 /** Ways to cast a card (normal cost, kicker, alternative costs ...). Unavailable ones say why. */
-export function castOptions(state: GameState, iid: string, face?: number, lookup: Lookup = getCard): CastOption[] {
+export function castOptions(state: GameState, iid: string, face?: number, lookup: Lookup = getCard, caster?: string): CastOption[] {
   const c = state.cards[iid];
   if (!c) return [];
-  const pid = c.zone === 'battlefield' || c.zone === 'stack' ? c.controller : c.owner;
+  // Who casts it: `caster` (a card in another player's exile cast with Ragavan / Robber of the Rich), else its owner.
+  const pid = c.zone === 'battlefield' || c.zone === 'stack' ? c.controller : caster ?? c.owner;
   return optionDefs(state, c, pid, face, lookup, 0).map((d) => {
     const extra = d.parts.map((p) => p.text);
     if (d.delve) extra.push('Delve: you may exile cards from your graveyard to pay generic mana');

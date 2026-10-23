@@ -3,6 +3,7 @@
  * and "can the engine run this" checks.
  */
 import data from '../../data/scripts.json' with { type: 'json' };
+import type { TokenData } from '../cards.ts';
 import { getCard } from '../cube.ts';
 import { KNOWN_CONDITIONS, supportedCount } from './counts.ts';
 import { type Animation, type AutoInfo, type ForgeFace, type ParsedAbility, type ScriptData, SYNTH_BASE, type TargetSpec } from './types.ts';
@@ -72,6 +73,23 @@ const TOKEN_ABILITIES: Record<string, TokenAbilities> = {
     svars: { X: 'Count$Valid Artifact.YouCtrl' },
   },
 };
+// Incubator tokens (incubate N): "{2}: Transform this artifact." into a 0/0 Phyrexian artifact creature.
+const INCUBATOR_TRANSFORM = { key: 'incubator', name: 'Incubator', abilities: ['AB$ SetState | Cost$ 2 | Defined$ Self | Mode$ Transform | SpellDescription$ Transform this artifact.'] };
+TOKEN_ABILITIES['{2}: Transform this artifact.'] = INCUBATOR_TRANSFORM;
+TOKEN_ABILITIES['{2}: Transform this token.'] = INCUBATOR_TRANSFORM;
+
+/** The Incubator token (front) with its Phyrexian back face. */
+export const INCUBATOR_TOKEN: TokenData = {
+  name: 'Incubator', typeLine: 'Token Artifact — Incubator', colors: [], oracle: '{2}: Transform this artifact.', keywords: [],
+  back: { name: 'Phyrexian Token', typeLine: 'Token Artifact Creature — Phyrexian', colors: [], power: '0', toughness: '0', oracle: '', keywords: [] },
+};
+
+/** A token as created: an "Incubator" without its back face (card data, the token table) gets the Phyrexian back. */
+export function withTokenBack(t: TokenData): TokenData {
+  if (t.back || t.name !== 'Incubator' || !/\bIncubator\b/.test(t.typeLine)) return t;
+  return { ...t, oracle: INCUBATOR_TOKEN.oracle, power: undefined, toughness: undefined, back: INCUBATOR_TOKEN.back };
+}
+
 const TOKEN_BY_KEY = new Map(Object.values(TOKEN_ABILITIES).map((t) => [t.key, t]));
 const tokenCache = new Map<string, ForgeFace[]>();
 
@@ -152,7 +170,7 @@ export function registerScripts(cards: Record<string, ForgeFace[]>, tokens?: Rec
 }
 
 /** The parts of a CardInstance that decide which script it uses. */
-type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[]; unlocked?: number[]; token?: { oracle: string }; copyToken?: { oracle: string } };
+type ScriptHolder = { cardId?: string; copyOf?: string; copyFace?: number; transformed: boolean; zone?: string; animations?: Animation[]; unlocked?: number[]; token?: { oracle: string; back?: { oracle: string } }; copyToken?: { oracle: string; back?: { oracle: string } } };
 
 /**
  * The script (card id + face) an instance uses: a copy (copyOf, on the battlefield) uses the copied card's script, a
@@ -164,7 +182,8 @@ export function scriptRef(c: ScriptHolder): { cardId: string; face: number } | u
   if (c.unlocked && c.cardId && (c.zone === undefined || c.zone === 'battlefield')) return { cardId: `${c.cardId}${ROOM_SUFFIX}`, face: c.unlocked.reduce((m, d) => m | (1 << d), 0) };
   if (c.cardId) return { cardId: c.cardId, face: c.transformed ? 1 : 0 };
   // Treasure, Food, Clue ... (token abilities above)
-  const tok = c.copyToken && (c.zone === undefined || c.zone === 'battlefield') ? c.copyToken : c.token;
+  const tok0 = c.copyToken && (c.zone === undefined || c.zone === 'battlefield') ? c.copyToken : c.token;
+  const tok = tok0?.back && c.transformed ? tok0.back : tok0;
   const id = tokenScriptId(tok?.oracle);
   return id ? { cardId: id, face: 0 } : undefined;
 }

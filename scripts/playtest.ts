@@ -25,10 +25,13 @@
  *   - manual      a log entry asks the players to do something by hand ("by hand", "Not automated", "manual" ...)
  *   - invariant   card conservation, a card in two zones / the wrong zone, negative counters / mana / damage
  *   - leak        viewFor() shows a hidden card (opponent's hand / library, face-down) or another player's options
+ *   - chain       an ability's chain stopped partway: a step ran but its SubAbility$ (or a result chain) never did
  * The report groups the problems by card name (cards named in the message, else the card being played).
  * Works with or without the strict-mode engine (`state.strict`).
  */
 import { pathToFileURL } from 'node:url';
+import { chainProbe } from '../shared/src/engine/resolve.ts';
+import { chainBreaks, type ChainTrack } from './chain-audit.ts';
 import { writeFileSync } from 'node:fs';
 import { CUBE, getCard } from '../shared/src/cube.ts';
 import {
@@ -81,7 +84,7 @@ export function randomDeck(rng: Rng, pool: CardData[] = CUBE.cards, force: CardD
 
 // ------------------------------------------------------------------ issues
 
-export type IssueKind = 'exception' | 'stall' | 'manual' | 'invariant' | 'leak';
+export type IssueKind = 'exception' | 'stall' | 'manual' | 'invariant' | 'leak' | 'chain';
 export interface Issue { kind: IssueKind; card: string; text: string; seed: number; turn: number }
 
 export const MANUAL_RE = /by hand|not automated|check by hand|manual|reminder|handle it|do it yourself/i;
@@ -526,6 +529,16 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
   let actions = 0, sinceProgress = 0, lastTurn = -1, lastStep = '';
   let end: GameResult['end'] = 'actions';
   const mems: Record<string, BotMemory> = Object.fromEntries(g.players.map((p, i) => [p.pid, newBotMemory(seed * 31 + i)]));
+  // Every automated chain's reached steps (issue kind 'chain').
+  const chains = new Map<string, ChainTrack>();
+  let lastItem: string | undefined;
+  chainProbe.onStep = (item, step) => {
+    let c = chains.get(item.id);
+    if (!c) chains.set(item.id, (c = { item, reached: new Map() }));
+    c.reached.set(`${step.api}|${JSON.stringify(step.params)}`, step);
+    lastItem = item.id;
+  };
+  chainProbe.onSkip = (item, step) => { const c = chains.get(item.id); if (c) (c.skipped ??= new Set()).add(`${step.api}|${JSON.stringify(step.params)}`); };
   if (!opts.ai && !g.pregame) for (const p of g.players) act(G, p.pid, { t: 'keep' });
   while (actions < 20000) {
     actions++;
@@ -594,6 +607,13 @@ export function playGame(seed: number, opts: { maxTurns?: number; stallAfter?: n
     checkInvariants(G, realCards);
     if (actions % (opts.leakEvery ?? 3) === 0) checkLeaks(G);
   }
+  chainProbe.onStep = undefined;
+  chainProbe.onSkip = undefined;
+  const open = JSON.stringify([g.pending, g.players.map((p) => p.peek), g.stack, g.delayedTriggers ?? []]);
+  for (const [id, c] of chains) {
+    if (open.includes(id) || (id === lastItem && end !== 'turns')) continue; // still resolving
+    for (const b of chainBreaks(c)) G.issues.push({ kind: 'chain', card: cardIn(c.item.text) ?? c.item.text.split(':')[0], text: `${c.item.text.slice(0, 80)}: ${b}`, seed, turn: g.turn });
+  }
   // De-duplicate repeated invariant / leak reports of one game.
   const uniq = new Map<string, Issue>();
   for (const i of G.issues) { const k = `${i.kind}|${i.card}|${i.text.replace(/\d+/g, '#')}`; if (!uniq.has(k)) uniq.set(k, i); }
@@ -613,7 +633,7 @@ export function playtest(n: number, firstSeed = 1, opts: Parameters<typeof playG
       results.push({ seed: firstSeed + k, turns: 0, actions: 0, winner: null, end: 'stall', decks: [], issues: [{ kind: 'exception', card: '(game)', text: `playGame: ${(e as Error).stack?.split('\n').slice(0, 3).join(' | ')}`, seed: firstSeed + k, turns: 0 } as unknown as Issue] });
     }
   }
-  const byKind = { exception: 0, stall: 0, manual: 0, invariant: 0, leak: 0 } as Record<IssueKind, number>;
+  const byKind = { exception: 0, stall: 0, manual: 0, invariant: 0, leak: 0, chain: 0 } as Record<IssueKind, number>;
   for (const r of results) for (const i of r.issues) byKind[i.kind]++;
   const cardsPlayed = new Map<string, number>();
   for (const r of results) for (const id of new Set(r.decks.flat())) cardsPlayed.set(id, (cardsPlayed.get(id) ?? 0) + 1);

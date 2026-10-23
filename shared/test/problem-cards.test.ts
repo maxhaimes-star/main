@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { getCard } from '../src/cube.ts';
 import {
-  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, hasKeyword, matchCard, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard,
+  abilitiesOfInstance, abilityUsability, activatedAbilitiesOf, applyAction, hasKeyword, matchCard, castability, castOptions, castSpellAbility, createGame, effectivePT, faceOf, isCreature, type Ctx, type GameAction, type GameState, manaOptionsFor, moveCard, viewFor,
 } from '../src/index.ts';
 import { seeded } from './helpers.ts';
 
@@ -543,6 +543,12 @@ describe("Agatha's Soul Cauldron", () => {
     expect(granted).toBeTruthy();
     // {2}{W} with three Islands: mana of any color for creatures' abilities
     expect(abilityUsability(g, 'a', sfm, granted!.index, getCard).ok).toBe(true);
+    // The client works from the player's view: the granted ability must show there too, usable with any color.
+    const v = viewFor(g, 'a');
+    const vg = abilitiesOfInstance(v.cards[sfm] as never, v as never, getCard).find((a) => a.index === granted!.index);
+    expect(vg, 'granted ability in the view').toBeTruthy();
+    expect(abilityUsability(v as never, 'a', sfm, granted!.index, getCard).ok).toBe(true);
+    // An opponent's creature card in their graveyard works the same way.
     act(g, ctx, 'a', { t: 'activate', iid: sfm, ability: granted!.index, text: '' });
     drain(g, ctx);
     expect(hasKeyword(g.cards[sfm], getCard, 'Indestructible', g)).toBe(true);

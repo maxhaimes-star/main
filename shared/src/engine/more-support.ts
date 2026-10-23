@@ -8,7 +8,7 @@ export const MORE_APIS = new Set([
   'Branch', 'RepeatEach', 'Repeat', 'GenericChoice', 'ChooseCard', 'ChooseNumber', 'TapOrUntap', 'Amass', 'Proliferate', 'Connive', 'Recruit', 'Empower', 'Discover', '_DiscoverHand', 'Fight',
   'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'FlipCoin', 'DamageResolve',
   'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType', '_Throne',
-  'AddPhase', '_Madness', '_ToGraveyard', '_Replicate', '_FlashSac', '_Fading', '_CumUpkeep', '_Cascade', '_Storm', '_LivingWeapon', '_Ravenous', '_Backup', '_PutBottom',
+  'AddPhase', 'Incubate', '_Madness', '_ToGraveyard', '_Replicate', '_FlashSac', '_Fading', '_CumUpkeep', '_Cascade', '_Storm', '_LivingWeapon', '_Ravenous', '_Backup', '_PutBottom',
 ]);
 
 /** Defined$ values more.ts resolves (beyond script.ts SUPPORTED_DEFINED). */
@@ -25,6 +25,7 @@ export function moreVarSupported(v: string | undefined): boolean {
   return /^Count\$(ChosenNumber|RememberedSize|YourCountersEnergy|ResolvedThisTurn|Monarch|Initiative|DungeonsCompleted|YourLifeGainedThisTurn|LifeYouGainedThisTurn|CardsDrawnThisTurn|YouDrewThisTurn|Devotion\.[A-Za-z]+|DevotionDual\.[A-Za-z]+\.[A-Za-z]+|TriggerRememberAmount)$/.test(v)
     || /^Remembered\$(Valid .+|CardManaCost|CardPower|Amount)$/.test(v)
     || /^TriggeredCard\$Card(Power|Toughness|ManaCost)$/.test(v)
+    || /^TriggerRemembered\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^TriggerCount\$\w+$/.test(v)
     || /^Count\$YourCountersEnergy\/.+$/.test(v)
     || /^Count\$Valid .+\/(HalfDown|HalfUp|Twice)$/.test(v)

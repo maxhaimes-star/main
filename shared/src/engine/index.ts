@@ -34,7 +34,7 @@ import type { Rng } from '../draft.ts';
 import type { Lookup } from '../game/rules.ts';
 
 export * from './types.ts';
-export { getScript, spellAbility, castSpellAbility, BESTOW_INDEX, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility, scriptRef, scriptFaceOf, GRANT_BASE } from './script.ts';
+export { INCUBATOR_TOKEN, withTokenBack, getScript, spellAbility, castSpellAbility, BESTOW_INDEX, activatedAbilitiesOf, isAutomatable, targetSpecs, flatten, parseAbility, scriptRef, scriptFaceOf, GRANT_BASE } from './script.ts';
 export { abilitiesOfInstance, grantedAbilities } from './animate.ts';
 export { FOREIGN_BASE, foreignAbilities, type ForeignAbility } from './grants.ts';
 export { becomeCopy, tokenCopy } from './copy.ts';

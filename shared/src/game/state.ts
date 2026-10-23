@@ -125,6 +125,7 @@ export function resetPermanentState(inst: CardInstance) {
   inst.noUntap = false;
   inst.note = undefined;
   inst.tempKeywords = undefined;
+  inst.imprinted = undefined;
 }
 
 // Zone-change replacement hook: game/hooks.ts (import-free, so engine modules in import cycles can install it).

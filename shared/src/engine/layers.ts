@@ -13,7 +13,7 @@ import type { Animation, CopyExtra } from './types.ts';
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
 const SUPERTYPES = ['Legendary', 'Basic', 'Snow', 'World', 'Ongoing', 'Token'];
 /** Subtypes that aren't creature types (kept by "loses its other creature types"). */
-const NON_CREATURE_SUBTYPES = new Set([
+export const NON_CREATURE_SUBTYPES = new Set([
   'Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Desert', 'Gate', 'Lair', 'Locus', 'Mine', 'Power-Plant', 'Tower', 'Urza\'s', 'Cave', 'Sphere', 'Town',
   'Equipment', 'Vehicle', 'Treasure', 'Clue', 'Food', 'Blood', 'Gold', 'Fortification', 'Contraption', 'Powerstone', 'Map', 'Incubator', 'Attraction',
   'Aura', 'Saga', 'Class', 'Case', 'Room', 'Curse', 'Shrine', 'Cartouche', 'Rune', 'Background', 'Role', 'Shard', 'Siege',

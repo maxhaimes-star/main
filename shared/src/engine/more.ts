@@ -21,8 +21,9 @@ import { addEffect } from './durations.ts';
 import { addExtraCombat } from './combat-rules.ts';
 import { canPayCost, parseCostTokens, payCostNow } from './paycost.ts';
 import { checkTargets } from './play.ts';
+import { tokenMultiplier } from './replacements.ts';
 import { addSplice, createTokenInstance, exiledWithSource, lkiOf, resumeAuto } from './resolve.ts';
-import { flatten, getScript, parseAbility, registerScripts, SCRIPTS, spellAbility, targetSpecs } from './script.ts';
+import { flatten, getScript, INCUBATOR_TOKEN, parseAbility, registerScripts, SCRIPTS, spellAbility, targetSpecs } from './script.ts';
 import { isValidTarget, matchCard, type MatchEnv } from './targets.ts';
 import type { AutoCont, AutoInfo, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
 import type { UniqueRun } from './unique.ts';
@@ -75,6 +76,26 @@ function cmp(a: number, expr: string | undefined, right: (s: string) => number |
     case 'GE': return a >= b;
     default: return a > b;
   }
+}
+
+/** The ResultSubAbilities$ SVar for a die result: "1:A,2-5:B,Else:C" / "Even:A,Odd:B". */
+export function rollResult(spec: string | undefined, n: number): string | undefined {
+  let other: string | undefined;
+  for (const part of (spec ?? '').split(',')) {
+    const k = part.indexOf(':');
+    if (k < 0) continue;
+    const range = part.slice(0, k).trim();
+    const svar = part.slice(k + 1).trim();
+    if (/^Else$/i.test(range)) { other = svar; continue; }
+    if (/^Even$/i.test(range)) { if (n % 2 === 0) return svar; continue; }
+    if (/^Odd$/i.test(range)) { if (n % 2 === 1) return svar; continue; }
+    const m = /^(\d+)(?:-(\d+))?(\+)?$/.exec(range);
+    if (!m) continue;
+    const lo = parseInt(m[1], 10);
+    const hi = m[3] ? Infinity : m[2] != null ? parseInt(m[2], 10) : lo;
+    if (n >= lo && n <= hi) return svar;
+  }
+  return other;
 }
 
 // ------------------------------------------------------------------ pendings
@@ -190,14 +211,17 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       return 'wait';
     }
     case 'RollDice': {
-      const sides = parseInt(p.Sides ?? '6', 10) || 6;
-      const n = 1 + Math.floor(ctx.rng() * sides);
-      log(state, ctx, r.controller, `${pname(state, r.controller)} rolls a ${n} (d${sides}, ${r.sourceName}).`);
-      for (const part of (p.ResultSubAbilities ?? '').split(',')) {
-        const [range, svar] = part.split(':').map((s) => s.trim());
-        const [lo, hi] = range.split('-').map((x) => parseInt(x, 10));
-        if (n >= lo && n <= (Number.isNaN(hi) ? lo : hi)) { r.splice(svar); break; }
-      }
+      // Roll Amount$ dice with Sides$ sides (+ Modifier$). The total picks a ResultSubAbilities$ entry ("1-9:SVar",
+      // "20:SVar", "Else:SVar"; EvenOddResults$ "Even:SVar,Odd:SVar") and is stored in ResultSVar$ for later steps.
+      const sides = r.amount(p.Sides ?? '6', 6) || 6;
+      const count = Math.max(1, r.amount(p.Amount ?? '1', 1) ?? 1);
+      const rolls = Array.from({ length: count }, () => 1 + Math.floor(ctx.rng() * sides));
+      const mod = p.Modifier ? r.amount(p.Modifier, 0) ?? 0 : 0;
+      const n = (p.UseHighestRoll ? Math.max(...rolls) : rolls.reduce((a, b) => a + b, 0)) + mod;
+      log(state, ctx, r.controller, `${pname(state, r.controller)} rolls ${count > 1 ? rolls.join(' + ') : `a ${rolls[0]}`}${mod ? ` ${mod > 0 ? '+' : '-'} ${Math.abs(mod)} = ${n}` : count > 1 ? ` = ${n}` : ''} (${count > 1 ? count : ''}d${sides}, ${r.sourceName}).`);
+      if (p.ResultSVar) (r.chosen.vars ??= {})[p.ResultSVar.trim()] = n;
+      const sub = rollResult(p.ResultSubAbilities, n);
+      if (sub && r.svars[sub]) r.splice(sub);
       return 'ok';
     }
     case 'FlipCoin': {
@@ -209,6 +233,25 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       const sub = won === true ? p.WinSubAbility : won === false ? p.LoseSubAbility : undefined;
       const side = heads ? p.HeadsSubAbility : p.TailsSubAbility;
       for (const svar of [sub, side]) if (svar && r.svars[svar]) r.splice(svar);
+      return 'ok';
+    }
+    case 'Incubate': {
+      // Incubate N (Times$ T): create an Incubator token with N +1/+1 counters ("{2}: Transform this artifact." into a 0/0 Phyrexian).
+      const n = r.amount(p.Amount ?? '1', 1);
+      const times = r.amount(p.Times ?? '1', 1);
+      if (n == null || times == null) { r.manual(); return 'ok'; }
+      const players = p.Defined ? r.defined(p.Defined)?.players ?? [] : [r.controller];
+      const made: string[] = [];
+      for (const owner of players) {
+        const count = times * tokenMultiplier(state, ctx, owner);
+        for (let k = 0; k < count; k++) {
+          const inst = createTokenInstance(state, ctx, owner, INCUBATOR_TOKEN, false);
+          if (n > 0) inst.counters['+1/+1'] = (inst.counters['+1/+1'] ?? 0) + n;
+          made.push(inst.iid);
+        }
+        log(state, ctx, owner, `${pname(state, owner)} incubates ${n}${count > 1 ? ` ${count} times` : ''} (Incubator token${count === 1 ? '' : 's'} with ${n} +1/+1 counter${n === 1 ? '' : 's'}).`);
+      }
+      if (Object.keys(p).some((k) => k.startsWith('Remember'))) r.remember(made);
       return 'ok';
     }
     case 'ChooseCard': return chooseCard(state, ctx, r);
@@ -355,7 +398,7 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
         if (!c || c.zone !== 'battlefield') continue;
         if (p.Mode === 'TurnFaceUp' || p.Mode === 'TurnFace') { c.faceDown = false; log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} is turned face up.`); continue; }
         const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
-        if (!data?.faces || data.faces.length < 2) continue;
+        if (!(c.token?.back && !c.cardId) && (!data?.faces || data.faces.length < 2)) continue;
         const before = cardName(c, ctx.lookup);
         c.transformed = !c.transformed;
         const f = faceOf(c, ctx.lookup);
@@ -1483,6 +1526,14 @@ export function moreVar(state: GameState, r: { controller: string; sourceIid?: s
     case 'Count$Initiative': return me?.designations.includes('Initiative') ? 1 : 0;
     case 'Count$DungeonsCompleted': return me?.counters.dungeons ?? 0;
     case 'Count$TriggerRememberAmount': return r.trig?.amount ?? 0;
+    // "that creature's power" of a reflexive trigger (Minsc & Boo): the trigger's remembered object, last known.
+    case 'TriggerRemembered$CardPower': case 'TriggerRemembered$CardToughness': case 'TriggerRemembered$CardManaCost': {
+      const iid = r.trig?.remembered?.[0];
+      const c = iid ? state.cards[iid] : undefined;
+      const l = (iid ? r.trig?.lki?.[iid] : undefined) ?? (c ? lkiOf(c, ctx, state) : undefined);
+      if (!l) return 0;
+      return v.endsWith('Power') ? l.power : v.endsWith('Toughness') ? l.toughness : l.mv;
+    }
     case 'Count$ResolvedThisTurn': {
       const key = `resolved|${r.item.auto?.cardId}|${r.item.auto?.index}|${r.sourceIid}`;
       return state.turnInfo?.turn === state.turn ? state.turnInfo.activations[key] ?? 0 : 0;

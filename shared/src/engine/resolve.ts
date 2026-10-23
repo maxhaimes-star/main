@@ -6,7 +6,7 @@ import { cardName, effectivePT, faceOf, hasKeyword, isCreature, payFromPool } fr
 import { type Ctx, drawCards, emit, log, moveCard, newInstance, player, randomId, shuffleLibrary } from '../game/state.ts';
 import type { CardInstance, GamePlayer, GameState, StackItem, Step, Zone } from '../game/types.ts';
 import type { TokenData } from '../cards.ts';
-import { chainOf, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, baseVarSupported, splitVarMath, applyVarMath, targetSpecs, unsupportedReason } from './script.ts';
+import { chainOf, withTokenBack, describe, flatten, parseAbility, PHASES, SCRIPTS, specIndexByStep, supportedVar, baseVarSupported, splitVarMath, applyVarMath, targetSpecs, unsupportedReason } from './script.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
 import { lifeGainPrevented, staticsDefineToughness } from './statics.ts';
 import type { AutoCont, AutoInfo, Lki, ParsedAbility, Pending, TargetRef, TargetSpec, TriggerContext } from './types.ts';
@@ -104,6 +104,19 @@ export function addSplice(cont: AutoCont, at: number, svar: string, opts: { reme
   const n = spliceList(face?.svars ?? {}, sp, face?.name).length;
   (cont.splices ??= []).push(sp);
   return n;
+}
+
+/**
+ * A library search that reveals the card it finds ("search your library for an instant or sorcery card, reveal it":
+ * Mystical Tutor, Enlightened Tutor, Expedition Map): Reveal$ True, "reveal" in its text, or a search for a card of a
+ * given type put into a hand or on top of a library (so the opponent can check the type). NoReveal$ True never reveals.
+ */
+function searchReveals(step: ParsedAbility, dest: Zone): boolean {
+  const p = step.params;
+  if (p.NoReveal === 'True') return false;
+  if (p.Reveal === 'True' || /\breveal/i.test(p.SpellDescription ?? '')) return true;
+  const type = (p.ChangeType ?? 'Card').trim();
+  return (dest === 'hand' || dest === 'library') && !/^Card(\.YouOwn|\.YouCtrl)?$/.test(type);
 }
 
 function contAt(r: Run, next: number): AutoCont {
@@ -419,6 +432,8 @@ function amount(state: GameState, ctx: Ctx, r: Run, raw: string | undefined, dfl
   if (s.startsWith('+')) s = s.slice(1);
   else if (s.startsWith('-')) { sign = -1; s = s.slice(1); }
   if (/^\d+$/.test(s)) return sign * parseInt(s, 10);
+  const rolled = r.chosen?.vars?.[s]; // ResultSVar$ (a die roll earlier in this chain)
+  if (rolled != null) return sign * rolled;
   const announced = r.item.auto?.extra?.[s]; // Announce$ values (Intrepid Adversary's NumTimes)
   if (announced != null && /^-?\d+$/.test(announced)) return sign * parseInt(announced, 10);
   // An SVar name, or an inline variable ("NumCards$ PlayerCountRegisteredOpponents$HasPropertyLostLifeThisTurn").
@@ -848,6 +863,13 @@ export function exiledWithSource(state: GameState, src: string | undefined): str
   ].filter((x) => state.cards[x]?.zone === 'exile');
 }
 
+/** Imprint$ True: the source permanent keeps the exiled cards (Chrome Mox's "the exiled card's colors"). */
+function imprintOn(state: GameState, item: StackItem, iids: string[]) {
+  const src = item.sourceIid ? state.cards[item.sourceIid] : undefined;
+  if (!src || src.zone !== 'battlefield') return;
+  src.imprinted = [...new Set([...(src.imprinted ?? []), ...iids.filter((x) => state.cards[x]?.zone === 'exile')])];
+}
+
 function rememberOnCard(state: GameState, item: StackItem, iids: string[]) {
   const src = item.sourceIid ?? item.iid;
   if (!src || item.kind === 'spell') return;
@@ -855,7 +877,8 @@ function rememberOnCard(state: GameState, item: StackItem, iids: string[]) {
 }
 
 /** Create a token on the battlefield (Stage 2: emits an "enters the battlefield" event). */
-export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, token: TokenData, tapped: boolean, cardId?: string): CardInstance {
+export function createTokenInstance(state: GameState, ctx: Ctx, owner: string, token0: TokenData, tapped: boolean, cardId?: string): CardInstance {
+  const token = withTokenBack(token0);
   const inst = newInstance(state, ctx.rng, owner, 'battlefield', cardId, token);
   inst.tapped = tapped;
   inst.summoningSick = true;
@@ -922,11 +945,15 @@ function extApi(state: GameState, ctx: Ctx, r: Run, i: number, remember: (iids: 
 
 type StepResult = 'ok' | 'wait';
 
+/** Test / audit hook: called as each step of an automated chain is reached (scripts/chain-audit.ts). */
+export const chainProbe: { onStep?: (item: StackItem, step: ParsedAbility) => void; /** the step did nothing by design (condition false, "when you do" that didn't happen) */ onSkip?: (item: StackItem, step: ParsedAbility) => void } = {};
+
 function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   const step = r.steps[i];
   const p = step.params;
   const me = player(state, r.controller);
   r.cur = i;
+  chainProbe.onStep?.(r.item, step);
   const reason = unsupportedReason(step);
   if (step.api === 'Effect' && p.AILogic === 'CantRegenerate') return 'ok'; // "can't be regenerated": nothing to do
   if (reason) {
@@ -939,9 +966,10 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   if (step.params.ValidTgts && r.specOf[i] == null && !r.lateTargets?.[i]) return askLateTargets(state, ctx, r, i);
   // "... unless <player> pays <cost>" / UnlessSwitched "if <player> pays <cost>, ..." (also "counter it unless its controller pays").
   if (step.params.UnlessCost && r.unless?.[i] === undefined) return askUnless(state, ctx, r, i);
-  if (r.unless?.[i] === false) return 'ok';
+  if (r.unless?.[i] === false) { chainProbe.onSkip?.(r.item, step); return 'ok'; }
   const cond = condition(state, ctx, r, i);
   if (cond === false) {
+    chainProbe.onSkip?.(r.item, step);
     log(state, ctx, r.controller, `${r.sourceName}: condition not met — skipped (${step.description}).`);
     return 'ok';
   }
@@ -1040,10 +1068,14 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const n = amount(state, ctx, r, p.NumCards, 1);
       const o = objects(state, r, i, 'You');
       if (n == null || !o) return bad();
+      const drawn: string[] = [];
       for (const pid of o.players) {
-        const got = drawCards(state, player(state, pid), replaceDraws(state, ctx, pid, n));
+        const pl = player(state, pid);
+        const got = drawCards(state, pl, replaceDraws(state, ctx, pid, n));
+        if (got > 0) drawn.push(...pl.zones.hand.slice(-got));
         log(state, ctx, pid, `${pname(state, pid)} draws ${got} card${got === 1 ? '' : 's'}.`);
       }
+      if (p.RememberDrawn) remember(drawn); // The Royal Scions: "when you do" checks the drawn cards
       return 'ok';
     }
     case 'Destroy': {
@@ -1159,7 +1191,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
         const created = startPicks(state, ctx, [{
           kind: 'pick', action: 'move', chooser: chooserPid, candidates: cands, left: Math.min(n, cands.length), optional,
           dest, params: p, ...(host ? { untilHost: host } : {}), ...(origin === 'hand' && ownerPid !== chooserPid ? { reveal: ownerPid } : {}),
-          ...(search && p.Shuffle !== 'False' ? { shuffle: ownerPid } : {}),
+          ...(search && p.Shuffle !== 'False' ? { shuffle: ownerPid } : {}), ...(search && searchReveals(step, dest) ? { revealChosen: true } : {}),
           label: `${r.sourceName}: ${search ? `search for ${p.ChangeTypeDesc ? `a ${p.ChangeTypeDesc}` : 'a card'} to put` : 'choose a card to put'} ${where}${dest === 'library' && n > 1 ? ' (the last one you choose ends up on top)' : ''}`,
         }], contAt(r, i + 1));
         if (!created && search && p.Shuffle !== 'False') shuffleLibrary(state, chooser, ctx.rng);
@@ -1186,7 +1218,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       }
       if (untilHost && exiled.length) addEffect(state, ctx, { kind: 'exiled', controller: r.controller, until: 'hostLeaves', hostIid: untilHost, cards: exiled });
       remember(cards.filter((x) => state.cards[x]));
-      if (p.Imprint === 'True') r.chosen = { ...(r.chosen ?? {}), imprinted: cards.filter((x) => state.cards[x]) };
+      if (p.Imprint === 'True') { r.chosen = { ...(r.chosen ?? {}), imprinted: cards.filter((x) => state.cards[x]) }; imprintOn(state, r.item, r.chosen.imprinted!); }
       if (p.Shuffle === 'True') for (const pid of new Set(cards.map((x) => state.cards[x]?.owner).filter(Boolean) as string[])) shuffleLibrary(state, player(state, pid), ctx.rng);
       const destLabel = dest === 'library' ? 'its owner\'s library' : dest === 'battlefield' ? 'the battlefield' : `${dest}`;
       log(state, ctx, r.controller, moved.length ? `${r.sourceName}: ${moved.join(', ')} → ${destLabel}.` : `${r.sourceName}: nothing to move.`);
@@ -1284,6 +1316,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       const text = describe(p.TriggerDescription ?? p.SpellDescription ?? 'Reflexive trigger', r.sourceName);
       const times = p.TriggerAmount === 'Remembered$Amount' ? r.remembered.length : 1;
       const rememberedAmount = p.RememberSVarAmount ? amount(state, ctx, r, p.RememberSVarAmount, 0) : undefined;
+      if (times <= 0) chainProbe.onSkip?.(r.item, step);
       for (let k = 0; k < times; k++) (state.triggerQueue ??= []).push({
         id: randomId(ctx.rng), controller: r.controller, sourceIid: r.sourceIid, sourceName: r.sourceName, text: `${r.sourceName}: ${text}`,
         auto: { cardId: auto.cardId, face: auto.face, source: 'trigger', index: -1, svar: p.Execute, targets: [], trigger: { ...(r.trig ?? {}), mode: 'Immediate', remembered: [...r.remembered], lki: { ...r.lki }, ...(rememberedAmount != null ? { amount: rememberedAmount } : {}) } },
@@ -1589,7 +1622,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
       for (const pid of ps) {
         const cands = state.battlefield.filter((x) => state.cards[x].controller === pid && matchCard(state.cards[x], sacValid, { ...E, controller: pid }) !== false);
         if (!cands.length) { log(state, ctx, pid, `${pname(state, pid)} has nothing to sacrifice.`); continue; }
-        picks.push({ kind: 'pick', action: 'sacrifice', chooser: pid, candidates: cands, left: Math.min(n, cands.length), optional: false, label: `${r.sourceName}: choose a permanent to sacrifice` });
+        picks.push({ kind: 'pick', action: 'sacrifice', chooser: pid, candidates: cands, left: Math.min(n, cands.length), optional: false, params: p, label: `${r.sourceName}: choose a permanent to sacrifice` });
       }
       return startPicks(state, ctx, picks, contAt(r, i + 1)) ? 'wait' : 'ok';
     }
@@ -2151,8 +2184,12 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
         log(state, ctx, pid, `${pname(state, c.owner)} discards ${nm}.`);
         if (data.cont && Object.keys(data.params ?? {}).some((k) => k.startsWith('Remember'))) data.cont.remembered = [...data.cont.remembered, value];
       } else if (data.action === 'sacrifice') {
+        // RememberSacrificed$ (Minsc & Boo: "when you do ... that creature's power"): remembered with its last known information.
+        const keep = !!data.cont && Object.keys(data.params ?? {}).some((k) => k.startsWith('Remember'));
+        if (keep) data.cont!.lki[value] = lkiOf(c, ctx, state);
         moveCard(state, ctx, value, 'graveyard', { cause: 'sacrifice' });
         log(state, ctx, pid, `${who.name} sacrifices ${nm}.`);
+        if (keep) data.cont!.remembered = [...data.cont!.remembered, value];
       } else if (data.action === 'blight') {
         blightOn(state, ctx, value, parseInt(data.params?.Num ?? '1', 10) || 1, data.label.replace(/:.*/, ''));
       } else if (data.action === 'tap') {
@@ -2174,7 +2211,10 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
           rememberOnCard(state, data.cont.item, data.cont.remembered);
         }
         // Imprint$ True (Currency Converter: "if it's a land card ..."): later steps refer to the chosen card as Imprinted.
-        if (data.cont && p.Imprint === 'True' && state.cards[value]) data.cont.chosen = { ...(data.cont.chosen ?? {}), imprinted: [...(data.cont.chosen?.imprinted ?? []), value] };
+        if (data.cont && p.Imprint === 'True' && state.cards[value]) {
+          data.cont.chosen = { ...(data.cont.chosen ?? {}), imprinted: [...(data.cont.chosen?.imprinted ?? []), value] };
+          imprintOn(state, data.cont.item, [value]);
+        }
         const hidden = (z: Zone) => (z === 'hand' || z === 'library') && !data.revealChosen;
         const moved = state.cards[value];
         if (data.revealChosen && moved) { moved.revealedTo = state.players.map((q) => q.pid); log(state, ctx, pid, `${who.name} reveals ${nm}.`); }
