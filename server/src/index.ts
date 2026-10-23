@@ -8,6 +8,7 @@ import type { ClientMsg } from '@ojb/shared';
 import { type RoomRecord, Rooms } from './rooms.ts';
 import { registerCardDbRoutes } from './carddb-routes.ts';
 import { BotDriver } from './botdriver.ts';
+import { loadRoomSecret, Restorer, SnapshotCodec } from './snapshot.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 3001);
@@ -46,8 +47,26 @@ load();
 setInterval(save, 5000);
 for (const sig of ['SIGINT', 'SIGTERM'] as const) process.on(sig, () => { rooms.dirty.add('x'); save(); process.exit(0); });
 
+// ------------------------------------------------------------ snapshots (server/src/snapshot.ts)
+const roomSecret = loadRoomSecret(DATA_DIR);
+if (roomSecret.source !== 'env') console.warn('ROOM_SECRET is not set: room snapshots stop working when this server loses DATA_DIR. Set ROOM_SECRET to a long random string.');
+const codec = new SnapshotCodec(roomSecret.secret);
+const restorer = new Restorer(rooms, codec);
+/** Rooms whose members need a fresh snapshot (sent at most every SNAPSHOT_MS per room). */
+const snapPending = new Set<string>();
+const SNAPSHOT_MS = Number(process.env.SNAPSHOT_MS ?? 2000);
+
 // ------------------------------------------------------------ http
 const app = express();
+// A member's browser re-creates a room the server lost (restart / spin-down) from its snapshot. Before the 1mb JSON limit.
+app.post('/api/rooms/restore', express.json({ limit: '25mb' }), (req, res) => {
+  const r = restorer.restore(req.body?.blob, req.body?.token);
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  if (r.restored) console.log(`Restored room ${r.roomId} from a member's snapshot`);
+  bots.kick(r.roomId);
+  broadcast(r.roomId);
+  res.json({ roomId: r.roomId, restored: r.restored });
+});
 app.use(express.json({ limit: '1mb' }));
 
 app.post('/api/rooms', (req, res) => {
@@ -55,15 +74,17 @@ app.post('/api/rooms', (req, res) => {
   res.json(rooms.create(String(roomName ?? ''), String(name ?? '')));
 });
 app.post('/api/rooms/:id/join', (req, res) => {
-  const r = rooms.join(req.params.id.toLowerCase(), String(req.body?.name ?? ''));
-  if (!r) return res.status(404).json({ error: 'Room not found' });
-  broadcast(req.params.id.toLowerCase());
-  res.json(r);
+  const rec = rooms.find(req.params.id);
+  const r = rec && rooms.join(rec.state.id, String(req.body?.name ?? ''));
+  if (!rec || !r) return res.status(404).json({ error: 'Room not found' });
+  broadcast(rec.state.id);
+  res.json({ ...r, roomId: rec.state.id });
 });
 app.get('/api/rooms/:id', (req, res) => {
-  const rec = rooms.rooms.get(req.params.id.toLowerCase());
+  const rec = rooms.find(req.params.id);
   if (!rec) return res.status(404).json({ error: 'Room not found' });
-  res.json({ id: rec.state.id, name: rec.state.name, phase: rec.state.phase, players: rec.state.players.map((p) => p.name) });
+  const host = rec.state.players.find((p) => p.id === rec.state.hostId);
+  res.json({ id: rec.state.id, name: rec.state.name, phase: rec.state.phase, host: host?.name ?? null, players: rec.state.players.map((p) => p.name) });
 });
 app.get('/healthz', (_req, res) => res.send('ok'));
 registerCardDbRoutes(app);
@@ -85,6 +106,7 @@ const sockets = new Map<string, { roomId: string; pid: string; socket: Socket; s
 function broadcast(roomId: string) {
   const rec = rooms.rooms.get(roomId);
   if (!rec) return;
+  snapPending.add(roomId);
   for (const { roomId: r, pid, socket, sent } of sockets.values()) {
     if (r !== roomId) continue;
     const view = rooms.view(rec, pid);
@@ -108,9 +130,11 @@ function setConnected(roomId: string, pid: string) {
 
 io.on('connection', (socket) => {
   const { roomId, token } = socket.handshake.auth as { roomId?: string; token?: string };
-  const auth = roomId && token ? rooms.auth(roomId.toLowerCase(), token) : null;
+  const auth = roomId && token ? rooms.auth(roomId, token) : null;
   if (!auth) {
-    socket.emit('fatal', 'Room not found or your seat expired — rejoin from the home page.');
+    // 'missing': the server doesn't know the room (it restarted): the client restores it from its snapshot or waits for a member who can.
+    if (roomId && !rooms.find(roomId)) socket.emit('missing', roomId);
+    else socket.emit('fatal', 'Room not found or your seat expired — rejoin from the home page.');
     socket.disconnect(true);
     return;
   }
@@ -142,6 +166,19 @@ io.on('connection', (socket) => {
     broadcast(rid);
   });
 });
+
+setInterval(() => {
+  for (const rid of snapPending) {
+    const rec = rooms.rooms.get(rid);
+    if (!rec) continue;
+    const members = [...sockets.values()].filter((x) => x.roomId === rid);
+    if (members.length) {
+      const snap = { roomId: rid, v: rec.state.updatedAt, takenAt: Date.now(), blob: codec.seal(rec) };
+      for (const m of members) m.socket.emit('snapshot', snap);
+    }
+  }
+  snapPending.clear();
+}, SNAPSHOT_MS);
 
 setInterval(() => {
   for (const rid of rooms.tick(Date.now())) broadcast(rid);

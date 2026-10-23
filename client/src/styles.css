@@ -70,6 +70,13 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .lobby-side, .side { overflow: auto; position: sticky; top: 0; max-height: calc(100vh - 32px); }
 @media (max-width: 900px) { .lobby, .draft, .auction, .deckbuilder { grid-template-columns: 1fr; } .side, .lobby-side { position: static; max-height: none; } }
 .share { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.invite { display: flex; gap: 12px 20px; align-items: center; flex-wrap: wrap; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.invite-code { display: flex; flex-direction: column; line-height: 1.1; }
+.invite-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.invite-code .code { font: 700 34px/1.1 ui-monospace, 'SF Mono', Menlo, Consolas, monospace; letter-spacing: .18em; color: var(--accent2); user-select: all; }
+.invite-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.invite-link { font-size: 12px; overflow-wrap: anywhere; }
+.room-code-input { text-transform: uppercase; letter-spacing: .12em; font-family: ui-monospace, Menlo, Consolas, monospace; }
 .players { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .players li { background: var(--bg2); border: 1px solid var(--line); padding: 6px 10px; border-radius: 6px; display: flex; align-items: center; gap: 6px; }
 .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }

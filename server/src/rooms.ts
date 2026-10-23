@@ -8,6 +8,7 @@ import {
 } from '@ojb/shared';
 import { CUBE, getCard, isCubeCard } from '@ojb/shared/src/cube.ts';
 import { seededRng } from '@ojb/shared/src/boosters.ts';
+import { canonicalRoomId, generateRoomCode } from '@ojb/shared/src/roomcode.ts';
 import { carddbAvailable, formatLegality, getCardById, resolveDeck } from './carddb.ts';
 import { cardPayload, checkBoosterSet, ensureCards, installCardDb, setBooster } from './roomcards.ts';
 
@@ -32,8 +33,7 @@ export class Rooms {
   dirty = new Set<string>();
 
   create(roomName: string, hostName: string): { roomId: string; token: string; pid: string } {
-    let roomId = id(6).toLowerCase().replace(/[^a-z0-9]/g, 'x');
-    while (this.rooms.has(roomId)) roomId = id(6).toLowerCase().replace(/[^a-z0-9]/g, 'x');
+    const roomId = this.newCode();
     const pid = id(10);
     const token = id(24);
     const now = Date.now();
@@ -49,8 +49,18 @@ export class Rooms {
     return { roomId, token, pid };
   }
 
+  /** A short room code (4 letters, shared/src/roomcode.ts) no live room uses. */
+  newCode(): string {
+    return generateRoomCode((c) => this.rooms.has(c), (n) => crypto.randomInt(n));
+  }
+
+  /** The live room for an id as typed or linked (any case; legacy 6-character ids too). */
+  find(raw: string): RoomRecord | undefined {
+    return this.rooms.get(canonicalRoomId(raw));
+  }
+
   join(roomId: string, name: string): { token: string; pid: string; spectator: boolean } | null {
-    const rec = this.rooms.get(roomId);
+    const rec = this.find(roomId);
     if (!rec) return null;
     const pid = id(10);
     const token = id(24);
@@ -65,12 +75,12 @@ export class Rooms {
       return { token, pid, spectator: false };
     }
     rec.spectators[pid] = cleanName(name);
-    this.dirty.add(roomId);
+    this.dirty.add(rec.state.id);
     return { token, pid, spectator: true };
   }
 
   auth(roomId: string, token: string): { rec: RoomRecord; pid: string } | null {
-    const rec = this.rooms.get(roomId);
+    const rec = this.find(roomId);
     const pid = rec?.tokens[token];
     return rec && pid ? { rec, pid } : null;
   }
