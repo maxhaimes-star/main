@@ -289,9 +289,10 @@ export function ContextMenu({ x, y, items, title, onClose }: { x: number; y: num
     window.addEventListener('keydown', esc);
     return () => { clearTimeout(t); window.removeEventListener('mousedown', close); window.removeEventListener('touchstart', close); window.removeEventListener('keydown', esc); };
   }, [onClose]);
-  const openSub = (i: number, el: HTMLElement) => setOpen({ i, rect: el.getBoundingClientRect() });
+  const openedAt = useRef(0);
+  const openSub = (i: number, el: HTMLElement) => { openedAt.current = Date.now(); setOpen({ i, rect: el.getBoundingClientRect() }); };
   return (
-    <div ref={ref} className="ctx-menu" style={clampedStyle(pos)} onScroll={() => setOpen(null)}>
+    <div ref={ref} className="ctx-menu" style={clampedStyle(pos)} onScroll={() => { if (Date.now() - openedAt.current > 300) setOpen(null); }}>
       {title && <div className="ctx-title">{title}</div>}
       {items.length === 0 && <div className="ctx-item disabled">No actions available</div>}
       {items.map((it, i) => it.sub ? (

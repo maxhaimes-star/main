@@ -153,7 +153,7 @@ for (const [w, h] of VIEWPORTS) {
     await A.waitForTimeout(150);
     if (!(await A.locator('.ctx-menu, .stops-pop').count())) continue;
     for (const p of await A.evaluate(menuProblems)) fail(`${w}x${h} ${label} menu: ${p}`);
-    const subs = A.locator('.ctx-menu .ctx-item.has-sub');
+    const subs = A.locator('.ctx-menu .ctx-item.has-sub:not(.disabled)');
     if (await subs.count()) {
       await subs.last().click();
       await A.waitForTimeout(150);
