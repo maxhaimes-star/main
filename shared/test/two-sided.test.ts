@@ -601,4 +601,25 @@ describe('A1.4: modal spells (Charms, Commands, Confluences, escalate, "choose o
     expect(g.players[0].zones.hand.length).toBe(hand - 1 + 2);
     expect(applyAction(g, 'a', { t: 'cast', iid: toZone(g, ctx, 'a', 'flame_of_anor', 'hand'), modes: ['DBDraw', 'DBDestroy', 'DBDamage'], targets: [...t, card(theirs[0])[0]] }, ctx)).toBeTruthy();
   });
+
+  it('Deceiver Exarch: the enters trigger asks for a mode, then its target (tap an opponent\'s permanent)', () => {
+    const { g, ctx, theirs } = modalBoard('deceiver_exarch');
+    const ex = toZone(g, ctx, 'a', 'deceiver_exarch', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: ex });
+    drain(g, ctx, (q) => q.options.find((o) => /^Tap target/.test(o.label))?.value ?? q.options[0].value);
+    expect(g.cards[ex].zone).toBe('battlefield');
+    expect(theirs.some((x) => g.cards[x].tapped) || g.battlefield.some((x) => g.cards[x].controller === 'b' && g.cards[x].tapped), logTail(g, 12)).toBe(true);
+    expect(noManual(g)).toEqual([]);
+  });
+
+  it('Cosmogrand Zenith: the second spell each turn triggers a choice (two Soldiers)', () => {
+    const { g, ctx } = modalBoard('cosmogrand_zenith', ['lightning_bolt', 'lightning_bolt']);
+    put(g, ctx, 'a', 'cosmogrand_zenith');
+    for (const o of g.players[0].zones.library.length ? [toZone(g, ctx, 'a', 'lightning_bolt', 'hand'), toZone(g, ctx, 'a', 'lightning_bolt', 'hand', g.players[0].zones.hand.slice())] : []) {
+      act(g, ctx, 'a', { t: 'cast', iid: o, targets: [[{ kind: 'player', pid: 'b' }]] });
+      drain(g, ctx, (q) => q.options.find((x) => /Human Soldier/i.test(x.label))?.value ?? q.options[0].value);
+    }
+    expect(g.battlefield.filter((x) => g.cards[x].token?.name === 'Human Soldier'), logTail(g, 15)).toHaveLength(2);
+    expect(noManual(g)).toEqual([]);
+  });
 });
