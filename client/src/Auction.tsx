@@ -132,7 +132,7 @@ export function Auction({ view, send, skew }: RoomProps) {
           </div>
           {me && watchPool === view.me ? (
             <div className="picks">
-              <p className="muted">Click a card to move it between your main deck and sideboard; the split carries over to deckbuilding.</p>
+              <p className="muted">Click a card to move it between your main deck and sideboard; the split carries over to your deck.</p>
               <div className="picks-main"><PoolSummary ids={myMain} title="Main deck" tapLabel="Move to sideboard" onClick={(id) => setMain(multisetDiff(myMain, [id]))} /></div>
               <div className="picks-side"><PoolSummary ids={mySide} title="Sideboard" tapLabel="Move to main deck" onClick={(id) => setMain([...myMain, id])} /></div>
             </div>

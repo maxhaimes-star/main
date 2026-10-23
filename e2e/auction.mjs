@@ -76,7 +76,7 @@ while (Date.now() < until) {
   // Pass on the rest: once a card has been moved to the sideboard, end the auction (the bots go along).
   if (movedToSide) {
     const won = await myWon();
-    await page.getByLabel('Pass on the rest').check();
+    await page.getByLabel('Pass on the rest').click();
     await page.getByText('Deckbuilding').waitFor({ timeout: 8000 });
     lastWon = won;
     break;
@@ -149,7 +149,7 @@ while (Date.now() < broke && !(await page.getByText('Deckbuilding').count())) {
   if (/unsold/.test(await page.locator('.results').innerText().catch(() => ''))) sawUnsold = true;
   const p = page.getByRole('button', { name: 'Pass', exact: true });
   if (await p.count() && await p.isEnabled().catch(() => false)) await p.click({ timeout: 500 }).catch(() => {});
-  if (sawUnsold && Date.now() > broke - 60_000) { await page.getByLabel('Pass on the rest').check().catch(() => {}); }
+  if (sawUnsold && Date.now() > broke - 60_000) { await page.getByLabel('Pass on the rest').click({ timeout: 1000 }).catch(() => {}); }
   await settle(page, 300);
 }
 await page.getByText('Deckbuilding').waitFor({ timeout: 10000 });
