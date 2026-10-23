@@ -109,6 +109,10 @@ export interface DraftState {
   picks: string[][];
   /** Per seat: the picks the player has moved into their main deck (the rest are sideboard). Carried into deckbuilding. */
   main?: string[][];
+  /** Per seat: the card the player highlighted in their current pack (auto-picked if the timer runs out). */
+  highlight?: (string | null)[];
+  /** Bots: colour signals per seat (strong cards seen late in packs, see bots.ts noteSignals). */
+  signals?: Record<Color, number>[];
   /** Packs not yet opened, per round per seat. */
   unopened: string[][][];
   pickNumber: number[];
@@ -137,11 +141,17 @@ export interface AuctionState {
     nominatedBy: string;
     /** Players who passed since the last bid. */
     passes: string[];
+    /** When the card was put up. */
+    openedAt?: number;
   };
+  /** Per player: the won cards in the main deck (new wins start there; the rest is sideboard). Carried into deckbuilding. */
+  main?: Record<string, string[]>;
+  /** Players who chose "Pass on the rest": when every player has, the remaining cards go unsold and the auction ends. */
+  passRest?: string[];
   budgets: Record<string, number>;
   pools: Record<string, string[]>;
   /** Recent results for the feed. */
-  /** pid null = unsold (skipped and discarded). */
+  /** pid null = unsold (nobody bid, or everyone passed on the rest). */
   results: { cardId: string; pid: string | null; amount: number }[];
   done: boolean;
 }
@@ -178,6 +188,8 @@ export interface RoomState {
   pools: Record<string, string[]>;
   decks: Record<string, Deck>;
   matches: Match[];
+  /** The random seed the current event's packs were dealt from (a fresh one for every event). */
+  seed?: number;
   /** Printing per card id for set events ("DMU:94"), so images show the right art. */
   prints?: Record<string, string>;
   chat: ChatMessage[];

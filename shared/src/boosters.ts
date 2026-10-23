@@ -189,6 +189,13 @@ export function generateBooster(set: SetData, env: BoosterEnv, rng: () => number
   return new Generator(set, env, rng).run();
 }
 
+const RARITY_ORDER: Record<string, number> = { M: 0, R: 1, S: 2, U: 3, C: 4, L: 5 };
+
+/** A booster as players see it: mythics and rares at the top, then uncommons, commons and lands (stable within a rarity). */
+export function rareFirst(cards: BoosterCard[]): BoosterCard[] {
+  return cards.map((c, i) => ({ c, i })).sort((x, y) => (RARITY_ORDER[x.c.rarity] ?? 6) - (RARITY_ORDER[y.c.rarity] ?? 6) || x.i - y.i).map((x) => x.c);
+}
+
 /** Small deterministic PRNG (mulberry32) for reproducible packs. */
 export function seededRng(seed: number): () => number {
   let a = seed >>> 0;

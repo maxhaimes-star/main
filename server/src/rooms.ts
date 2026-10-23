@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import {
   type ClientMsg, type DraftView, type Match, type MatchView, type Player, type RoomState, type RoomView,
-  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, leaveSeat, reclaimSeat, setDraftMain, emptyDeck,
-  finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, placeBid, skipCard, seatedPlayers, startAuction, startDraft,
+  applyAction, auctionTick, createGame, cubeList, DEFAULT_SETTINGS, draftPick, draftTick, leaveSeat, reclaimSeat, setDraftMain, highlightCard, emptyDeck,
+  finishPoolsWithBots, multisetDiff, nominate, passDirection, passLot, passRest, placeBid, setAuctionMain, seatedPlayers, startAuction, startDraft,
   startSealed, viewFor, type Color, type RoomSettings, type Deck, startDraftWithPacks, startSealedWithPools,
   CONSTRUCTED_FORMATS, type CardPayload, botDeck, BOT_LEVELS, type BotLevel,
 } from '@ojb/shared';
 import { CUBE, getCard, isCubeCard } from '@ojb/shared/src/cube.ts';
+import { seededRng } from '@ojb/shared/src/boosters.ts';
 import { canonicalRoomId, generateRoomCode } from '@ojb/shared/src/roomcode.ts';
 import { carddbAvailable, formatLegality, getCardById, resolveDeck } from './carddb.ts';
 import { cardPayload, checkBoosterSet, ensureCards, installCardDb, setBooster } from './roomcards.ts';
@@ -139,6 +140,7 @@ export class Rooms {
         s.decks = {};
         s.matches = [];
         delete s.prints;
+        delete s.seed;
         return null;
       }
       case 'pick': {
@@ -161,6 +163,10 @@ export class Rooms {
         delete rec.spectators[pid];
         return reclaimSeat(s, target.id, now);
       }
+      case 'highlight': {
+        if (!me || s.phase !== 'drafting') return 'Not drafting';
+        return highlightCard(s, me.seat, msg.cardId ?? null);
+      }
       case 'draftMain': {
         if (!me || s.phase !== 'drafting') return 'Not drafting';
         return setDraftMain(s, me.seat, msg.main);
@@ -168,22 +174,34 @@ export class Rooms {
       case 'nominate': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return nominate(s, pid, msg.cardId, now, msg.amount == null ? undefined : Math.floor(Number(msg.amount)));
+        const err = nominate(s, pid, msg.cardId, now, msg.amount == null ? undefined : Math.floor(Number(msg.amount)));
+        if (!err) this.afterPools(s);
+        return err;
       }
-      case 'skipLot': {
+      case 'auctionMain': {
+        if (!me || s.phase !== 'auction') return 'No auction';
+        return setAuctionMain(s, pid, msg.main);
+      }
+      case 'passRest': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return skipCard(s, pid, msg.cardId, now);
+        const err = passRest(s, pid, !!msg.on, now);
+        if (!err) this.afterPools(s);
+        return err;
       }
       case 'passLot': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return passLot(s, pid, now);
+        const err = passLot(s, pid, now);
+        if (!err) this.afterPools(s);
+        return err;
       }
       case 'bid': {
         if (!me || s.phase !== 'auction') return 'No auction';
         if (me.away) return 'A bot is playing your seat — take it back first';
-        return placeBid(s, pid, Math.floor(Number(msg.amount)), now);
+        const err = placeBid(s, pid, Math.floor(Number(msg.amount)), now);
+        if (!err) this.afterPools(s);
+        return err;
       }
       case 'saveDeck': {
         if (!me || !s.pools[pid]) return 'You have no pool';
@@ -225,6 +243,8 @@ export class Rooms {
           if (!pl) return 'Unknown player';
           if (pl.away) return `${pl.name} left — a bot is only holding their seat`;
           if (!s.decks[p] || deckSize(s.decks[p]) < 1) return `${pl.name} hasn't built a deck yet`;
+          // Nobody (the host included) can start a match for a player who hasn't said their deck is ready.
+          if (!pl.isBot && !s.decks[p].ready) return `${pl.name} is not ready yet (still building their deck)`;
         }
         if (s.matches.some((m) => !m.winner && (m.players.includes(a) || m.players.includes(b)))) return 'One of those players is already in a match';
         if (s.settings.mode === 'constructed') {
@@ -317,8 +337,11 @@ export class Rooms {
       const err = this.checkSets(s.settings.setCodes);
       if (err) return err;
     }
+    // Every event is dealt from a fresh random seed (kept on the room so a deal can be reproduced).
+    const seed = crypto.randomBytes(4).readUInt32BE();
+    const deal = seededRng(seed);
     // Random seating, like a real draft table.
-    const order = players.map((p) => ({ p, r: rng() })).sort((x, y) => x.r - y.r).map((x, i) => ({ ...x.p, seat: i }));
+    const order = players.map((p) => ({ p, r: deal() })).sort((x, y) => x.r - y.r).map((x, i) => ({ ...x.p, seat: i }));
     s.players = order;
     const list = cubeList(s, CUBE.list);
     const n = order.length;
@@ -326,7 +349,7 @@ export class Rooms {
       if (s.settings.source === 'set' && s.settings.mode === 'draft') {
         const prints: Record<string, string> = {};
         const rounds = s.settings.setCodes.map((code) => order.map(() => {
-          const b = setBooster(code, rng);
+          const b = setBooster(code, deal);
           for (const [k, v] of Object.entries(b.prints)) prints[k] ??= v;
           return b.ids;
         }));
@@ -337,7 +360,7 @@ export class Rooms {
         const prints: Record<string, string> = {};
         const codes = s.settings.setCodes;
         const pools = order.map(() => Array.from({ length: s.settings.sealedPacks }, (_, i) => {
-          const b = setBooster(codes[i % codes.length], rng);
+          const b = setBooster(codes[i % codes.length], deal);
           for (const [k, v] of Object.entries(b.prints)) prints[k] ??= v;
           return b.ids;
         }).flat());
@@ -345,23 +368,24 @@ export class Rooms {
         startSealedWithPools(s, pools);
       } else if (s.settings.mode === 'draft') {
         if (n * s.settings.packs * s.settings.packSize > list.length) return `Not enough cards: ${n} × ${s.settings.packs} × ${s.settings.packSize} > ${list.length}`;
-        startDraft(s, list, rng, getCard, now);
+        startDraft(s, list, deal, getCard, now);
       } else if (s.settings.mode === 'sealed') {
         if (n * s.settings.sealedPacks * s.settings.sealedPackSize > list.length) return 'Not enough cards in the cube for that many sealed pools';
-        startSealed(s, list, rng, getCard);
+        startSealed(s, list, deal, getCard);
       } else {
-        startAuction(s, list, rng, getCard, now);
+        startAuction(s, list, deal, getCard, now);
       }
     } catch (e) {
       return (e as Error).message;
     }
+    s.seed = seed;
     this.afterPools(s);
     return null;
   }
 
   /** When drafting ends, bots build decks. */
   afterPools(s: RoomState) {
-    if (s.phase === 'deckbuilding' && s.players.some((p) => p.isBot && !s.decks[p.id]?.ready)) finishPoolsWithBots(s, getCard);
+    if (s.phase === 'deckbuilding' && s.players.some((p) => p.isBot && !p.away && !s.decks[p.id]?.ready)) finishPoolsWithBots(s, getCard);
   }
 
   /**

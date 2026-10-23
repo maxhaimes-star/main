@@ -109,6 +109,9 @@ describe('bot player: main phase', () => {
     const s2 = put(bolt.g, bolt.ctx, 'b', 'embereth_shieldbreaker');
     put(bolt.g, bolt.ctx, 'b', 'griselbrand');
     setHand(bolt.g, bolt.ctx, 'a', ['lightning_bolt']);
+    // Instant removal for a small creature is held for the opponent's turn (ai-combat.test.ts): look at their end step.
+    expect(decide(bolt.g, 'a')).toEqual({ t: 'pass' });
+    Object.assign(bolt.g, { activePlayer: 'b', step: 'end', priority: 'a' });
     expect(decide(bolt.g, 'a')).toMatchObject({ t: 'cast', targets: [[{ kind: 'card', iid: s2 }]] });
     // ... and at the face when that's lethal.
     bolt.g.players[1].life = 3;

@@ -219,6 +219,18 @@ function survives(x: Stats, y: Stats): boolean {
   return xFirst && kills(x, y);
 }
 
+const firstStrikes = (s: Stats) => s.kw('First Strike') || s.kw('Double Strike');
+
+/** Does `x` get to deal its combat damage to `y`, i.e. `y` doesn't kill it first with first strike? */
+function strikesBack(x: Stats, y: Stats): boolean {
+  return !(firstStrikes(y) && !firstStrikes(x) && kills(y, x));
+}
+
+/** `x` kills `y` in a fight between them, first strike included (a 2/1 never kills a first striker that kills it first). */
+function killsInCombat(x: Stats, y: Stats): boolean {
+  return kills(x, y) && strikesBack(x, y);
+}
+
 /** Can `b` block `a` (evasion keywords; a cheap version of blockError that works in any step)? */
 function canBlockKw(a: Stats, b: Stats): boolean {
   if (!b.creature) return false;
@@ -609,6 +621,11 @@ function priorityAction(ctx: Ctx): GameAction {
       mem.blockPlan = { key: `${v.turn}|none`, blocks: [] };
       return pass;
     }
+    // Before blocking: held instant-speed removal (spells or abilities) at an attacker.
+    if (ctx.level !== 'easy' && mem.stepActions < ctx.cap && !mem.blockPlan?.key.startsWith(`${v.turn}|`)) {
+      const kill = bestSpell(ctx, false) ?? abilityAction(ctx, false);
+      if (kill) return kill;
+    }
     const b = blockAction(ctx);
     if (b) return b;
     return pass;
@@ -725,6 +742,7 @@ function planSpell(ctx: Ctx, iid: string, c: CardInstance, d: CardData, face: nu
   // Outside our main phase only instants: at the opponent's end step, or in response to their spell.
   const oppEnd = v.step === 'end' && v.activePlayer !== pid && v.stack.length === 0;
   const responding = v.stack.length > 0 && v.stack[v.stack.length - 1].controller !== pid;
+  const combat = oppCombat(v, pid);
   if (!main && !instant) return null;
   if (!main && !oppEnd && !responding && !/\bInstant\b/.test(types)) return null;
   const sp = safe(() => castSpellAbility(c.cardId!, face ?? 0, costOption === 'normal' ? undefined : costOption), undefined);
@@ -800,17 +818,62 @@ function planSpell(ctx: Ctx, iid: string, c: CardInstance, d: CardData, face: nu
     if (atFace && !lethal && pols[0] === 'harm' && (opp?.life ?? 20) > 6 && v.stack.length === 0) return null;
     // Counterspells only in response to something worth countering.
     if (targets.flat().some((r) => r.kind === 'stack') && targetValue < 3) return null;
+    // Hold up instant-speed removal: on our turn only for a real threat; otherwise wait for the opponent's combat
+    // (kill an attacker) or their end step, not their upkeep or draw step.
+    const harmsCreature = pols[0] === 'harm' && targets.flat().some((r) => r.kind === 'card');
+    if (ctx.level !== 'easy' && /\bInstant\b/.test(types) && harmsCreature && !lethal) {
+      if (main && targetValue < 9) return null;
+      if (!main && !responding && !combat && !oppEnd) return null;
+    }
   } else {
     if (responding) return null; // nothing to respond with
     value = 1 + cmc + (permanent ? 1 : 0) + safe(() => cardPower(d), 0.3) * 2;
   }
   if (value <= 0) return null;
+  // Keep counterspell mana up: in our main phase, don't tap below what our cheapest counterspell needs for a
+  // middling sorcery-speed play (big plays still go ahead).
+  if (main && ctx.level !== 'easy' && !instant && value < 9 && v.turn >= 4) {
+    const reserve = counterReserve(ctx, iid);
+    if (reserve > 0) {
+      const untapped = untappedLands(v, pid, L);
+      if (untapped >= reserve && untapped - cmc < reserve) return null;
+    }
+  }
   const a: GameAction = {
     t: 'cast', iid, targets, ...(face != null ? { face } : {}), ...(modes ? { modes } : {}), ...(x ? { x } : {}),
     ...(costOption !== 'normal' ? { costOption } : {}),
   };
   if (!safe(() => autoPayPreview(v, pid, iid, face, costOption, x, L).ok, false)) (a as { phyrexian?: 'life' }).phyrexian = 'life';
   return { action: a, value };
+}
+
+/** The opponent is attacking us: attackers are declared and the stack is empty (time for instant-speed removal). */
+function oppCombat(v: View, pid: string): boolean {
+  const attacking = v.battlefield.some((iid) => !!v.cards[iid]?.attacking);
+  return v.activePlayer !== pid && v.step === 'blockers' && attacking && v.stack.length === 0;
+}
+
+function untappedLands(v: View, pid: string, L: Lookup): number {
+  let n = 0;
+  for (const iid of v.battlefield) {
+    const c = visible(v, iid);
+    if (c && c.controller === pid && !c.tapped && safe(() => faceOf(c, L).types.includes('Land'), false)) n++;
+  }
+  return n;
+}
+
+/** Mana value of the cheapest counterspell in hand (other than `except`), or 0. */
+function counterReserve(ctx: Ctx, except: string): number {
+  const { v, pid, L } = ctx;
+  let best = 0;
+  for (const iid of me(v, pid).zones.hand) {
+    if (iid === except) continue;
+    const c = visible(v, iid);
+    const d = c?.cardId ? L(c.cardId) : undefined;
+    if (!d || !/\bInstant\b/.test(d.typeLine) || !/counter target (spell|noncreature spell|creature spell)/i.test(d.oracle)) continue;
+    if (!best || d.cmc < best) best = d.cmc;
+  }
+  return best;
 }
 
 // ------------------------------------------------------------------ activated abilities
@@ -820,7 +883,9 @@ const SINK_APIS = new Set(['Draw', 'DealDamage', 'PutCounter', 'Token', 'Pump', 
 function abilityAction(ctx: Ctx, main: boolean): GameAction | null {
   const { v, pid, L, mem } = ctx;
   const oppEnd = v.step === 'end' && v.activePlayer !== pid && v.stack.length === 0;
-  if (!main && !oppEnd) return null;
+  // During the opponent's attack: removal-like abilities (ping, destroy, tap) at an attacker.
+  const combat = oppCombat(v, pid);
+  if (!main && !oppEnd && !combat) return null;
   const best: { a: GameAction; value: number }[] = [];
   for (const iid of v.battlefield) {
     const c = visible(v, iid);
@@ -839,6 +904,7 @@ function abilityAction(ctx: Ctx, main: boolean): GameAction | null {
       if (unlock && !main) continue;
       if (!walker && !isEquip && !unlock && !SINK_APIS.has(e.ability.api)) continue;
       if (!walker && !isEquip && !main && e.ability.api === 'Pump') continue;
+      if (combat && !oppEnd && !['DealDamage', 'Destroy', 'Tap'].includes(e.ability.api)) continue;
       if (!safe(() => abilityUsability(v, pid, iid, e.index, L).ok, false)) continue;
       const specs = safe(() => targetSpecs(e.ability), [] as TargetSpec[]);
       let targets: TargetRef[][] = [];
@@ -905,17 +971,23 @@ function planAttacks(ctx: Ctx): { iid: string; target: string }[] {
     const menaceSafe = a.kw('Menace') && able.length < 2;
     const unblockable = able.length === 0 || menaceSafe;
     // Safe: no blocker kills it while surviving; good: every block costs them at least as much.
-    const badBlock = able.some((b) => survives(b.s, a) && kills(b.s, a));
-    const trade = able.some((b) => kills(b.s, a));
-    const tradeOk = able.every((b) => !kills(b.s, a) || (kills(a, b.s) && b.s.value >= a.value * 0.9));
-    return { iid, a, unblockable, safe: !trade, good: !badBlock && tradeOk };
+    // Combat math with first strike and deathtouch: a blocker only trades if it gets to deal its damage.
+    const badBlock = able.some((b) => survives(b.s, a) && killsInCombat(b.s, a));
+    const trade = able.some((b) => killsInCombat(b.s, a));
+    const tradeOk = able.every((b) => !killsInCombat(b.s, a) || (killsInCombat(a, b.s) && b.s.value >= a.value * 0.9));
+    return { iid, a, unblockable, safe: !trade, good: !badBlock && tradeOk, bad: badBlock };
   });
   // Lethal alpha strike? Each untapped blocker stops one attacker (the biggest ones).
   const powers = verdict.map((x) => x.a.p * (x.a.kw('Double Strike') ? 2 : 1)).sort((a, b) => b - a);
   const evasive = verdict.filter((x) => x.unblockable).reduce((n, x) => n + x.a.p, 0);
   const throughAll = powers.slice(Math.min(blockers.length, powers.length)).reduce((a, b) => a + b, 0);
   const lethal = Math.max(evasive, throughAll) >= opp.life;
-  let attackers = lethal ? verdict : verdict.filter((x) => x.a.p > 0 && (x.unblockable || (level === 'easy' ? x.safe : x.safe || x.good)));
+  // Racing: when our clock is faster than theirs, attackers that at worst trade keep the pressure on.
+  const ourPower = verdict.reduce((n, x) => n + Math.max(0, x.a.p), 0);
+  const theirPower = oppCreatures.reduce((n, iid) => n + Math.max(0, stats(v, iid, L).p), 0);
+  const turnsToKill = (life: number, power: number) => (power > 0 ? Math.ceil(life / power) : 99);
+  const ahead = level !== 'easy' && turnsToKill(opp.life, ourPower) <= 3 && turnsToKill(opp.life, ourPower) < turnsToKill(self.life, theirPower);
+  let attackers = lethal ? verdict : verdict.filter((x) => x.a.p > 0 && (x.unblockable || (level === 'easy' ? x.safe : x.safe || x.good || (ahead && !x.bad))));
   // Don't die on the crack-back: keep enough blockers home.
   if (!lethal) {
     const oppPowers = oppCreatures.map((iid) => stats(v, iid, L).p).filter((p) => p > 0).sort((a, b) => b - a);
@@ -984,12 +1056,36 @@ function planBlocks(ctx: Ctx): { iid: string; attacker: string }[] {
   if (level !== 'easy') {
     // 2. Safe blocks: our blocker survives (soaks the damage).
     assign((a, b) => survives(b.s, a.s) && a.s.p > 0 && !a.s.kw('Trample'), cheapFirst);
-    // 3. Even trades.
-    assign((a, b) => kills(b.s, a.s) && a.s.value >= b.s.value * 0.9, cheapFirst);
+    // 3. Even trades: only when our blocker really deals its damage (no first striker kills it first).
+    assign((a, b) => killsInCombat(b.s, a.s) && a.s.value >= b.s.value * 0.9, cheapFirst);
+    // 4. Double blocks on a big attacker: two blockers that kill it together, when it can take at most one of them.
+    for (const a of attackers) {
+      if (blocked.has(a.iid) || a.s.kw('Trample') || a.s.kw('Deathtouch') || a.s.kw('Indestructible')) continue;
+      const opts = mine.filter((b) => free.has(b.iid) && can(b.iid, a.iid) && b.s.p > 0).sort(cheapFirst);
+      let done = false;
+      for (let i = 0; i < opts.length && !done; i++) {
+        for (let j = i + 1; j < opts.length && !done; j++) {
+          const pair = [opts[i], opts[j]];
+          // Damage that lands: a first-striking attacker may kill one blocker before it strikes.
+          const fsVictim = firstStrikes(a.s) ? pair.find((b) => !firstStrikes(b.s) && kills(a.s, b.s)) : undefined;
+          const dmg = pair.filter((b) => b !== fsVictim).reduce((n, b) => n + (b.s.kw('Deathtouch') ? 99 : b.s.p), 0);
+          const killsIt = dmg >= a.s.t - a.s.dmg;
+          const losses = pair.filter((b) => kills(a.s, b.s)).sort((x, y) => y.s.value - x.s.value).slice(0, 1).reduce((n, b) => n + b.s.value, 0);
+          if (killsIt && a.s.value > losses * 1.2) {
+            for (const b of pair) { plan.push({ iid: b.iid, attacker: a.iid }); free.delete(b.iid); }
+            blocked.add(a.iid);
+            done = true;
+          }
+        }
+      }
+    }
   }
-  // 4. Chump blocks when the unblocked damage would kill us.
+  // 5. Chump blocks only when the unblocked damage would kill us: the hardest hitters first, with our cheapest creatures.
   const incoming = () => attackers.filter((a) => a.atMe && (!blocked.has(a.iid) || a.s.kw('Trample'))).reduce((n, a) => n + a.s.p * (a.s.kw('Double Strike') ? 2 : 1), 0);
-  if (incoming() >= self.life) assign(() => incoming() >= self.life, cheapFirst);
+  if (incoming() >= self.life) {
+    attackers.sort((x, y) => y.s.p * (y.s.kw('Double Strike') ? 2 : 1) - x.s.p * (x.s.kw('Double Strike') ? 2 : 1));
+    assign((a) => incoming() >= self.life && !a.s.kw('Trample'), cheapFirst);
+  }
   return plan;
 }
 
