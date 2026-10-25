@@ -206,13 +206,16 @@ export const GRANT_BASE = 2000;
 /** Granted lines of one kind (abilities / triggers / statics) from the instance's animations, with the SVars they use. */
 export function grantedLines(c: ScriptHolder, kind: 'abilities' | 'triggers' | 'statics'): { line: string; name: string; cardId: string; face: number; svars: Record<string, string>; faceName: string }[] {
   const out: { line: string; name: string; cardId: string; face: number; svars: Record<string, string>; faceName: string }[] = [];
-  if (c.zone !== undefined && c.zone !== 'battlefield') return out;
+  // Outside the battlefield only triggers that work there (Cosima in exile: TriggerZones$ Exile).
+  const away = c.zone !== undefined && c.zone !== 'battlefield';
+  if (away && kind !== 'triggers') return out;
   for (const a of c.animations ?? []) {
     const g = a.grant;
     const f = g ? getScript(g.cardId)?.[g.face] : undefined;
     if (!g || !f) continue;
     for (const name of g[kind] ?? []) {
       const line = f.svars[name];
+      if (away && line && !new RegExp(`TriggerZones\\$[^|]*\\b${c.zone === 'exile' ? 'Exile' : c.zone === 'graveyard' ? 'Graveyard' : '-'}\\b`).test(line)) continue;
       if (line) out.push({ line, name, cardId: g.cardId, face: g.face, svars: f.svars, faceName: f.name });
     }
   }
@@ -265,6 +268,8 @@ export function parseAbility(line: string, svars: Record<string, string>, cardNa
     }
     const n = parseInt(params.CharmNum ?? '1', 10);
     ab.charmMax = Number.isNaN(n) ? 1 : n;
+    // CharmNum$ Count$Compare Y GE1.2.1 (Flame of Anor: two modes if you control a Wizard): see play.ts charmLimits().
+    if (Number.isNaN(n) && params.CharmNum) ab.charmMaxVar = params.CharmNum;
     const m = parseInt(params.MinCharmNum ?? String(ab.charmMax), 10);
     ab.charmMin = Number.isNaN(m) ? ab.charmMax : m;
   }
@@ -554,6 +559,7 @@ export function baseVarSupported(v: string): boolean {
     || /^(TriggeredCard|TriggeredSpellAbility)\$(CastTotalManaSpent|CardManaCostLKI|Converge)$/.test(v)
     || /^(Targeted|ThisTargetedPlayer|TargetedPlayer)\$Valid [^\s$]+$/.test(v)
     || /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v) || v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount'
+    || v === 'Count$RememberedNumber' || /^(Remembered|RememberedLKI)\$CardCounters\.\w+$/.test(v)
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
     || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
     || supportedCount(v)

@@ -89,6 +89,6 @@ export function extAfterMove(state: GameState, ctx: Ctx, inst: CardInstance, fro
   if (from === 'battlefield' && to !== 'battlefield') {
     copyLeft(inst);
     animateLeft(state, ctx, inst);
-  }
+  } else if (from !== to) inst.animations = undefined; // a new object (Cosima returning from exile)
   effectsAfterMove(state, ctx, inst, from, to);
 }

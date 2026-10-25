@@ -204,7 +204,7 @@ function defined(state: GameState, r: Run, i: number, value: string | undefined)
       return { cards: [], players: live.filter((p) => !ctrls.has(p)) };
     }
     case 'TargetedAndYou': return { cards: [], players: [...new Set([...tgt().players, r.controller])] };
-    case 'TargetedController': {
+    case 'TargetedController': case 'ThisTargetedController': {
       const t = parentTargets(r, i);
       const ps = t.map((ref) => (ref.kind === 'card' ? ctrlOf(ref.iid) : ref.kind === 'player' ? ref.pid : r.lki[ref.id]?.controller ?? state.stack.find((s) => s.id === ref.id)?.controller));
       return { cards: [], players: [...new Set(ps.filter((x): x is string => !!x))] };
@@ -390,6 +390,15 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
   const mv = moreVar(state, r, ctx, v); // engine/more.ts
   if (mv !== undefined) return mv;
   if (v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount') return r.trig?.amount ?? 0;
+  // RememberAmount$ True (PutCounter): how many were put (0 when an optional step was declined).
+  if (v === 'Count$RememberedNumber') return r.chosen?.rememberedNumber ?? 0;
+  // RememberedLKI$CardCounters.VOYAGE: counters the remembered card had (last known information).
+  sm = /^(Remembered|RememberedLKI)\$CardCounters\.(\w+)$/.exec(v);
+  if (sm) {
+    const iid = r.remembered[0];
+    const k = counterKind(sm[2]);
+    return iid ? (r.lki[iid]?.counters?.[k] ?? (sm[1] === 'Remembered' ? state.cards[iid]?.counters[k] : 0) ?? 0) : 0;
+  }
   const uv = uniqueVar(state, ctx, r.controller, r.remembered, v);
   if (uv !== undefined) return uv;
   const counted = evalCount(v, countEnv(state, ctx, r));
@@ -560,6 +569,9 @@ function moveTo(state: GameState, ctx: Ctx, r: Run, iid: string, dest: Zone, p: 
   if (!c) return;
   if (dest === 'library') moveCard(state, ctx, iid, 'library', { position: libraryIndex(state, ctx, r, p.LibraryPosition) });
   else if (dest === 'battlefield') {
+    // WithCountersAmount$ X with RememberLKI$ True (Cosima: X = the voyage counters it had in exile): evaluated before it moves.
+    if (p.RememberLKI === 'True') { r.lki[iid] ??= lkiOf(c, ctx, state); r.remembered = [iid]; }
+    const withCounters = p.WithCountersType ? (p.WithCountersAmount ? amount(state, ctx, r, p.WithCountersAmount, 1) : 1) : undefined;
     // Transformed$ True: "return it to the battlefield transformed" (Fable of the Mirror-Breaker, Ajani, Kytheon):
     // it enters transformed, so a planeswalker back face enters with its own loyalty.
     const transformed = p.Transformed === 'True';
@@ -568,7 +580,12 @@ function moveTo(state: GameState, ctx: Ctx, r: Run, iid: string, dest: Zone, p: 
     const back = state.cards[iid];
     if (p.WithCountersType && back?.zone === 'battlefield') {
       const k = counterKind(p.WithCountersType);
-      back.counters[k] = (back.counters[k] ?? 0) + (parseInt(p.WithCountersAmount ?? '1', 10) || 1);
+      const n = withCounters ?? 1;
+      if (n > 0) {
+        back.counters[k] = (back.counters[k] ?? 0) + n;
+        emit(state, { t: 'counterAdded', iid, kind: k, n });
+        log(state, ctx, r.controller, `${cardName(back, ctx.lookup)} enters with ${n} ${k} counter${n === 1 ? '' : 's'}.`);
+      }
     }
   } else {
     moveCard(state, ctx, iid, dest, dest === 'exile' && p.ExileFaceDown === 'True' ? { faceDown: true, unseen: unseenFaceDown(r) } : {});
@@ -966,7 +983,13 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   if (step.params.ValidTgts && r.specOf[i] == null && !r.lateTargets?.[i]) return askLateTargets(state, ctx, r, i);
   // "... unless <player> pays <cost>" / UnlessSwitched "if <player> pays <cost>, ..." (also "counter it unless its controller pays").
   if (step.params.UnlessCost && r.unless?.[i] === undefined) return askUnless(state, ctx, r, i);
-  if (r.unless?.[i] === false) { chainProbe.onSkip?.(r.item, step); return 'ok'; }
+  // "You may put a counter ..." (Optional$ True on a step without its own choice): asked as it resolves.
+  if (p.Optional === 'True' && MAY_STEPS.has(step.api) && r.unless?.[i] === undefined) return askMay(state, ctx, r, i);
+  if (r.unless?.[i] === false) {
+    chainProbe.onSkip?.(r.item, step);
+    if (p.RememberAmount === 'True') r.chosen = { ...(r.chosen ?? {}), rememberedNumber: 0 };
+    return 'ok';
+  }
   const cond = condition(state, ctx, r, i);
   if (cond === false) {
     chainProbe.onSkip?.(r.item, step);
@@ -1351,6 +1374,7 @@ function execStep(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
           if (!c) continue;
           const m = counterAmount(state, ctx, c, k, num);
           c.counters[k] = (c.counters[k] ?? 0) + m;
+          if (p.RememberAmount === 'True') r.chosen = { ...(r.chosen ?? {}), rememberedNumber: (r.chosen?.rememberedNumber ?? 0) + m };
           if (m > 0) emit(state, { t: 'counterAdded', iid, kind: k, n: m });
           log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} gets ${m} ${k} counter${m === 1 ? '' : 's'} (now ${c.counters[k]}).`);
         }
@@ -1848,7 +1872,7 @@ export function answerResolveTargets(state: GameState, ctx: Ctx, pend: Pending, 
 
 // ------------------------------------------------------------------ "unless <player> pays <cost>"
 
-interface Unless2Data { kind: 'unless2'; cont: AutoCont; step: number; cost: string; switched: boolean; payer: string; x: number; label: string }
+interface Unless2Data { kind: 'unless2'; cont: AutoCont; step: number; cost: string; switched: boolean; payer: string; x: number; label: string; may?: boolean }
 
 /** "DefinedCost_Remembered_Minus2" (Flash): the remembered card's mana cost, reduced. */
 function definedCost(state: GameState, ctx: Ctx, r: Run, raw: string): string | undefined {
@@ -1894,7 +1918,27 @@ function askUnless(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
   return 'wait';
 }
 
+/** Steps whose Optional$ True is a plain "you may" asked before the step runs. */
+const MAY_STEPS = new Set(['PutCounter']);
+
+function askMay(state: GameState, ctx: Ctx, r: Run, i: number): StepResult {
+  const step = r.steps[i];
+  const what = step.description && step.description !== step.api ? step.description : `${step.api} (${r.sourceName})`;
+  const data: Unless2Data = { kind: 'unless2', cont: contAt(r, i), step: i, cost: '', switched: true, payer: r.controller, x: 0, label: what, may: true };
+  state.pending.push({
+    id: randomId(ctx.rng), pid: r.controller, prompt: `${r.sourceName}: ${what}?`,
+    options: [{ value: 'pay', label: 'Yes' }, { value: 'decline', label: 'No' }], data: data as unknown as Record<string, unknown>,
+  });
+  return 'wait';
+}
+
 function answerUnless(state: GameState, ctx: Ctx, pid: string, d: Unless2Data, value: string) {
+  if (d.may) {
+    d.cont.unless = { ...(d.cont.unless ?? {}), [d.step]: value === 'pay' };
+    if (value !== 'pay') log(state, ctx, pid, `${player(state, pid).name} chooses not to (${d.label}).`);
+    runFrom(state, ctx, d.cont);
+    return;
+  }
   const who = player(state, pid).name;
   const name = d.cont.item.text.split(':')[0];
   let paid = false;

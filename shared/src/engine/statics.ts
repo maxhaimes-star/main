@@ -897,7 +897,7 @@ export function faceManaCost(inst: CardInstance, face: number, lookup: Lookup): 
   if (!data) return '';
   if (data.faces && face > 0 && data.faces[face]) return data.faces[face].manaCost;
   if (data.faces && data.layout === 'split') return data.faces[0].manaCost;
-  if (data.faces && ['modal_dfc', 'transform', 'adventure'].includes(data.layout ?? '')) return data.faces[0].manaCost || data.manaCost;
+  if (data.faces && ['modal_dfc', 'transform', 'adventure', 'prepare'].includes(data.layout ?? '')) return data.faces[0].manaCost || data.manaCost;
   return data.manaCost;
 }
 

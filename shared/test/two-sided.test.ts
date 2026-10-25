@@ -1,0 +1,625 @@
+/** Two-sided and modal cards (workstream A1): adventures, MDFCs, split cards / Rooms, transform, modal spells. Real cube scripts, strict mode. */
+import { describe, expect, it } from 'vitest';
+import { CUBE, getCard } from '../src/cube.ts';
+import {
+  applyAction, castability, castableFaces, castOptions, createGame, type Ctx, type GameAction, type GameState, handClick, moveCard,
+} from '../src/index.ts';
+import { faceOf } from '../src/game/rules.ts';
+import { castSpellAbility, targetSpecs } from '../src/engine/script.ts';
+import { isValidTarget } from '../src/engine/targets.ts';
+import type { TargetRef } from '../src/engine/types.ts';
+import { seeded } from './helpers.ts';
+
+const deck = (extra: string[], fill = 'basic_mountain') => [...extra, ...Array(40 - extra.length).fill(fill)];
+
+function setup(a: string[] = [], b: string[] = [], fillA = 'basic_mountain', fillB = 'basic_mountain') {
+  const ctx: Ctx = { rng: seeded(7), lookup: getCard, now: 0 };
+  const g = createGame('g', [
+    { pid: 'a', name: 'Alice', deck: deck(a, fillA), side: [] },
+    { pid: 'b', name: 'Bob', deck: deck(b, fillB), side: [] },
+  ], 'a', ctx);
+  act(g, ctx, 'a', { t: 'keep' });
+  act(g, ctx, 'b', { t: 'keep' });
+  return { g, ctx };
+}
+
+function act(g: GameState, ctx: Ctx, pid: string, action: GameAction) {
+  const err = applyAction(g, pid, action, ctx);
+  if (err) throw new Error(err);
+}
+
+function find(g: GameState, pid: string, cardId: string, skip: string[] = []): string {
+  const p = g.players.find((x) => x.pid === pid)!;
+  const all = [...p.zones.hand, ...p.zones.library, ...p.zones.graveyard, ...p.zones.exile];
+  const iid = all.find((i) => g.cards[i].cardId === cardId && !skip.includes(i));
+  if (!iid) throw new Error(`no ${cardId}`);
+  return iid;
+}
+
+function toZone(g: GameState, ctx: Ctx, pid: string, cardId: string, zone: 'hand' | 'graveyard' | 'exile', skip: string[] = []): string {
+  const iid = find(g, pid, cardId, skip);
+  if (g.cards[iid].zone !== zone) moveCard(g, ctx, iid, zone);
+  return iid;
+}
+
+function put(g: GameState, ctx: Ctx, pid: string, cardId: string, sick = false): string {
+  const iid = find(g, pid, cardId, g.battlefield.slice());
+  moveCard(g, ctx, iid, 'battlefield', { controller: pid });
+  g.cards[iid].summoningSick = sick;
+  return iid;
+}
+
+type Q = GameState['pending'][number];
+
+function answer(g: GameState, ctx: Ctx, pick?: (q: Q) => string) {
+  for (let i = 0; i < 20 && g.pending.length; i++) {
+    const q = g.pending[0];
+    if (q.targets) {
+      const t = q.targets;
+      const targets = t.specs.map((spec) => {
+        const refs: TargetRef[] = [...g.players.map((p) => ({ kind: 'player' as const, pid: p.pid === 'a' ? 'b' : 'a' })), ...Object.keys(g.cards).map((iid) => ({ kind: 'card' as const, iid }))];
+        return refs.filter((r) => isValidTarget(g, spec, r, t.controller, t.sourceIid, getCard)).slice(0, Math.max(spec.min, 1));
+      });
+      act(g, ctx, q.pid, { t: 'chooseTargets', id: q.id, targets });
+      continue;
+    }
+    act(g, ctx, q.pid, { t: 'choose', id: q.id, value: pick ? pick(q) : q.options[0].value });
+  }
+}
+
+function drain(g: GameState, ctx: Ctx, pick?: (q: Q) => string) {
+  for (let i = 0; i < 40 && (g.stack.length || g.pending.length); i++) {
+    if (g.pending.length) { answer(g, ctx, pick); continue; }
+    act(g, ctx, g.priority, { t: 'pass' });
+  }
+}
+
+function passTo(g: GameState, ctx: Ctx, step: string, pid: string, active?: string) {
+  for (let i = 0; i < 120; i++) {
+    if (g.step === step && g.priority === pid && !g.pending.length && (!active || g.activePlayer === active)) return;
+    if (g.pending.length && /maximum hand size/.test(g.pending[0].prompt)) { answer(g, ctx); continue; }
+    if (g.pending.length) throw new Error(`pending: ${g.pending[0].prompt}`);
+    act(g, ctx, g.priority, { t: 'pass' });
+  }
+  throw new Error(`never reached ${step} for ${pid} (at ${g.step}, prio ${g.priority}, active ${g.activePlayer}, pending ${g.pending.map((q) => q.prompt)})\n${logTail(g)}`);
+}
+
+const card = (iid: string) => [[{ kind: 'card' as const, iid }]];
+const logTail = (g: GameState, n = 8) => g.log.slice(-n).map((l) => l.text).join('\n');
+const untapped = (g: GameState, pid: string) => g.battlefield.filter((i) => g.cards[i].controller === pid && !g.cards[i].tapped).length;
+const lands = (g: GameState, ctx: Ctx, pid: string, id: string, n: number) => { for (let k = 0; k < n; k++) put(g, ctx, pid, id); };
+
+describe('A1.1: Brazen Borrower', () => {
+  it('Petty Theft bounces an opponent\'s nonland permanent, then Borrower goes on an adventure; later cast from exile', () => {
+    const { g, ctx } = setup(['brazen_borrower'], ['giver_of_runes'], 'basic_island');
+    lands(g, ctx, 'a', 'basic_island', 5);
+    const ring = put(g, ctx, 'b', 'giver_of_runes');
+    const bb = toZone(g, ctx, 'a', 'brazen_borrower', 'hand');
+    expect(handClick(g, 'a', bb)).toBe('menu');
+    expect(castability(g, 'a', bb, getCard, 1)).toEqual({ ok: true });
+    expect(castOptions(g, bb, 1).find((o) => o.id === 'normal')?.cost).toBe('{1}{U}');
+    act(g, ctx, 'a', { t: 'cast', iid: bb, face: 1, targets: card(ring) });
+    expect(g.cards[bb].zone).toBe('stack');
+    expect(faceOf(g.cards[bb], getCard).name).toBe('Petty Theft');
+    expect(untapped(g, 'a')).toBe(3); // paid {1}{U}
+    drain(g, ctx);
+    expect(g.cards[ring].zone, logTail(g)).toBe('hand');
+    expect(g.cards[bb].zone, logTail(g)).toBe('exile');
+    expect(g.cards[bb].castAs).toBe('Petty Theft');
+    // From exile: only the creature can be cast.
+    expect(castability(g, 'a', bb, getCard, 0)).toEqual({ ok: true });
+    expect(castability(g, 'a', bb, getCard, 1).ok).toBe(false);
+    expect(castability(g, 'a', bb)).toEqual({ ok: true });
+    expect(applyAction(g, 'a', { t: 'cast', iid: bb, face: 1, targets: card(ring) }, ctx)).toBeTruthy();
+    // Flash: during the opponent's turn too. Cast it with face undefined (as a click on the exiled card does).
+    act(g, ctx, 'a', { t: 'cast', iid: bb });
+    expect(faceOf(g.cards[bb], getCard).name).toBe('Brazen Borrower');
+    expect(untapped(g, 'a')).toBe(0); // {1}{U}{U}
+    drain(g, ctx);
+    expect(g.cards[bb].zone, logTail(g)).toBe('battlefield');
+    const f = faceOf(g.cards[bb], getCard);
+    expect(f.name).toBe('Brazen Borrower');
+    expect(f.power).toBe('3');
+    expect(g.cards[bb].castAs).toBeUndefined();
+  });
+
+  it('cast the creature directly from hand (flash, on the opponent\'s turn)', () => {
+    const { g, ctx } = setup(['brazen_borrower'], [], 'basic_island');
+    lands(g, ctx, 'a', 'basic_island', 3);
+    const bb = toZone(g, ctx, 'a', 'brazen_borrower', 'hand');
+    passTo(g, ctx, 'main1', 'b', 'b');
+    g.priority = 'a'; g.passed = ['b']; // b passed in its main phase (a's stops are a client setting)
+    expect(g.activePlayer).toBe('b');
+    expect(g.priority, `${g.step} ${logTail(g)}`).toBe('a');
+    expect(castability(g, 'a', bb, getCard, 0)).toEqual({ ok: true });
+    act(g, ctx, 'a', { t: 'cast', iid: bb, face: 0 });
+    drain(g, ctx);
+    expect(g.cards[bb].zone, logTail(g)).toBe('battlefield');
+    expect(faceOf(g.cards[bb], getCard).name).toBe('Brazen Borrower');
+  });
+
+  it('Petty Theft countered / fizzled: the card goes to the graveyard, not on an adventure', () => {
+    const { g, ctx } = setup(['brazen_borrower'], ['giver_of_runes'], 'basic_island');
+    lands(g, ctx, 'a', 'basic_island', 2);
+    const ring = put(g, ctx, 'b', 'giver_of_runes');
+    const bb = toZone(g, ctx, 'a', 'brazen_borrower', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: bb, face: 1, targets: card(ring) });
+    moveCard(g, ctx, ring, 'hand'); // target gone
+    drain(g, ctx);
+    expect(g.cards[bb].zone, logTail(g)).toBe('graveyard');
+  });
+
+  it('Petty Theft cannot target your own permanents or lands', () => {
+    const { g, ctx } = setup(['brazen_borrower', 'giver_of_runes'], [], 'basic_island');
+    lands(g, ctx, 'a', 'basic_island', 2);
+    const mine = put(g, ctx, 'a', 'giver_of_runes');
+    const land = put(g, ctx, 'b', 'basic_mountain');
+    const bb = toZone(g, ctx, 'a', 'brazen_borrower', 'hand');
+    expect(applyAction(g, 'a', { t: 'cast', iid: bb, face: 1, targets: card(mine) }, ctx)).toBeTruthy();
+    expect(applyAction(g, 'a', { t: 'cast', iid: bb, face: 1, targets: card(land) }, ctx)).toBeTruthy();
+  });
+});
+
+const BASICS = ['basic_plains', 'basic_island', 'basic_swamp', 'basic_mountain', 'basic_forest'];
+const MULTI = CUBE.cards.filter((c) => c.faces && c.layout !== 'normal');
+/** Answer yes/no questions with "yes" (may abilities), anything else with the first option. */
+const yes = (q: Q) => q.options.find((o) => o.value === 'yes')?.value ?? q.options[0].value;
+
+/** 4 of each basic on the battlefield for a, a creature for each player, a creature card in a's graveyard. */
+function richBoard(id: string) {
+  const extra = [id, ...BASICS.flatMap((b) => Array(4).fill(b)), 'giver_of_runes', 'giver_of_runes'];
+  const { g, ctx } = setup(extra, ['giver_of_runes', 'giver_of_runes', 'mind_stone'], 'basic_mountain', 'basic_island');
+  for (const b of BASICS) lands(g, ctx, 'a', b, 4);
+  const mine = put(g, ctx, 'a', 'giver_of_runes');
+  const theirs = put(g, ctx, 'b', 'giver_of_runes');
+  put(g, ctx, 'b', 'mind_stone');
+  const dead = toZone(g, ctx, 'a', 'giver_of_runes', 'graveyard', [mine]);
+  const iid = toZone(g, ctx, 'a', id, 'hand');
+  return { g, ctx, iid, mine, theirs, dead };
+}
+
+/** Legal targets for a cast of `face`: the first legal choices of each spec (the opponent and their permanents first). */
+function autoTargets(g: GameState, iid: string, face: number, modes?: string[]): TargetRef[][] | undefined {
+  const sp = castSpellAbility(g.cards[iid].cardId!, face);
+  if (!sp) return undefined;
+  const specs = targetSpecs(sp.ability, modes);
+  if (!specs.length) return undefined;
+  return specs.map((spec) => {
+    const refs: TargetRef[] = [{ kind: 'player', pid: 'b' }, { kind: 'player', pid: 'a' }, ...g.battlefield.filter((i) => g.cards[i].controller === 'b').map((i) => ({ kind: 'card' as const, iid: i })), ...Object.keys(g.cards).map((i) => ({ kind: 'card' as const, iid: i }))];
+    const ok = refs.filter((r) => isValidTarget(g, spec, r, 'a', iid, getCard));
+    return ok.slice(0, Math.max(spec.min, 1));
+  });
+}
+
+const cmc = (cost: string) => (cost.match(/\{[^}]+\}/g) ?? []).reduce((n, s) => n + (/^\{\d+\}$/.test(s) ? parseInt(s.slice(1), 10) : 1), 0);
+
+describe('A1.2: every adventure, modal DFC, split and transforming card in the cube', () => {
+  it("the cube's multi-face cards are the ones audited here, and every castable face has a name, type and cost", () => {
+    expect(MULTI.map((c) => c.id).sort()).toEqual([
+      'ajani_nacatl_pariah', 'bonecrusher_giant', 'brazen_borrower', 'cecil_dark_knight', 'concealing_curtains', 'cosima_god_of_the_voyage', 'embereth_shieldbreaker',
+      'emeritus_of_ideation', 'emeritus_of_truce', 'fable_of_the_mirror_breaker', 'jennifer_walters', 'kytheon_hero_of_akros', 'life_death', 'skycoach_conductor',
+      'tamiyo_inquisitive_student', 'valki_god_of_lies', 'walk_in_closet_forgotten_cellar',
+    ]);
+    for (const c of MULTI) for (const f of [0, 1]) {
+      expect(c.faces![f].name, `${c.id} face ${f}`).toBeTruthy();
+      expect(c.faces![f].typeLine, `${c.id} face ${f}`).toBeTruthy();
+      if (castableFaces(c).includes(f)) expect(c.faces![f].manaCost, `${c.id} face ${f}`).toMatch(/\{/);
+    }
+  });
+
+  for (const c of MULTI) {
+    for (const face of castableFaces(c)) {
+      const f = c.faces![face];
+      it(`${c.id}: cast ${f.name} from hand for ${f.manaCost}; it ends up in the right zone as the right face`, () => {
+        const { g, ctx, iid } = richBoard(c.id);
+        expect(castOptions(g, iid, face).find((o) => o.id === 'normal')?.cost).toBe(f.manaCost);
+        expect(castability(g, 'a', iid, getCard, face), f.name).toEqual({ ok: true });
+        const before = untapped(g, 'a');
+        act(g, ctx, 'a', { t: 'cast', iid, face, targets: autoTargets(g, iid, face) });
+        expect(faceOf(g.cards[iid], getCard).name).toBe(f.name);
+        expect(before - untapped(g, 'a')).toBe(cmc(f.manaCost));
+        drain(g, ctx, yes);
+        const permanent = /Creature|Artifact|Enchantment|Planeswalker|Land|Battle/.test(f.typeLine);
+        const where = g.cards[iid].zone;
+        if (c.layout === 'adventure' && face === 1) {
+          expect(where, logTail(g)).toBe('exile');
+          expect(castability(g, 'a', iid, getCard, 0), 'the creature is castable from exile').toEqual({ ok: true });
+          expect(castability(g, 'a', iid, getCard, 1).ok, 'the adventure is not castable from exile').toBe(false);
+          act(g, ctx, 'a', { t: 'cast', iid });
+          drain(g, ctx, yes);
+          expect(g.cards[iid].zone, logTail(g)).toBe('battlefield');
+          expect(faceOf(g.cards[iid], getCard).name).toBe(c.faces![0].name);
+        } else if (permanent) {
+          expect(where, logTail(g)).toBe('battlefield');
+          if (c.layout === 'split') expect(faceOf(g.cards[iid], getCard).name).toContain(f.name); // a Room has both doors' names
+          else {
+            expect(faceOf(g.cards[iid], getCard).name, logTail(g)).toBe(f.name);
+            expect(faceOf(g.cards[iid], getCard).typeLine).toBe(f.typeLine);
+          }
+          if (f.loyalty) expect(g.cards[iid].counters.loyalty).toBe(parseInt(f.loyalty, 10));
+        } else expect(where, logTail(g)).toBe('graveyard');
+      });
+    }
+  }
+
+  for (const c of MULTI.filter((x) => x.layout === 'transform')) {
+    it(`${c.id}: only the front face can be cast; the back face is refused`, () => {
+      const { g, ctx, iid } = richBoard(c.id);
+      expect(castableFaces(c)).toEqual([0]);
+      expect(applyAction(g, 'a', { t: 'cast', iid, face: 1 }, ctx)).toBeTruthy();
+      expect(handClick(g, 'a', iid)).toBe('cast');
+    });
+  }
+});
+
+describe('A1.2: Prepare cards (cast a copy of the spell while prepared)', () => {
+  it('the spell face of a Prepare card cannot be cast from hand', () => {
+    for (const id of ['skycoach_conductor', 'emeritus_of_truce', 'emeritus_of_ideation']) {
+      expect(getCard(id)?.layout, id).toBe('prepare');
+      expect(castableFaces(getCard(id)), id).toEqual([0]);
+      const { g, ctx, iid } = richBoard(id);
+      expect(applyAction(g, 'a', { t: 'cast', iid, face: 1, targets: autoTargets(g, iid, 1) }, ctx), id).toBeTruthy();
+      expect(handClick(g, 'a', iid), id).toBe('cast');
+    }
+  });
+
+  it('Skycoach Conductor enters prepared; casting a copy of All Aboard flickers a non-Pilot creature and unprepares it', () => {
+    const { g, ctx, iid, mine } = richBoard('skycoach_conductor');
+    act(g, ctx, 'a', { t: 'cast', iid });
+    drain(g, ctx, yes);
+    expect(g.cards[iid].zone, logTail(g)).toBe('battlefield');
+    expect(g.cards[iid].counters.prepared, logTail(g)).toBe(1);
+    expect(castability(g, 'a', iid, getCard, 1)).toEqual({ ok: true });
+    expect(castOptions(g, iid, 1).find((o) => o.id === 'normal')?.cost).toBe('{U}');
+    // Not the Conductor itself (a Pilot).
+    expect(applyAction(g, 'a', { t: 'cast', iid, face: 1, targets: card(iid) }, ctx)).toBeTruthy();
+    const before = untapped(g, 'a');
+    act(g, ctx, 'a', { t: 'cast', iid, face: 1, targets: card(mine) });
+    expect(before - untapped(g, 'a')).toBe(1);
+    expect(g.cards[iid].zone).toBe('battlefield');
+    expect(g.cards[iid].counters.prepared).toBeUndefined();
+    const copy = g.stack.at(-1)!.iid!;
+    expect(copy).not.toBe(iid);
+    expect(faceOf(g.cards[copy], getCard).name).toBe('All Aboard');
+    drain(g, ctx, yes);
+    expect(g.cards[copy], 'the copy ceases to exist').toBeUndefined();
+    expect(g.cards[mine].zone, logTail(g)).toBe('battlefield');
+    // Unprepared: no second copy.
+    expect(castability(g, 'a', iid, getCard, 1).ok).toBe(false);
+    expect(applyAction(g, 'a', { t: 'cast', iid, face: 1, targets: card(mine) }, ctx)).toBeTruthy();
+  });
+
+  it("only the prepared permanent's controller may cast the copy", () => {
+    const { g, ctx, iid, theirs } = richBoard('skycoach_conductor');
+    act(g, ctx, 'a', { t: 'cast', iid });
+    drain(g, ctx, yes);
+    g.priority = 'b';
+    expect(applyAction(g, 'b', { t: 'cast', iid, face: 1, targets: card(theirs) }, ctx)).toBeTruthy();
+    expect(g.cards[iid].counters.prepared).toBe(1);
+  });
+
+  it('Emeritus of Truce: target player gets an Inkling; prepared when an opponent controls more creatures; the copy is Swords to Plowshares', () => {
+    const { g, ctx, iid } = richBoard('emeritus_of_truce');
+    act(g, ctx, 'a', { t: 'cast', iid });
+    drain(g, ctx); // the Inkling goes to the opponent (first legal target)
+    expect(g.battlefield.filter((i) => g.cards[i].controller === 'b' && g.cards[i].token?.name === 'Inkling')).toHaveLength(1);
+    // a: Giver + Emeritus = 2; b: Giver + Inkling = 2: not prepared.
+    expect(g.cards[iid].counters.prepared, logTail(g)).toBeUndefined();
+    const { g: g2, ctx: ctx2, iid: iid2, theirs: theirs2 } = richBoard('emeritus_of_truce');
+    put(g2, ctx2, 'b', 'giver_of_runes');
+    act(g2, ctx2, 'a', { t: 'cast', iid: iid2 });
+    drain(g2, ctx2);
+    expect(g2.cards[iid2].counters.prepared, logTail(g2)).toBe(1);
+    const life = g2.players[1].life;
+    act(g2, ctx2, 'a', { t: 'cast', iid: iid2, face: 1, targets: card(theirs2) });
+    expect(faceOf(g2.cards[g2.stack.at(-1)!.iid!], getCard).name).toBe('Swords to Plowshares');
+    drain(g2, ctx2);
+    expect(g2.cards[theirs2].zone, logTail(g2)).toBe('exile');
+    expect(g2.players[1].life).toBe(life + 1); // Giver of Runes is a 1/2
+    expect(g2.cards[iid2].counters.prepared).toBeUndefined();
+    expect(g2.cards[iid2].zone).toBe('battlefield');
+  });
+
+  it('Emeritus of Ideation enters prepared; the copy is Ancestral Recall', () => {
+    const { g, ctx, iid } = richBoard('emeritus_of_ideation');
+    act(g, ctx, 'a', { t: 'cast', iid });
+    drain(g, ctx, yes);
+    expect(g.cards[iid].counters.prepared, logTail(g)).toBe(1);
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, face: 1, targets: [[{ kind: 'player', pid: 'a' }]] });
+    drain(g, ctx);
+    expect(g.players[0].zones.hand.length, logTail(g)).toBe(hand + 3);
+    expect(g.cards[iid].counters.prepared).toBeUndefined();
+  });
+
+  it('Emeritus of Ideation attacks: exiling eight cards from the graveyard prepares it again', () => {
+    const { g, ctx } = setup(['emeritus_of_ideation'], [], 'basic_island');
+    const em = put(g, ctx, 'a', 'emeritus_of_ideation');
+    const gy = g.players[0].zones.library.slice(0, 9);
+    for (const x of gy) moveCard(g, ctx, x, 'graveyard');
+    act(g, ctx, 'a', { t: 'gotoStep', step: 'attackers' });
+    act(g, ctx, 'a', { t: 'declareAttacker', iid: em, target: 'b' });
+    act(g, ctx, 'a', { t: 'confirmAttackers' });
+    drain(g, ctx, (q) => q.options.find((o) => /^(yes|pay)$/.test(o.value))?.value ?? q.options[0].value);
+    expect(g.cards[em].counters.prepared, logTail(g)).toBe(1);
+    expect(g.players[0].zones.graveyard.length, logTail(g)).toBe(1);
+  });
+});
+
+/** Pass priority until a question comes up for `pid` (or `n` passes). */
+function passUntilAsked(g: GameState, ctx: Ctx, pid: string, re: RegExp, n = 150) {
+  for (let i = 0; i < n; i++) {
+    const q = g.pending[0];
+    if (q && q.pid === pid && re.test(q.prompt)) return q;
+    if (q) { act(g, ctx, q.pid, { t: 'choose', id: q.id, value: q.options[0].value }); continue; }
+    act(g, ctx, g.priority, { t: 'pass' });
+  }
+  throw new Error(`never asked ${re} (at ${g.step}, turn ${g.turn})\n${g.log.slice(0, 25).map((l) => l.text).join('\n')}`);
+}
+
+const choose = (g: GameState, ctx: Ctx, q: Q, re: RegExp) => {
+  const o = q.options.find((x) => re.test(x.label) || re.test(x.value));
+  if (!o) throw new Error(`no option ${re} in ${JSON.stringify(q.options)} (${q.prompt})`);
+  act(g, ctx, q.pid, { t: 'choose', id: q.id, value: o.value });
+};
+
+describe('A1.3: Cosima, God of the Voyage', () => {
+  function cosimaGame() {
+    const { g, ctx } = setup(['cosima_god_of_the_voyage', ...Array(6).fill('basic_island')], [], 'basic_island', 'basic_mountain');
+    const cos = put(g, ctx, 'a', 'cosima_god_of_the_voyage');
+    // Lands to play on later turns: keep islands in hand.
+    for (let k = 0; k < 4; k++) toZone(g, ctx, 'a', 'basic_island', 'hand', g.players[0].zones.hand.slice());
+    return { g, ctx, cos };
+  }
+
+  /** Go to a's next main phase (answering questions with `pick`). */
+  function toMyMain(g: GameState, ctx: Ctx, pick: (q: Q) => string) {
+    for (let i = 0; i < 200; i++) {
+      if (g.pending.length) { const q = g.pending[0]; if (q.targets) answer(g, ctx); else act(g, ctx, q.pid, { t: 'choose', id: q.id, value: pick(q) }); continue; }
+      if (g.activePlayer === 'a' && g.step === 'main1' && g.priority === 'a' && !g.stack.length && i > 0) return;
+      act(g, ctx, g.priority, { t: 'pass' });
+    }
+    throw new Error(`never reached a's main phase\n${logTail(g, 12)}`);
+  }
+
+  it('upkeep: may exile her; each land that enters adds a voyage counter; declining returns her with X +1/+1 counters and draws X', () => {
+    const { g, ctx, cos } = cosimaGame();
+    const q = passUntilAsked(g, ctx, 'a', /Cosima|exile/i);
+    choose(g, ctx, q, /^(yes|Yes)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone, logTail(g)).toBe('exile');
+    toMyMain(g, ctx, yes);
+    expect(g.cards[cos].zone).toBe('exile');
+    // A land enters: put a voyage counter on her.
+    const land1 = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_island')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: land1 });
+    const q1 = passUntilAsked(g, ctx, 'a', /voyage|Cosima/i, 10);
+    choose(g, ctx, q1, /^(yes|Yes|Put)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone, logTail(g)).toBe('exile');
+    expect(g.cards[cos].counters.voyage ?? g.cards[cos].counters.VOYAGE, logTail(g)).toBe(1);
+    // Next turn: another land, another counter (no new upkeep exile: she's in exile).
+    toMyMain(g, ctx, yes);
+    const land2 = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_island')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: land2 });
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /voyage|Cosima/i, 10), /^(yes|Yes|Put)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].counters.voyage ?? g.cards[cos].counters.VOYAGE, logTail(g)).toBe(2);
+    // Next turn: decline — she returns with 2 +1/+1 counters and a draws 2.
+    toMyMain(g, ctx, yes);
+    const land3 = g.players[0].zones.hand.find((i) => g.cards[i].cardId === 'basic_island')!;
+    act(g, ctx, 'a', { t: 'playLand', iid: land3 });
+    const hand = g.players[0].zones.hand.length;
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /voyage|Cosima/i, 10), /^(no|No|Don)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone, logTail(g)).toBe('battlefield');
+    expect(g.cards[cos].counters['+1/+1'], logTail(g)).toBe(2);
+    expect(g.cards[cos].counters.voyage ?? g.cards[cos].counters.VOYAGE).toBeFalsy();
+    expect(g.players[0].zones.hand.length, logTail(g)).toBe(hand + 2);
+    expect(faceOf(g.cards[cos], getCard).name).toBe('Cosima, God of the Voyage');
+  });
+
+  it('declining the upkeep exile keeps her on the battlefield', () => {
+    const { g, ctx, cos } = cosimaGame();
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /Cosima|exile/i), /^(no|No|Don)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone).toBe('battlefield');
+  });
+
+  it("an opponent's land entering does not trigger her", () => {
+    const { g, ctx, cos } = cosimaGame();
+    choose(g, ctx, passUntilAsked(g, ctx, 'a', /Cosima|exile/i), /^(yes|Yes)/);
+    drain(g, ctx, yes);
+    expect(g.cards[cos].zone).toBe('exile');
+    const opp = toZone(g, ctx, 'b', 'basic_mountain', 'hand', g.players[1].zones.hand.slice());
+    moveCard(g, ctx, opp, 'battlefield', { controller: 'b' });
+    expect(g.pending.filter((q) => /voyage/i.test(q.prompt))).toHaveLength(0);
+    expect(g.stack.filter((s) => /Cosima|voyage/i.test(s.text))).toHaveLength(0);
+  });
+});
+
+// ------------------------------------------------------------------ A1.4: modal spells
+
+const MODAL = CUBE.cards.filter((c) => (castSpellAbility(c.id, 0)?.ability.choices?.length ?? 0) > 0).map((c) => c.id);
+
+/** A board for modal spells: lands of every color, creatures and an artifact for each player, creature cards in a's graveyard. */
+function modalBoard(id: string, extraA: string[] = []) {
+  const extra = [id, ...extraA, ...BASICS.flatMap((b) => Array(4).fill(b)), 'giver_of_runes', 'goblin_guide', 'giver_of_runes', 'mind_stone', 'opt', 'opt'];
+  const { g, ctx } = setup(extra, ['giver_of_runes', 'goblin_guide', 'mind_stone', 'lightning_bolt'], 'basic_mountain', 'basic_mountain');
+  for (const b of BASICS) lands(g, ctx, 'a', b, 4);
+  lands(g, ctx, 'b', 'basic_mountain', 4);
+  const mine = put(g, ctx, 'a', 'giver_of_runes');
+  put(g, ctx, 'a', 'mind_stone');
+  const theirs = [put(g, ctx, 'b', 'giver_of_runes'), put(g, ctx, 'b', 'goblin_guide')];
+  const art = put(g, ctx, 'b', 'mind_stone');
+  const dead = [toZone(g, ctx, 'a', 'giver_of_runes', 'graveyard', [mine]), toZone(g, ctx, 'a', 'goblin_guide', 'graveyard')];
+  const iid = toZone(g, ctx, 'a', id, 'hand');
+  for (const o of g.players[0].zones.library.filter((x) => g.cards[x].cardId === 'opt').slice(0, 2)) moveCard(g, ctx, o, 'hand');
+  return { g, ctx, iid, mine, theirs, art, dead };
+}
+
+/** b casts Lightning Bolt at a (so there is a spell to counter); a gets priority back. */
+function oppBolt(g: GameState, ctx: Ctx): string {
+  const bolt = toZone(g, ctx, 'b', 'lightning_bolt', 'hand');
+  g.priority = 'b';
+  act(g, ctx, 'b', { t: 'cast', iid: bolt, targets: [[{ kind: 'player', pid: 'a' }]] });
+  expect(g.priority).toBe('a');
+  return bolt;
+}
+
+const noManual = (g: GameState) => g.log.filter((l) => /by hand|Not automated|manual/i.test(l.text)).map((l) => l.text);
+
+function combos(names: string[], k: number, repeat: boolean): string[][] {
+  if (k === 0) return [[]];
+  const out: string[][] = [];
+  names.forEach((n, i) => { for (const rest of combos(repeat ? names.slice(i) : names.slice(i + 1), k - 1, repeat)) out.push([n, ...rest]); });
+  return out;
+}
+
+describe('A1.4: modal spells (Charms, Commands, Confluences, escalate, "choose one or more")', () => {
+  it('the cube has these modal spells', () => {
+    expect(MODAL.sort()).toEqual(['abrade', 'collective_brutality', 'cryptic_command', 'farewell', 'fiery_confluence', 'flame_of_anor', 'izzet_charm', 'kolaghans_command', 'mystic_confluence', 'prismari_command', 'rip_apart', 'sheoldreds_edict'].sort());
+  });
+
+  for (const id of MODAL) {
+    it(`${id}: every legal choice of modes casts, takes targets per mode and resolves with no manual step`, () => {
+      const ab = castSpellAbility(id, 0)!.ability;
+      const names = ab.choices!.map((c) => c.name);
+      const repeat = ab.params.CanRepeatModes === 'True';
+      const max = id === 'flame_of_anor' ? 1 : ab.charmMax ?? 1;
+      let tried = 0;
+      for (let k = ab.charmMin ?? 1; k <= max; k++) {
+        for (const modes of combos(names, k, repeat)) {
+          const { g, ctx, iid } = modalBoard(id);
+          const counters = modes.some((m) => /Counter/.test(m));
+          if (counters) oppBolt(g, ctx);
+          const targets = autoTargets(g, iid, 0, modes);
+          if (targets?.some((t, n) => t.length < (targetSpecs(ab, modes)[n]?.min ?? 0))) continue;
+          const err = applyAction(g, 'a', { t: 'cast', iid, modes, targets }, ctx);
+          expect(err, `${id} ${modes.join('+')}`).toBeNull();
+          drain(g, ctx, (q) => q.options.find((o) => o.value === 'decline')?.value ?? q.options[0].value);
+          expect(noManual(g), `${id} ${modes.join('+')}`).toEqual([]);
+          expect(g.cards[iid].zone, `${id} ${modes.join('+')}\n${logTail(g)}`).toBe('graveyard');
+          expect(g.stack).toHaveLength(0);
+          tried++;
+        }
+      }
+      expect(tried).toBeGreaterThan(0);
+    });
+  }
+
+  it('a mode can be chosen only once unless the card says so; the number of modes is checked', () => {
+    const { g, ctx, iid } = modalBoard('cryptic_command');
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDraw'], targets: [] }, ctx)).toMatch(/twice/);
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw'], targets: [] }, ctx)).toMatch(/mode/);
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBTapAll', 'DBReturn'], targets: [] }, ctx)).toBeTruthy();
+    expect(g.cards[iid].zone).toBe('hand');
+  });
+
+  it('Mystic Confluence: draw three times', () => {
+    const { g, ctx, iid } = modalBoard('mystic_confluence');
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDraw', 'DBDraw'], targets: [] });
+    drain(g, ctx);
+    expect(g.players[0].zones.hand.length, logTail(g)).toBe(hand - 1 + 3);
+  });
+
+  it('Mystic Confluence: return two different creatures and draw (a target per mode instance)', () => {
+    const { g, ctx, iid, theirs } = modalBoard('mystic_confluence');
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBReturn', 'DBDraw', 'DBReturn'], targets: [card(theirs[0])[0], card(theirs[1])[0]] });
+    drain(g, ctx);
+    expect(g.cards[theirs[0]].zone, logTail(g)).toBe('hand');
+    expect(g.cards[theirs[1]].zone).toBe('hand');
+    expect(g.players[0].zones.hand.length).toBe(hand - 1 + 1);
+  });
+
+  it('Mystic Confluence: counter unless they pay {3}, twice; modes resolve in printed order whatever the order chosen', () => {
+    const { g, ctx, iid } = modalBoard('mystic_confluence');
+    const bolt = oppBolt(g, ctx);
+    const life = g.players[0].life;
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBCounter', 'DBCounter'], targets: [card(bolt)[0], card(bolt)[0]] });
+    const start = g.log.length;
+    // b has 4 Mountains, one tapped for the Bolt: pays {3} once, can't pay the second time.
+    drain(g, ctx, (q) => q.options.find((o) => o.value === 'pay')?.value ?? q.options[0].value);
+    expect(g.cards[bolt].zone, logTail(g, 25)).toBe('graveyard');
+    expect(g.players[0].life, logTail(g, 25)).toBe(life);
+    expect(g.players[0].life).toBe(life); // countered
+    expect(g.players[0].zones.hand.length).toBe(hand - 1 + 1);
+    const text = g.log.slice(start).map((l) => l.text).join('\n');
+    expect(text.indexOf('draws'), text).toBeGreaterThan(text.lastIndexOf('pays'));
+  });
+
+  it('Fiery Confluence: 2 damage to each opponent three times', () => {
+    const { g, ctx, iid } = modalBoard('fiery_confluence');
+    const life = g.players[1].life;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDamageOpponents', 'DBDamageOpponents', 'DBDamageOpponents'], targets: [] });
+    drain(g, ctx);
+    expect(g.players[1].life, logTail(g)).toBe(life - 6);
+  });
+
+  it('Fiery Confluence: destroy two artifacts and 1 damage to each creature', () => {
+    const { g, ctx, iid, art, theirs } = modalBoard('fiery_confluence');
+    const myArt = g.battlefield.find((x) => g.cards[x].cardId === 'mind_stone' && g.cards[x].controller === 'a')!;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDestroy', 'DBDamageCreatures', 'DBDestroy'], targets: [card(art)[0], card(myArt)[0]] });
+    drain(g, ctx);
+    expect(g.cards[art].zone, logTail(g)).toBe('graveyard');
+    expect(g.cards[myArt].zone).toBe('graveyard');
+    expect(g.cards[theirs[1]].damage).toBe(1); // 1 damage to each creature
+  });
+
+  it('Kolaghan\'s Command: return a creature card and 2 damage to a creature', () => {
+    const { g, ctx, iid, dead, theirs } = modalBoard('kolaghans_command');
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDamage', 'DBReturn'], targets: [card(dead[0])[0], card(theirs[1])[0]] });
+    drain(g, ctx);
+    expect(g.cards[dead[0]].zone, logTail(g)).toBe('hand');
+    expect(g.cards[theirs[1]].zone).toBe('graveyard');
+  });
+
+  it('Collective Brutality: escalate — each mode beyond the first costs a discard', () => {
+    const { g, ctx, iid, theirs } = modalBoard('collective_brutality');
+    const hand = g.players[0].zones.hand.length;
+    const life = [g.players[0].life, g.players[1].life];
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDiscard', 'DBPump', 'DBDrain'], targets: [[{ kind: 'player', pid: 'b' }], card(theirs[0])[0], [{ kind: 'player', pid: 'b' }]] });
+    drain(g, ctx);
+    expect(g.players[0].zones.hand.length, logTail(g, 15)).toBe(hand - 1 - 2);
+    expect(g.cards[theirs[0]].zone).toBe('graveyard');
+    expect(g.players[0].life).toBe(life[0] + 2);
+    expect(g.players[1].life).toBe(life[1] - 2);
+  });
+
+  it('Flame of Anor: one mode, or two if you control a Wizard', () => {
+    const { g, ctx, iid, art, theirs } = modalBoard('flame_of_anor', ['grim_lavamancer']);
+    const t = [[{ kind: 'player' as const, pid: 'a' }], card(art)[0]];
+    expect(applyAction(g, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDestroy'], targets: t }, ctx)).toBeTruthy();
+    put(g, ctx, 'a', 'grim_lavamancer');
+    const hand = g.players[0].zones.hand.length;
+    act(g, ctx, 'a', { t: 'cast', iid, modes: ['DBDraw', 'DBDestroy'], targets: t });
+    drain(g, ctx);
+    expect(g.cards[art].zone, logTail(g)).toBe('graveyard');
+    expect(g.players[0].zones.hand.length).toBe(hand - 1 + 2);
+    expect(applyAction(g, 'a', { t: 'cast', iid: toZone(g, ctx, 'a', 'flame_of_anor', 'hand'), modes: ['DBDraw', 'DBDestroy', 'DBDamage'], targets: [...t, card(theirs[0])[0]] }, ctx)).toBeTruthy();
+  });
+
+  it('Deceiver Exarch: the enters trigger asks for a mode, then its target (tap an opponent\'s permanent)', () => {
+    const { g, ctx, theirs } = modalBoard('deceiver_exarch');
+    const ex = toZone(g, ctx, 'a', 'deceiver_exarch', 'hand');
+    act(g, ctx, 'a', { t: 'cast', iid: ex });
+    drain(g, ctx, (q) => q.options.find((o) => /^Tap target/.test(o.label))?.value ?? q.options[0].value);
+    expect(g.cards[ex].zone).toBe('battlefield');
+    expect(theirs.some((x) => g.cards[x].tapped) || g.battlefield.some((x) => g.cards[x].controller === 'b' && g.cards[x].tapped), logTail(g, 12)).toBe(true);
+    expect(noManual(g)).toEqual([]);
+  });
+
+  it('Cosmogrand Zenith: the second spell each turn triggers a choice (two Soldiers)', () => {
+    const { g, ctx } = modalBoard('cosmogrand_zenith', ['lightning_bolt', 'lightning_bolt']);
+    put(g, ctx, 'a', 'cosmogrand_zenith');
+    for (const o of g.players[0].zones.library.length ? [toZone(g, ctx, 'a', 'lightning_bolt', 'hand'), toZone(g, ctx, 'a', 'lightning_bolt', 'hand', g.players[0].zones.hand.slice())] : []) {
+      act(g, ctx, 'a', { t: 'cast', iid: o, targets: [[{ kind: 'player', pid: 'b' }]] });
+      drain(g, ctx, (q) => q.options.find((x) => /Human Soldier/i.test(x.label))?.value ?? q.options[0].value);
+    }
+    expect(g.battlefield.filter((x) => g.cards[x].token?.name === 'Human Soldier'), logTail(g, 15)).toHaveLength(2);
+    expect(noManual(g)).toEqual([]);
+  });
+});

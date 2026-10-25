@@ -2,7 +2,7 @@ export type Color = 'W' | 'U' | 'B' | 'R' | 'G';
 export const COLORS: Color[] = ['W', 'U', 'B', 'R', 'G'];
 export const COLOR_NAMES: Record<Color, string> = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 
-export type Layout = 'normal' | 'transform' | 'modal_dfc' | 'split' | 'adventure' | 'flip';
+export type Layout = 'normal' | 'transform' | 'modal_dfc' | 'split' | 'adventure' | 'flip' | 'prepare';
 
 export interface CardFace {
   name: string;

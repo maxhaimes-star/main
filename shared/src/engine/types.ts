@@ -47,6 +47,8 @@ export interface ParsedAbility {
   /** Charm only: how many modes to choose (CharmNum$ / MinCharmNum$). */
   charmMin?: number;
   charmMax?: number;
+  /** Charm only: CharmNum$ is a variable (Flame of Anor): charmMax is the minimum, play.ts charmLimits() the value now. */
+  charmMaxVar?: string;
   /** The face's SVars (for variables like X). */
   svars?: Record<string, string>;
 }
@@ -422,5 +424,5 @@ export interface AutoCont {
   /** "Unless" costs already decided this resolution: step index -> the step runs. */
   unless?: Record<number, boolean>;
   /** ChooseCard / ChooseNumber / ChooseType results of this resolution (Defined$ ChosenCard ...), imprinted cards. */
-  chosen?: { cards?: string[]; number?: number; /** ResultSVar$ values (die rolls) */ vars?: Record<string, number>; players?: string[]; type?: string; color?: string; imprinted?: string[]; /** RepeatEach accumulates RememberChosen picks (Chaos Defiler, Atraxa) */ accumulate?: boolean };
+  chosen?: { cards?: string[]; number?: number; /** RememberAmount$ True: how many counters were put */ rememberedNumber?: number; /** ResultSVar$ values (die rolls) */ vars?: Record<string, number>; players?: string[]; type?: string; color?: string; imprinted?: string[]; /** RepeatEach accumulates RememberChosen picks (Chaos Defiler, Atraxa) */ accumulate?: boolean };
 }

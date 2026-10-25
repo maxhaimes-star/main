@@ -176,6 +176,7 @@ export function moveCardRaw(state: GameState, ctx: Ctx, iid: string, to: Zone, o
   if (to === 'battlefield') {
     if (from !== 'battlefield') {
       inst.summoningSick = true;
+      inst.counters = {}; // a new object: counters it had in another zone (Cosima's voyage counters) don't come along (rule 122.2)
       inst.faceDown = !!opts.faceDown;
       inst.castAs = undefined;
       if (opts.controller) inst.controller = opts.controller;

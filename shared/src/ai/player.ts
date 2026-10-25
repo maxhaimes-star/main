@@ -26,7 +26,7 @@ import { effectivePT, faceOf, hasKeyword, isCreature } from '../game/rules.ts';
 import { type CardInstance, type GameAction, type GameState, type GameView, isHidden, type ViewCard, type ViewPlayer } from '../game/types.ts';
 import type { ParsedAbility, Pending, TargetRef, TargetSpec } from '../engine/types.ts';
 import { abilitiesOfInstance } from '../engine/animate.ts';
-import { castableFaces, castOptions } from '../engine/costs.ts';
+import { castableFaces, castOptions, isPrepareCard } from '../engine/costs.ts';
 import { castSpellAbility, flatten, isRoomCard, targetSpecs, type ActivatedEntry } from '../engine/script.ts';
 import { isValidTarget } from '../engine/targets.ts';
 import { attackRestriction, blockRestriction } from '../engine/statics.ts';
@@ -739,6 +739,16 @@ function bestSpell(ctx: Ctx, main: boolean): GameAction | null {
       }
     }
   }
+  // Prepared permanents: cast a copy of their spell (Skycoach Conductor's All Aboard, Emeritus of Truce's Swords ...).
+  for (const iid of v.battlefield) {
+    const c = visible(v, iid);
+    if (!c?.cardId || c.controller !== pid || !c.counters.prepared) continue;
+    const d = L(c.cardId);
+    if (!d || !isPrepareCard(d) || failed(mem, v, `cast:${iid}:1:`)) continue;
+    if (!safe(() => castability(v, pid, iid, L, 1).ok, false)) continue;
+    const ch = planSpell(ctx, iid, c, d, 1, 'normal', main, opp);
+    if (ch) choices.push(ch);
+  }
   if (!choices.length) return null;
   if (ctx.level === 'easy') return choices[Math.floor(rand(mem) * choices.length)].action;
   choices.sort((a, b) => b.value - a.value);
@@ -783,8 +793,12 @@ function planSpell(ctx: Ctx, iid: string, c: CardInstance, d: CardData, face: nu
       const pick = sp2.length ? pickTargets(ctx, sp2, pid, iid, ch.ability.description, ab, false, x ?? 0, [ch.name]) : { targets: [], value: 1 };
       return { name: ch.name, ok: !!pick, value: pick?.value ?? -1 };
     }).filter((m) => m.ok).sort((a, b) => b.value - a.value);
-    if (scoredModes.length < min) return null;
-    modes = scoredModes.slice(0, min).map((m) => m.name);
+    // CanRepeatModes$ (Mystic / Fiery Confluence): the best usable mode fills the remaining choices.
+    const repeat = ab.params.CanRepeatModes === 'True';
+    if (scoredModes.length < min && !(repeat && scoredModes.length)) return null;
+    modes = Array.from({ length: min }, (_v, k) => scoredModes[repeat ? Math.min(k, scoredModes.length - 1) : k].name);
+    const order = ab.choices.map((ch) => ch.name);
+    modes.sort((a, b) => order.indexOf(a) - order.indexOf(b));
   }
   if (ab) {
     specs = safe(() => targetSpecs(ab, modes), [] as TargetSpec[]);

@@ -1,5 +1,5 @@
 import {
-  activatedAbilities, castableFaces, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
+  activatedAbilities, castableFaces, charmLimits, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
@@ -164,7 +164,10 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
   const sa = manual ? undefined : safeSpell(c?.cardId, face ?? 0);
   if (sa?.ability.choices?.length) {
     const ch = sa.ability.choices;
-    const picked = await base.pickModes(card?.name ?? 'Choose modes', ch.map((m) => ({ value: m.name, label: m.ability.description || m.ability.api })), sa.ability.charmMin ?? 1, sa.ability.charmMax ?? 1);
+    // Mode count now (Flame of Anor: two with a Wizard) and whether a mode may repeat (Mystic Confluence).
+    let lim = { min: sa.ability.charmMin ?? 1, max: sa.ability.charmMax ?? 1, repeat: sa.ability.params.CanRepeatModes === 'True' };
+    try { if (base.me) lim = charmLimits(base.g as never, sa.ability, base.me, getCard); } catch { /* keep the printed numbers */ }
+    const picked = await base.pickModes(card?.name ?? 'Choose modes', ch.map((m) => ({ value: m.name, label: m.ability.description || m.ability.api })), lim.min, lim.max, lim.repeat);
     if (!picked) return;
     modes = picked;
   }
@@ -294,6 +297,13 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
       const label = `Unlock ${door?.name ?? 'door'}`;
       const u = abilityUsable(g, me, iid, e.index);
       items.push(u && !u.ok ? { label, disabled: true, hint: u.reason ?? "Can't unlock now" } : { label, hint: door?.manaCost, onClick: () => act({ t: 'activate', iid, text: label, ability: e.index }) });
+    }
+    // Prepare cards: while prepared, its controller may cast a copy of its spell (face 1).
+    if (c.counters.prepared && c.controller === me && card?.faces?.[1]?.name && (card.layout === 'prepare' || card.layout === 'adventure')) {
+      const spell = card.faces[1];
+      const u = castability(g, me, iid, 1);
+      const label = `Cast a copy of ${spell.name}`;
+      items.push(u && !u.ok ? { label, disabled: true, hint: u.reason ?? "Can't cast it now" } : { label, hint: spell.manaCost, onClick: () => castWithX(base, iid, 1) });
     }
     const scripted = all.filter((e) => e.ability.api !== '_Unlock');
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({

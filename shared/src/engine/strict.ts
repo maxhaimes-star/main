@@ -21,7 +21,7 @@ import { type PayResult, type PaySource, poolSources, solveMana } from '../game/
 import { type Ctx, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameAction, GameState, GameView, ViewCard } from '../game/types.ts';
 import { isHidden } from '../game/types.ts';
-import { castableFaces, castOptions } from './costs.ts';
+import { castableFaces, castOptions, isPrepareCard, preparedSpellCast } from './costs.ts';
 import { activateMana, manaPlansFor } from './mana.ts';
 import { stateBasedActions } from './resolve.ts';
 import { abilityAt, abilityLine, activatedAbilitiesOf, getScript, scriptRef } from './script.ts';
@@ -323,9 +323,14 @@ export function priorityError(state: AnyState, pid: string): string | null {
 }
 
 /** Strict zone check for casting: hand, the cost option's zone (flashback ...), an adventure in exile, or a MayPlay permission. */
-export function castZoneError(state: AnyState, pid: string, c: CardInstance, costOption: string | undefined, lookup: Lookup = getCard): string | null {
+export function castZoneError(state: AnyState, pid: string, c: CardInstance, costOption: string | undefined, lookup: Lookup = getCard, face?: number): string | null {
   const name = cardName(c, lookup);
   if (c.zone === 'hand') return c.owner === pid ? null : `You can't cast ${name} from another player's hand`;
+  // A prepared permanent: its controller may cast a copy of its spell.
+  if (c.zone === 'battlefield' && c.cardId && isPrepareCard(lookup(c.cardId)) && face === 1) {
+    if (c.controller !== pid) return `You don't control ${name}`;
+    return preparedSpellCast(c, face, lookup) ? null : `${name} isn't prepared`;
+  }
   const opt = costOption ?? 'normal';
   if (c.zone === 'graveyard' && ['flashback', 'escape', 'mayhem'].includes(opt) && c.owner === pid) return null;
   if (c.zone === 'exile' && (opt === 'madness' || opt === 'foretell') && c.owner === pid) return null;
@@ -390,7 +395,7 @@ function faceCastability(state: AnyState, pid: string, c: CardInstance, face: nu
   if (!opts.length) return { ok: false, reason: "That face can't be cast" };
   for (const o of opts) {
     if (o.unavailable) { if (o.id === 'normal') reason = o.unavailable; continue; }
-    const z = castZoneError(state, pid, c, o.id, lookup);
+    const z = castZoneError(state, pid, c, o.id, lookup, face);
     if (z) { if (o.id === 'normal') reason = z; continue; }
     const pv = autoPayPreview(state, pid, iid, face, o.id, hasX(o.cost) ? 0 : undefined, lookup);
     if (pv.ok) return { ok: true };

@@ -24,7 +24,7 @@ import {
   type BoosterTemplate, type CardDbMeta, type FormatData, type Print, type Rarity, type SearchRow,
   type SetData, type SetType, type SlotDef, CARDDB_SHARDS, shardOf,
 } from '../shared/src/carddb-types.ts';
-import { cardFromForgeText, engineTokenFromText, f1, listCardFiles, loadToken, parseFaces, parseForge } from './lib/forge-card.ts';
+import { cardFromForgeText, engineTokenFromText, expandCopyFaces, f1, listCardFiles, loadToken, parseFaces, parseForge } from './lib/forge-card.ts';
 
 const args = process.argv.slice(2);
 const arg = (k: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
@@ -48,7 +48,7 @@ const cachedToken = (s: string) => {
 let collisions = 0;
 for (const file of listCardFiles(res)) {
   if (!file.endsWith('.txt')) continue;
-  const text = fs.readFileSync(file, 'utf8');
+  const text = expandCopyFaces(fs.readFileSync(file, 'utf8'), res);
   const card = cardFromForgeText(text, 9999, cachedToken);
   if (!card || !card.id) continue;
   const prev = cards.get(card.id);

@@ -61,13 +61,15 @@ export function execAnimate(state: GameState, ctx: Ctx, step: ParsedAbility, api
     cards = state.battlefield.filter((iid) => matchCard(state.cards[iid], p.ValidCards ?? 'Card', api.env) === true);
   } else {
     const def = p.Defined?.startsWith('Targeted.') ? 'Targeted' : undefined;
-    const o = def ? api.defined(def) : p.Defined?.startsWith('Self.') ? api.defined(p.Defined) : api.objects('Self');
+    const o = def ? api.defined(def) : p.Defined?.startsWith('Self.') || (p.Defined && p.Defined !== 'Self') ? api.defined(p.Defined) : api.objects('Self');
     if (!o) { api.manual(); return; }
     cards = o.cards;
     // "Targeted.!Creature" (Tezzeret): only the targets that match.
     if (def) cards = cards.filter((iid) => state.cards[iid] && matchCard(state.cards[iid], `Card.${p.Defined!.slice('Targeted.'.length)}`, api.env) !== false);
   }
-  cards = cards.filter((iid) => state.cards[iid]?.zone === 'battlefield');
+  // Outside the battlefield only a permanent grant of triggers that work there (Cosima: "it gains 'Whenever a land ...'" in exile).
+  const awayOk = (p.Duration === 'Permanent' && !!p.Triggers && !p.Power && !p.Types && !p.Keywords && !p.Abilities);
+  cards = cards.filter((iid) => state.cards[iid]?.zone === 'battlefield' || (awayOk && state.cards[iid]?.zone === 'exile'));
   const until = DURATIONS[p.Duration ?? 'UntilEndOfTurn'] ?? 'eot';
   const num = (k: string) => (p[k] != null ? api.amount(p[k], 0) : undefined);
   const types = list(p.Types);

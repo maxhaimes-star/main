@@ -194,12 +194,49 @@ const KEYWORD_OPTIONS: Record<string, { id: string; label: string; zone?: string
  */
 export function castableFaces(data: Pick<CardData, 'layout' | 'faces'> | undefined): number[] {
   if (!data?.faces || data.faces.length < 2) return [0];
+  if (isPrepareCard(data)) return [0]; // the spell is only cast as a copy, from the prepared permanent
   return ['modal_dfc', 'adventure', 'split'].includes(data.layout) ? data.faces.map((_f, i) => i) : [0];
+}
+
+/**
+ * Prepare cards (Secrets of Strixhaven: Emeritus of Truce // Swords to Plowshares, Skycoach Conductor // All Aboard):
+ * the card is cast as its creature; "while it's prepared, you may cast a copy of its spell. Doing so unprepares it."
+ * Older card data has them as adventures whose creature text mentions being prepared.
+ */
+export function isPrepareCard(data: Pick<CardData, 'layout' | 'faces'> | undefined): boolean {
+  if (!data?.faces || data.faces.length < 2 || !data.faces[1].name) return false;
+  return data.layout === 'prepare' || (data.layout === 'adventure' && /\bprepared\b/i.test(data.faces[0].oracle ?? ''));
+}
+
+/** A cast of face 1 of a prepared permanent: a copy of its spell. */
+export function preparedSpellCast(c: Pick<CardInstance, 'zone' | 'counters' | 'cardId'>, face: number | undefined, lookup: Lookup): boolean {
+  return c.zone === 'battlefield' && face === 1 && !!c.counters?.prepared && !!c.cardId && isPrepareCard(lookup(c.cardId));
+}
+
+/**
+ * The copy of a prepared permanent's spell that is cast (rule: "cast a copy of its spell"): a token-like copy of
+ * the card cast as its spell face, so it ceases to exist when it leaves the stack. The permanent is unprepared.
+ */
+export function preparedCopy(state: GameState, ctx: Ctx, pid: string, src: CardInstance): CardInstance {
+  const data = ctx.lookup(src.cardId!)!;
+  const f = data.faces![1];
+  let cid = randomId(ctx.rng);
+  while (state.cards[cid]) cid = randomId(ctx.rng);
+  const inst: CardInstance = {
+    iid: cid, cardId: src.cardId, token: { name: f.name, typeLine: f.typeLine, colors: [...data.colors], oracle: f.oracle, keywords: [] },
+    owner: pid, controller: pid, zone: 'stack', tapped: false, faceDown: false, transformed: false, castAs: f.name,
+    counters: {}, damage: 0, tempPT: [0, 0], permPT: [0, 0], summoningSick: false, noUntap: false, revealedTo: [],
+  };
+  state.cards[cid] = inst;
+  delete src.counters.prepared;
+  log(state, ctx, pid, `${cardName(src, ctx.lookup)} is no longer prepared (a copy of ${f.name} is cast).`);
+  return inst;
 }
 
 /** Can this face of the card be cast (face undefined = the card as a whole)? */
 export function faceCastable(c: CardInstance, face: number | undefined, lookup: Lookup): boolean {
   if (face == null || face === 0 || !c.cardId) return true;
+  if (preparedSpellCast(c, face, lookup)) return true;
   return castableFaces(lookup(c.cardId)).includes(face);
 }
 

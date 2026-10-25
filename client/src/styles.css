@@ -308,6 +308,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .modes-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .mode-opt { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
 .mode-opt.sel { border-color: var(--accent); }
+.mode-opt.mode-repeat { align-items: center; cursor: default; }
+.mode-opt .mode-count { min-width: 2.2em; text-align: center; }
 .trigger-badge { font-size: 10px; text-transform: uppercase; background: var(--accent); color: #000; border-radius: 3px; padding: 0 4px; margin-right: 4px; }
 .pending-skip { top: 44px; }
 
@@ -474,6 +476,8 @@ h1, h2, h3, h4 { margin: 8px 0; }
 .zone.lib .card-back { font-size: calc(var(--cw0) * 0.3); font-weight: 800; }
 .zone .empty-zone { width: 100%; aspect-ratio: 63/88; border: 1px dashed #3d485a; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; }
 .zone-count { position: absolute; bottom: 3px; right: 3px; background: #000d; color: #fff; font-size: 12px; font-weight: 700; padding: 0 6px; border-radius: 9px; }
+.zone.castable { box-shadow: 0 0 0 2px #3fb950, 0 0 8px #3fb95088; }
+.zone-castable { position: absolute; top: 3px; left: 3px; background: #238636; color: #fff; font-size: 11px; font-weight: 700; padding: 0 5px; border-radius: 9px; pointer-events: none; }
 .zone:hover { transform: translateY(-2px); }
 .revealed-top { position: absolute; top: 2px; left: 2px; right: 2px; font-size: 10px; background: #000c; padding: 1px 3px; border-radius: 3px; z-index: 3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

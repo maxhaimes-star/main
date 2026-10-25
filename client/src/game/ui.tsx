@@ -41,7 +41,7 @@ export interface GameCtx {
   ask: (label: string, dflt?: number) => Promise<number | null>;
   askText: (label: string, dflt?: string) => Promise<string | null>;
   /** Charm-style mode picker: resolves to the chosen option values, or null if cancelled. */
-  pickModes: (label: string, options: { value: string; label: string }[], min: number, max: number) => Promise<string[] | null>;
+  pickModes: (label: string, options: { value: string; label: string }[], min: number, max: number, repeat?: boolean) => Promise<string[] | null>;
   /** Pick one of several options (cast options ...): resolves to the option value, or null if cancelled. */
   pickOption: (title: string, options: PickOption[]) => Promise<string | null>;
   /** Split `total` among targets (divided damage): resolves to key -> amount, or null if cancelled. */
@@ -348,14 +348,28 @@ export function Modal({ title, onClose, children, wide }: { title: ReactNode; on
   );
 }
 
-export function ModesModal({ label, options, min, max, onDone }: { label: string; options: { value: string; label: string }[]; min: number; max: number; onDone: (v: string[] | null) => void }) {
+export function ModesModal({ label, options, min, max, repeat, onDone }: { label: string; options: { value: string; label: string }[]; min: number; max: number; repeat?: boolean; onDone: (v: string[] | null) => void }) {
   const [sel, setSel] = useState<string[]>([]);
   const toggle = (v: string) => setSel((s) => s.includes(v) ? s.filter((x) => x !== v) : max === 1 ? [v] : s.length < max ? [...s, v] : s);
+  // CanRepeatModes (Mystic Confluence): a count per mode; the modes are sent in the card's order.
+  const count = (v: string) => sel.filter((x) => x === v).length;
+  const bump = (v: string, d: number) => setSel((s) => {
+    if (d > 0) return s.length < max ? options.map((o) => o.value).flatMap((x) => Array(count(x) + (x === v ? 1 : 0)).fill(x)) : s;
+    const k = s.lastIndexOf(v);
+    return k < 0 ? s : [...s.slice(0, k), ...s.slice(k + 1)];
+  });
   return (
     <Modal title={label} onClose={() => onDone(null)}>
-      <p className="muted">Choose {min === max ? min : `${min}–${max}`} mode{max === 1 ? '' : 's'}.</p>
+      <p className="muted">Choose {min === max ? min : `${min}–${max}`} mode{max === 1 ? '' : 's'}{repeat ? ' — you may choose the same mode more than once' : ''}.</p>
       <div className="modes-list">
-        {options.map((o) => (
+        {repeat ? options.map((o) => (
+          <div key={o.value} className={`mode-opt mode-repeat ${count(o.value) ? 'sel' : ''}`}>
+            <button className="tiny" aria-label={`Fewer: ${o.label}`} disabled={!count(o.value)} onClick={() => bump(o.value, -1)}>−</button>
+            <b className="mode-count">{count(o.value)}×</b>
+            <button className="tiny" aria-label={`More: ${o.label}`} disabled={sel.length >= max} onClick={() => bump(o.value, 1)}>+</button>
+            <span>{o.label}</span>
+          </div>
+        )) : options.map((o) => (
           <label key={o.value} className={`mode-opt ${sel.includes(o.value) ? 'sel' : ''}`}>
             <input type={max === 1 ? 'radio' : 'checkbox'} checked={sel.includes(o.value)} onChange={() => toggle(o.value)} /> {o.label}
           </label>
