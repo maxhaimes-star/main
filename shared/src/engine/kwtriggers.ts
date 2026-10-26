@@ -94,5 +94,14 @@ export function keywordTriggers(keywords: readonly string[]): KeywordTrigger[] {
   return out;
 }
 
+/** Triggered keywords with a number that other effects grant (Pump KW$ Firebending:4, AddKeyword$ Firebending:2 / Annihilator:2). */
+export const GRANTABLE_NUMBERED = new Set(['Firebending', 'Annihilator', 'Exalted']);
+
+/** Synthesized triggers for keywords granted to a permanent (not the ones it already has printed). */
+export function grantedKeywordTriggers(printed: readonly string[], granted: readonly string[]): KeywordTrigger[] {
+  const extra = granted.filter((k) => GRANTABLE_NUMBERED.has(k.split(':')[0].trim()) && /^[^:]+(:\d+)?$/.test(k.trim()) && !printed.includes(k));
+  return extra.length ? keywordTriggers([...new Set(extra)]) : [];
+}
+
 /** K: keywords keywordTriggers synthesizes. */
 export const TRIGGER_KEYWORDS = ['Foretell', 'Replicate', 'MayFlashSac', 'Madness', 'Spectacle', 'Surge', 'AlternateAdditionalCost', 'Multikicker', 'Mayhem', 'Escalate', 'Annihilator', 'Firebending', 'Exalted', 'Persist', 'Undying', 'Living Weapon', 'Fading', 'Vanishing', 'Cumulative upkeep', 'Cascade', 'Storm', 'Ravenous', 'Backup', 'Miracle', 'Rebound'];

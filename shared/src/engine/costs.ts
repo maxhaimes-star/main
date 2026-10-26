@@ -9,6 +9,7 @@
  * caster while the spell waits on the stack.
  */
 import { faceDownCastKind } from './facedown.ts';
+import { warpResolved } from './newmech.ts';
 import { type CardData, parseManaSymbols } from '../cards.ts';
 import { getCard } from '../cube.ts';
 import { cardName, faceOf, type Lookup, payFromPool } from '../game/rules.ts';
@@ -114,7 +115,11 @@ function candidates(state: GameState, pid: string, spellIid: string, part: Pick<
   const me = state.players.find((p) => p.pid === pid);
   if (!me) return [];
   const env = { controller: pid, sourceIid: spellIid, lookup };
-  const ok = (iid: string) => iid !== spellIid && !!state.cards[iid] && matchCard(state.cards[iid], part.valid, env) !== false;
+  // "+unblockedAttacker" (sneak's return cost): an attacking creature no creature blocks.
+  const unblocked = /\+unblockedAttacker/.test(part.valid);
+  const valid = unblocked ? part.valid.replace(/\+unblockedAttacker/, '') : part.valid;
+  const ok = (iid: string) => iid !== spellIid && !!state.cards[iid] && matchCard(state.cards[iid], valid, env) !== false
+    && (!unblocked || (!!state.cards[iid].attacking && !state.battlefield.some((b) => state.cards[b]?.blocking === iid)));
   switch (part.kind) {
     case 'exileHand': case 'discard': case 'reveal': return me.zones.hand.filter(ok);
     case 'exileGrave': return me.zones.graveyard.filter(ok);
@@ -355,7 +360,7 @@ export interface CastPlan {
 export function planCast(state: GameState, c: CardInstance, pid: string, a: CastAction, ctx: Ctx): { error: string } | { plan: CastPlan; auto?: AutoInfo } {
   const name = a.faceDown ? 'A face-down spell' : cardName(c, ctx.lookup);
   if (!a.force) {
-    const e = castTimingError(state, c, pid, a.face, ctx.lookup, !!a.faceDown);
+    const e = a.costOption === 'sneak' ? null : castTimingError(state, c, pid, a.face, ctx.lookup, !!a.faceDown); // sneak: its option checks the step
     if (e) return { error: `${e} (cast with force to override)` };
     const restricted = castRestriction(state, c.iid, pid, ctx.lookup);
     if (restricted) return { error: `${restricted} (cast with force to override)` };
@@ -629,6 +634,14 @@ export function afterSpellResolved(state: GameState, ctx: Ctx, item: StackItem, 
       step: 'end', turn: state.turn, createdStep: state.step,
       auto: { cardId: c.cardId ?? '', face: 0, source: 'trigger', index: -1, targets: [], line: DASH_LINE, trigger: { mode: 'Delayed', card: c.iid } },
     });
+  }
+  if (info.warped && c.zone === 'battlefield') warpResolved(state, ctx, item, c); // engine/newmech.ts
+  if (info.sneaked && c.zone === 'battlefield') {
+    // Sneak: it enters tapped and attacking (the player the returned creature attacked: the defending player).
+    const def = state.players.find((p) => p.pid !== item.controller && !p.conceded)?.pid;
+    c.tapped = true;
+    if (def && state.step === 'blockers' && state.combat.attackersDeclared) c.attacking = def;
+    log(state, ctx, item.controller, `${name} enters tapped${c.attacking ? ' and attacking' : ''} (sneak).`);
   }
   if (info.buyback && resolved && c.zone === 'graveyard') {
     moveCard(state, ctx, c.iid, 'hand');

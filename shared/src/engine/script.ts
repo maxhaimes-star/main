@@ -561,7 +561,7 @@ export function baseVarSupported(v: string): boolean {
     || /^Count\$xPaid$/.test(v) || /^Number\$-?\d+$/.test(v) || v === 'Count$TriggerRememberAmount' || v === 'TriggerCount$Amount'
     || v === 'Count$RememberedNumber' || /^(Remembered|RememberedLKI)\$CardCounters\.\w+$/.test(v)
     || /^(Targeted|TargetedLKI|Remembered|RememberedLKI)\$Card(Power|Toughness|ManaCost)$/.test(v)
-    || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand)$/.test(v)
+    || /^Count\$(CardPower|CardToughness|CardManaCost|YourLifeTotal|CardsInYourHand|YourSpeed)$/.test(v)
     || supportedCount(v)
     || /^Count\$Valid [A-Za-z.+,!]+$/.test(v)
     || uniqueVarSupported(v)
@@ -621,7 +621,7 @@ export function unsupportedReason(step: ParsedAbility): string | null {
     case 'PutCounter': if (!p.CounterType && !p.Adapt) return 'PutCounter'; break;
     case 'Pump': case 'PumpAll':
       if (p.PumpZone && !(api === 'Pump' && (/^(Flashback|Retrace)$/.test(p.KW ?? '') || !p.KW))) return `${api} (special keyword)`;
-      if (p.KW && /HIDDEN|:/.test(p.KW) && !/^Protection/.test(p.KW) && p.KW !== "HIDDEN CARDNAME can't block.") return `${api} (special keyword)`;
+      if (p.KW && /HIDDEN|:/.test(p.KW) && !/^Protection/.test(p.KW) && p.KW !== "HIDDEN CARDNAME can't block." && !p.KW.split('&').every((k) => /^(Firebending|Annihilator):\d+$/.test(k.trim()) || !/HIDDEN|:/.test(k))) return `${api} (special keyword)`;
       if (p.Defined && ['You', 'Player', 'Opponent', 'TargetedPlayer'].includes(p.Defined) && (api === 'PumpAll' || !p.KW || p.NumAtt || p.NumDef)) return `${api} (player)`;
       break;
   }

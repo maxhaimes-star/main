@@ -233,6 +233,12 @@ export interface CastInfo {
   replicated?: number;
   /** MayFlashSac: cast when a sorcery couldn't have been — sacrificed at the next cleanup. */
   flashSac?: boolean;
+  /** Cast for its warp cost: exiled at the next end step (engine/newmech.ts). */
+  warped?: boolean;
+  /** Cast for its sneak cost: a permanent enters tapped and attacking (engine/newmech.ts). */
+  sneaked?: boolean;
+  /** Cast without paying its mana cost after it was plotted. */
+  plotted?: boolean;
 }
 
 /** One way to cast a card (normal cost, alternative cost, kicker ...). */

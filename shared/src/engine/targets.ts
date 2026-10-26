@@ -164,6 +164,11 @@ function propCheck(c: CardInstance, fx: CardFacts, prop: string, env: MatchEnv):
     case 'wasCastFromYourHandByYou': return !!c.castInfo && !c.castInfo.from && c.controller === env.controller;
     case 'surged': return c.castInfo?.option === 'surge';
     case 'dashed': return !!c.castInfo?.dashed;
+    // engine/newmech.ts: saddled Mounts, sneak / warp casts.
+    case 'IsSaddled': return !!c.tempKeywords?.includes('Saddled');
+    case 'SaddledThisTurn': return !env.turnInfo ? 'unknown' : (env.turnInfo.activations[`saddled|${c.iid}`] ?? 0) > 0;
+    case 'sneaked': return !!c.castInfo?.sneaked;
+    case 'warped': return !!c.castInfo?.warped;
     case 'DefenderCtrl': return env.defender === undefined ? 'unknown' : c.controller === env.defender;
     case 'RememberedPlayerCtrl': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.controller);
     case 'RememberedPlayerOwn': return env.remembered === undefined ? 'unknown' : env.remembered.includes(c.owner);

@@ -29,7 +29,7 @@ import { drawHooks } from '../game/hooks.ts';
 export interface StaticsState {
   battlefield: string[];
   cards: Record<string, CardInstance | ViewCard>;
-  players: { pid: string; life: number; zones: Record<string, string[]>; handCount?: number }[];
+  players: { pid: string; life: number; zones: Record<string, string[]>; handCount?: number; counters?: Record<string, number> }[];
   activePlayer?: string;
   step?: string;
   stack?: unknown[];
@@ -158,6 +158,27 @@ function cmp(a: number, op: string, b: number): boolean {
 
 // ------------------------------------------------------------------ static abilities in play
 
+/**
+ * "Max speed — this creature gets +1/+2" (S:Mode$ Continuous | AffectedDefined$ Self | Condition$ MaxSpeed |
+ * AddStaticAbility$ MaxSpeedStatic): the named SVar statics, with the granting line's condition.
+ */
+export function expandStaticGrants(lines: readonly string[], svars: Record<string, string>): string[] {
+  const out: string[] = [];
+  for (const line of lines) {
+    const m = /\|\s*AddStaticAbility\$\s*([^|]+)/.exec(line);
+    if (!m || !/AffectedDefined\$\s*Self\b/.test(line)) { out.push(line); continue; }
+    const cond = /\|\s*(Condition\$\s*[^|]+)/.exec(line)?.[1]?.trim();
+    for (const name of m[1].split(',').map((x) => x.trim())) {
+      const sub = svars[name];
+      if (!sub) continue;
+      out.push(cond && !/Condition\$/.test(sub) ? `${sub} | ${cond}` : sub);
+    }
+    const rest = line.replace(/\|\s*AddStaticAbility\$\s*[^|]+/, '');
+    if (/AddAbility\$|AddTrigger\$|AddKeyword\$|AddPower\$|AddToughness\$/.test(rest)) out.push(rest);
+  }
+  return out;
+}
+
 function staticsOfCard(c: CardInstance, lookup: Lookup): StaticAbility[] {
   if (c.faceDown) return [];
   let lines: string[] = [], svars: Record<string, string> = {}, name = '';
@@ -175,7 +196,7 @@ function staticsOfCard(c: CardInstance, lookup: Lookup): StaticAbility[] {
     };
   };
   // + statics granted by animate effects (engine/animate.ts)
-  return [...lines.map((line) => make(line, svars, name)), ...grantedLines(c, 'statics').map((g) => make(g.line, g.svars, g.faceName))];
+  return [...expandStaticGrants(lines, svars).map((line) => make(line, svars, name)), ...grantedLines(c, 'statics').map((g) => make(g.line, g.svars, g.faceName))];
 }
 
 /** Static abilities functioning on the battlefield. */
@@ -319,6 +340,7 @@ class Evaluator {
       case 'Count$CardsInYourHand': return handSize(this.st, s.controller);
       case 'Count$YouCastThisGame': return this.st.gameStats?.cast[s.controller] ?? 0;
       case 'Count$YourLifeTotal': return this.st.players.find((p) => p.pid === s.controller)?.life;
+      case 'Count$YourSpeed': return this.st.players.find((p) => p.pid === s.controller)?.counters?.speed ?? 0;
       case 'Count$Domain': {
         const env = this.env(s);
         const lands = this.zoneCards('battlefield').filter((c) => c.controller === s.controller && matchCard(c, 'Land', env) === true);
@@ -345,6 +367,7 @@ class Evaluator {
         case 'NotPlayerTurn': r = this.st.activePlayer == null ? 'unknown' : this.st.activePlayer !== s.controller; break;
         case 'Delirium': r = this.cardTypes(s, 'graveyard', 'Card.YouOwn') >= 4; break;
         case 'Threshold': r = gy.length >= 7; break;
+        case 'MaxSpeed': r = (this.st.players.find((x) => x.pid === s.controller)?.counters?.speed ?? 0) >= 4; break;
         default: return 'unknown';
       }
       if (r === false) return false;
@@ -435,7 +458,7 @@ function signature(st: StaticsState): string {
       JSON.stringify(c.counters), c.tempPT.join(','), c.permPT.join(','), c.attacking ?? '', c.blocking ?? '', (c.tempKeywords ?? []).join(','), c.note ?? '',
       c.copyOf ?? c.copyToken?.name ?? '', (c.animations ?? []).map((a) => a.id).join(','), c.chosen ? JSON.stringify(c.chosen) : '', c.copyExtra ? JSON.stringify(c.copyExtra) : ''].join(':');
   });
-  const pl = st.players.map((p) => `${p.pid}:${p.life}:${handSize(st, p.pid)}:${(p.zones.graveyard ?? []).join(',')}:${(p.zones.exile ?? []).length}`);
+  const pl = st.players.map((p) => `${p.pid}:${p.life}:${p.counters?.speed ?? 0}:${handSize(st, p.pid)}:${(p.zones.graveyard ?? []).join(',')}:${(p.zones.exile ?? []).length}`);
   const fx = (st.effects ?? []).map((e) => (e.kind === 'effect' ? `${e.id}:${e.remembered.join(',')}` : '')).join(',');
   return `${st.activePlayer}|${st.turn}|${bf.join(';')}|${pl.join(';')}|${fx}`;
 }
@@ -483,11 +506,13 @@ export function staticMods(st: StaticsState, iid: string, lookup: Lookup): CardM
 
 // ------------------------------------------------------------------ support classification
 
-const HANDLED_CONDITIONS = new Set(['PlayerTurn', 'NotPlayerTurn', 'Delirium', 'Threshold']);
+const HANDLED_CONDITIONS = new Set(['PlayerTurn', 'NotPlayerTurn', 'Delirium', 'Threshold', 'MaxSpeed']);
 const CONT_HANDLED_KEYS = new Set([
   'Mode', 'Affected', 'AffectedDefined', 'AddPower', 'AddToughness', 'SetPower', 'SetToughness', 'CharacteristicDefining',
   'AddKeyword', 'RemoveKeyword', 'AddType', 'RemoveType', 'RemoveCardTypes', 'Condition', 'IsPresent', 'PresentCompare', 'PresentZone',
   'CheckSVar', 'SVarCompare', 'EffectZone', 'Description', 'AddSVar', 'Secondary', 'AffectedZone', 'AddAbility',
+  // AffectedDefined$ Self: the named static lines apply under the same condition (staticsOfCard expandStaticGrants)
+  'AddStaticAbility',
   // granted triggered abilities (Kaldra Compleat, Nadu): grants.ts foreignTriggers, detected by triggers.ts
   'AddTrigger', 'ExcludeZone',
   // "have all activated abilities of all creature cards exiled with CARDNAME" (Agatha's Soul Cauldron): grants.ts

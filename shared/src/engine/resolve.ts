@@ -430,6 +430,7 @@ function evalVar(state: GameState, ctx: Ctx, r: Run, v: string): number | undefi
     case 'Count$CardToughness': return src ? effectivePT(src, ctx.lookup, state)[1] : undefined;
     case 'Count$CardManaCost': return src ? lkiOf(src, ctx, state).mv : undefined;
     case 'Count$YourLifeTotal': return player(state, r.controller).life;
+    case 'Count$YourSpeed': return player(state, r.controller).counters.speed ?? 0;
     case 'Count$CardsInYourHand': return player(state, r.controller).zones.hand.length;
   }
   return undefined;

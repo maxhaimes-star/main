@@ -473,6 +473,7 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
         for (const a of attrs) {
           if (a === 'Prepared') { c.counters.prepared = 1; log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} becomes prepared.`); }
           else if (a === 'Unprepared' || a === '!Prepared') { delete c.counters.prepared; log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} is no longer prepared.`); }
+          else if (a === 'Plotted' && c.zone === 'exile') { (state.remembered ??= {})[`plotted|${c.iid}`] = [String(state.turn)]; log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} becomes plotted.`); }
           else if (a === 'Suspected') c.tempKeywords = [...new Set([...(c.tempKeywords ?? []), 'Menace'])];
         }
       }

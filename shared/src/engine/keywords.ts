@@ -11,13 +11,16 @@
  *   Level up:<cost>                -> AB$ PutCounter LEVEL on itself (sorcery speed)
  *   Crew:<N>                       -> AB$ Crew (tap creatures with total power N; runtime asks which)
  *   Ninjutsu:<cost>[:Commander]    -> AB$ Ninjutsu from hand; the "target" is the unblocked attacker returned as a cost
+ *   Saddle:<N>                     -> AB$ Crew with Saddle$ True (sorcery speed): the Mount becomes saddled
+ *   Station:<N>                    -> AB$ _Station: tap another creature, charge counters equal to its power
+ *   Plot:<cost>                    -> AB$ _Plot from hand: special action, exile it (cast free on a later turn)
  *
  * Runtime behaviour (activation checks, Crew / Ninjutsu, Ward reminders, custom APIs) is in keyword-play.ts.
  */
 import { type ForgeFace, SYNTH_BASE } from './types.ts';
 
 /** Effect APIs that only synthesized keyword abilities use (executed by keyword-play.ts). */
-export const KEYWORD_APIS = new Set(['Unattach', 'Crew', 'Ninjutsu', '_Foretell', '_Unlock']);
+export const KEYWORD_APIS = new Set(['Unattach', 'Crew', 'Ninjutsu', '_Foretell', '_Unlock', '_Plot', '_Station', '_WarpExile']);
 
 export interface SynthAbility {
   index: number;
@@ -94,6 +97,21 @@ export function synthAbilities(f: ForgeFace): SynthAbility[] {
             add(v++, `${line} | ChapterLore$ ${ch + 1}`);
           }
         });
+        break;
+      }
+      case 'Saddle': {
+        // Like Crew (keyword-play.ts): tap other creatures with total power N; the Mount becomes saddled (engine/newmech.ts).
+        const n = parseInt(parts[1] ?? '1', 10) || 1;
+        add(0, `AB$ Crew | CrewPower$ ${n} | Saddle$ True | Defined$ Self | SorcerySpeed$ True | Keyword$ Saddle | SpellDescription$ Saddle ${n} (Tap any number of other untapped creatures you control with total power ${n} or more: This Mount becomes saddled until end of turn. Saddle only as a sorcery.)`);
+        break;
+      }
+      case 'Station':
+        add(0, 'AB$ _Station | Defined$ Self | SorcerySpeed$ True | Keyword$ Station | SpellDescription$ Station (Tap another untapped creature you control: Put charge counters equal to its power on this Spacecraft. Station only as a sorcery.)');
+        break;
+      case 'Plot': {
+        // A special action (keyword-play.ts specialAction -> newmech.ts plotAction): no stack.
+        const cost = (parts[1] ?? '0').trim() || '0';
+        add(0, `AB$ _Plot | Cost$ ${cost} | ActivationZone$ Hand | SorcerySpeed$ True | Keyword$ Plot | SpellDescription$ Plot ${costText(cost)} (You may pay ${costText(cost)} and exile this card from your hand. Cast it as a sorcery on a later turn without paying its mana cost. Plot only as a sorcery.)`);
         break;
       }
       case 'Foretell':

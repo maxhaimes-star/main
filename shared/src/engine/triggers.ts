@@ -15,7 +15,7 @@ import { type Ctx, log, player, randomId } from '../game/state.ts';
 import { type CardInstance, type GameEvent, type GameState, type StackItem, STEPS, type Zone } from '../game/types.ts';
 import { checkTargets } from './play.ts';
 import { answerResolveTargets, lkiOf } from './resolve.ts';
-import { chainOf, describe, getScript, isAutomatable, parseParams, PHASES, scriptRef, targetSpecs, triggersOf } from './script.ts';
+import { chainOf, describe, getScript, isAutomatable, parseParams, PHASES, scriptFaceOf, scriptRef, targetSpecs, triggersOf } from './script.ts';
 import { extraTriggerHosts, grantedTriggers } from './effects.ts';
 import { foreignTriggers } from './grants.ts';
 import { isValidTarget, matchCard, matchPlayer, type MatchEnv, type Tri } from './targets.ts';
@@ -27,7 +27,9 @@ import { designationTriggers } from './designations.ts';
 import { turnInfo } from './durations.ts';
 import { conditionTrue, evalCount } from './counts.ts';
 import { canPayCost, parseCostTokens } from './paycost.ts';
-import { keywordTriggers } from './kwtriggers.ts';
+import { keywordTriggers, grantedKeywordTriggers } from './kwtriggers.ts';
+import { speedOnLifeLoss, startEngines } from './newmech.ts';
+import { staticMods } from './statics.ts';
 import { emitUnblocked } from './combat-rules.ts';
 import { wardReminders } from './keyword-play.ts';
 import { uniqueTriggerLine, uniqueTriggerSkip, uniqueTriggerSupport, uniqueTriggers } from './turns.ts';
@@ -59,6 +61,28 @@ const KNOWN_PARAMS = new Set([
   // the Nth counter, damage amounts, attacking with a <type>, "at the beginning of your second main phase".
   'FirstTime', 'PlayerTurn', 'OpponentTurn', 'Revolt', 'Threshold', 'Hellbent', 'Valiant', 'CounterAmount', 'DamageAmount', 'ValidAttackers', 'PhaseCount', 'FirstCombat',
 ]);
+
+/** Keywords granted to a permanent this turn or by statics, with their arguments ("Firebending:4"). */
+function grantedKeywords(state: GameState, c: CardInstance, ctx: Ctx): string[] {
+  if (c.zone !== 'battlefield') return [];
+  const out = [...(c.tempKeywords ?? [])];
+  if (numberedGrants(state)) { const mods = staticMods(state, c.iid, ctx.lookup); if (mods) out.push(...mods.addKw); }
+  return out;
+}
+
+/** Does any permanent have a static granting a numbered triggered keyword ("AddKeyword$ Firebending:2")? Cached per action. */
+const grantScan = new WeakMap<GameState, { key: string; has: boolean }>();
+function numberedGrants(state: GameState): boolean {
+  const key = `${state.seq}|${state.battlefield.length}`;
+  const hit = grantScan.get(state);
+  if (hit?.key === key) return hit.has;
+  const has = state.battlefield.some((iid) => {
+    const c = state.cards[iid];
+    return !!c && !c.faceDown && (scriptFaceOf(c)?.statics ?? []).some((l) => /AddKeyword\$[^|]*\b(Firebending|Annihilator):/.test(l));
+  });
+  grantScan.set(state, { key, has });
+  return has;
+}
 
 /** A trigger parameter the engine checks (ValidCause$ only for TurnFaceUp). */
 const knownParam = (k: string, mode: string | undefined) => KNOWN_PARAMS.has(k) || (k === 'ValidCause' && mode === 'TurnFaceUp');
@@ -263,6 +287,7 @@ function svarValue(state: GameState, ctx: Ctx, env: MatchEnv, svars: Record<stri
   }
   const me = state.players.find((p) => p.pid === env.controller);
   if (v === 'Count$YourLifeTotal') return me?.life;
+  if (v === 'Count$YourSpeed') return me?.counters.speed ?? 0;
   if (v === 'Count$CardsInYourHand') return me?.zones.hand.length;
   return undefined;
 }
@@ -694,13 +719,14 @@ function attackedMatches(state: GameState, target: string, spec: string, env: Ma
  * Life gained / lost since the last detection, as events (Mode$ LifeGained / LifeLost): life totals are compared
  * instead of hooking every place that changes them. Gains and losses of one batch net out.
  */
-function lifeEvents(state: GameState) {
+function lifeEvents(state: GameState, ctx: Ctx) {
   const seen = (state.lifeSeen ??= {});
   for (const p of state.players) {
     const was = seen[p.pid];
     seen[p.pid] = p.life;
     if (was === undefined || was === p.life || state.phase !== 'playing') continue;
     (state.events ??= []).push({ t: 'life', pid: p.pid, amount: p.life - was });
+    if (p.life < was) speedOnLifeLoss(state, ctx, p.pid); // start your engines (engine/newmech.ts)
     const ti = turnInfo(state);
     const k = `lifeEvents${p.life > was ? '+' : '-'}|${p.pid}`;
     ti.activations[k] = (ti.activations[k] ?? 0) + 1;
@@ -744,7 +770,7 @@ export function isCrime(state: GameState, pid: string, target: string): boolean 
 function detect(state: GameState, ctx: Ctx) {
   // No-blockers shortcut (strict: the defender couldn't block): the attackers are unblocked all the same.
   if ((state.events ?? []).some((e) => e.t === 'phase' && e.step === 'blockers') && state.combat.blockersDeclared) emitUnblocked(state);
-  lifeEvents(state);
+  lifeEvents(state, ctx);
   const events = state.events ?? [];
   state.events = [];
   if (!events.length) return;
@@ -775,7 +801,8 @@ function detect(state: GameState, ctx: Ctx) {
         }
         // Triggered keywords (Annihilator, Exalted, Persist, Living Weapon, Fading, Cascade, Storm ...): engine/kwtriggers.ts.
         if (host.id && !host.effect && !c.faceDown) {
-          for (const kt of keywordTriggers(getScript(host.id)?.[host.face]?.keywords ?? [])) {
+          const printed = getScript(host.id)?.[host.face]?.keywords ?? [];
+          for (const kt of [...keywordTriggers(printed), ...grantedKeywordTriggers(printed, grantedKeywords(state, c, ctx))]) {
             if (!hostZoneOk(host, kt.params, ev)) continue;
             const hit = matchEvent(state, ctx, host, kt.params, ev, env);
             if (!hit || hit === 'unknown') continue;
@@ -1057,6 +1084,7 @@ export function processTriggers(state: GameState, ctx: Ctx): boolean {
   if (state.phase !== 'playing') { state.events = []; return false; }
   trackTurnEvents(state, ctx);
   designationTriggers(state, ctx, state.events ?? []); // monarch draw / steal, initiative (engine/designations.ts)
+  startEngines(state, ctx); // speed 1 for players with a "start your engines!" permanent (engine/newmech.ts)
   uniqueTriggers(state, ctx); // Sagas, Hideaway, Mode$ Always, Saga sacrifice (turns.ts)
   try { detect(state, ctx); } catch (e) { log(state, ctx, null, `Trigger detection error: ${(e as Error).message}`); }
   const pushed = flush(state, ctx);

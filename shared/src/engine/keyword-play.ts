@@ -8,6 +8,7 @@ import { type Ctx, emit, log, moveCard, player, randomId } from '../game/state.t
 import type { CardInstance, GameState, StackItem } from '../game/types.ts';
 import { levelStats, type LevelStats } from './keywords.ts';
 import { faceDownWard } from './facedown.ts';
+import { plotAction, saddle, station, warpExile } from './newmech.ts';
 import { getScript, parseParams, scriptFaceOf } from './script.ts';
 import { canPayMana, payMana } from './paycost.ts';
 import { type AutoInfo, type ParsedAbility, type Pending, SYNTH_BASE, type TargetRef } from './types.ts';
@@ -49,9 +50,13 @@ export function checkActivation(state: GameState, ctx: Ctx, pid: string, c: Card
     case 'Crew': {
       const need = parseInt(p.CrewPower ?? '1', 10) || 1;
       const total = crewCandidates(state, ctx, pid, c.iid).reduce((n, id) => n + powerOf(state, ctx, id), 0);
-      if (total < need) return `Crew ${need}: you need untapped creatures with total power ${need} or more`;
+      const what = p.Saddle === 'True' ? 'Saddle' : 'Crew';
+      if (total < need) return `${what} ${need}: you need ${what === 'Saddle' ? 'other ' : ''}untapped creatures with total power ${need} or more`;
       break;
     }
+    case '_Station':
+      if (!crewCandidates(state, ctx, pid, c.iid).length) return 'Station: you need another untapped creature';
+      break;
     case 'Ninjutsu': {
       if (!state.combat.blockersDeclared) return 'Ninjutsu: only after blockers are declared';
       const ref = targets[0]?.[0];
@@ -71,6 +76,7 @@ export function checkActivation(state: GameState, ctx: Ctx, pid: string, c: Card
  */
 export function specialAction(state: GameState, ctx: Ctx, pid: string, c: CardInstance, ab: ParsedAbility): string | null | undefined {
   if (ab.api === '_Unlock') return unlockDoor(state, ctx, pid, c, ab);
+  if (ab.api === '_Plot') return plotAction(state, ctx, pid, c, ab); // engine/newmech.ts
   if (ab.api !== '_Foretell') return undefined;
   if (state.activePlayer !== pid) return 'You can foretell only during your turn';
   if (c.zone !== 'hand' || c.owner !== pid) return 'Foretell: the card must be in your hand';
@@ -124,9 +130,10 @@ export function afterActivation(state: GameState, ctx: Ctx, pid: string, c: Card
     auto.targetZones = {};
     return;
   }
-  if (ab.api === 'Crew') {
-    const need = parseInt(ab.params.CrewPower ?? '1', 10) || 1;
-    crewPending(state, ctx, { kind: 'crew', pid, vehicle: c.iid, stackId: item.id, need, got: 0, tapped: [] });
+  if (ab.api === 'Crew' || ab.api === '_Station') {
+    const need = ab.api === '_Station' ? 1 : parseInt(ab.params.CrewPower ?? '1', 10) || 1;
+    const mode = ab.api === '_Station' ? 'station' as const : ab.params.Saddle === 'True' ? 'saddle' as const : undefined;
+    crewPending(state, ctx, { kind: 'crew', pid, vehicle: c.iid, stackId: item.id, need, got: 0, tapped: [], ...(mode ? { mode } : {}) });
     return;
   }
   if (auto) wardReminders(state, ctx, pid, auto.targets);
@@ -134,7 +141,10 @@ export function afterActivation(state: GameState, ctx: Ctx, pid: string, c: Card
 
 // ------------------------------------------------------------------ crew
 
-interface CrewData { kind: 'crew'; pid: string; vehicle: string; stackId: string; need: number; got: number; tapped: string[] }
+/** Crew, Saddle (mode 'saddle') and Station (mode 'station': one creature, any power). */
+interface CrewData { kind: 'crew'; pid: string; vehicle: string; stackId: string; need: number; got: number; tapped: string[]; mode?: 'saddle' | 'station' }
+
+const CREW_WORD = { saddle: 'Saddle', station: 'Station' } as const;
 
 function crewPending(state: GameState, ctx: Ctx, d: CrewData): boolean {
   const cands = crewCandidates(state, ctx, d.pid, d.vehicle);
@@ -142,7 +152,8 @@ function crewPending(state: GameState, ctx: Ctx, d: CrewData): boolean {
   const vname = state.cards[d.vehicle] ? cardName(state.cards[d.vehicle], ctx.lookup) : 'the Vehicle';
   const pending: Pending = {
     id: randomId(ctx.rng), pid: d.pid,
-    prompt: `Crew ${d.need} — tap a creature to crew ${vname}${d.got ? ` (power so far: ${d.got})` : ''}`,
+    prompt: d.mode === 'station' ? `Station — tap another creature to put charge counters equal to its power on ${vname}`
+      : `${d.mode ? CREW_WORD[d.mode] : 'Crew'} ${d.need} — tap a creature to ${d.mode === 'saddle' ? 'saddle' : 'crew'} ${vname}${d.got ? ` (power so far: ${d.got})` : ''}`,
     options: [
       ...cands.map((iid) => ({ value: iid, label: `${cardName(state.cards[iid], ctx.lookup)} (power ${powerOf(state, ctx, iid)})` })),
       { value: 'cancel', label: 'Cancel (untap them, remove the ability)' },
@@ -156,7 +167,7 @@ function crewPending(state: GameState, ctx: Ctx, d: CrewData): boolean {
 function cancelCrew(state: GameState, ctx: Ctx, d: CrewData) {
   for (const iid of d.tapped) if (state.cards[iid]?.zone === 'battlefield') state.cards[iid].tapped = false;
   state.stack = state.stack.filter((s) => s.id !== d.stackId);
-  log(state, ctx, d.pid, `${pname(state, d.pid)} doesn't crew — the ability is removed.`);
+  log(state, ctx, d.pid, `${pname(state, d.pid)} doesn't ${d.mode ?? 'crew'} — the ability is removed.`);
 }
 
 /** Answer a keyword Pending (Crew). Returns undefined when the pending isn't one of ours. */
@@ -168,6 +179,21 @@ export function answerKeywordPending(state: GameState, ctx: Ctx, pend: Pending, 
   if (!c || c.zone !== 'battlefield' || c.tapped) { crewPending(state, ctx, d); return null; }
   c.tapped = true;
   const next: CrewData = { ...d, got: d.got + powerOf(state, ctx, value), tapped: [...d.tapped, value] };
+  if (d.mode) {
+    // Saddle / Station: remember who paid (SaddledThisTurn) / the tapped creature's power on the stack item.
+    const item = state.stack.find((s) => s.id === d.stackId);
+    if (d.mode === 'station' && item?.auto) {
+      item.auto.extra = { ...(item.auto.extra ?? {}), power: String(next.got) };
+      log(state, ctx, d.pid, `${pname(state, d.pid)} taps ${cardName(c, ctx.lookup)} (station, power ${next.got}).`);
+      return null;
+    }
+    if (next.got >= next.need) {
+      if (item?.auto) item.auto.extra = { ...(item.auto.extra ?? {}), saddlers: next.tapped.join(',') };
+      const v = state.cards[d.vehicle];
+      log(state, ctx, d.pid, `${pname(state, d.pid)} saddles ${v ? cardName(v, ctx.lookup) : 'the Mount'} with ${next.tapped.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')}.`);
+      return null;
+    }
+  }
   if (next.got >= next.need) {
     const v = state.cards[d.vehicle];
     log(state, ctx, d.pid, `${pname(state, d.pid)} crews ${v ? cardName(v, ctx.lookup) : 'the Vehicle'} with ${next.tapped.map((i) => cardName(state.cards[i], ctx.lookup)).join(', ')}.`);
@@ -193,11 +219,18 @@ export function execKeywordStep(state: GameState, ctx: Ctx, step: ParsedAbility,
     }
     case 'Crew': {
       if (!src || src.zone !== 'battlefield') return;
+      if (step.params.Saddle === 'True') { saddle(state, ctx, r.controller, src, (r.item.auto?.extra?.saddlers ?? '').split(',').filter(Boolean)); return; }
       src.tempKeywords = [...new Set([...(src.tempKeywords ?? []), 'Crewed'])];
       const [pw, t] = effectivePT(src, ctx.lookup);
       log(state, ctx, r.controller, `${r.sourceName} becomes an artifact creature until end of turn (${pw}/${t}).`);
       return;
     }
+    case '_Station': {
+      if (!src || src.zone !== 'battlefield') return;
+      station(state, ctx, r.controller, src, parseInt(r.item.auto?.extra?.power ?? '0', 10) || 0);
+      return;
+    }
+    case '_WarpExile': warpExile(state, ctx, r.controller, r.sourceIid); return;
     case 'Ninjutsu': {
       if (!src || src.zone !== 'hand' || src.owner !== r.controller) { log(state, ctx, r.controller, `${r.sourceName}: no longer in hand — ninjutsu does nothing.`); return; }
       moveCard(state, ctx, src.iid, 'battlefield', { tapped: true, controller: r.controller });

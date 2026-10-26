@@ -22,6 +22,8 @@ export const HANDLED_KEYWORDS = new Set([
   'Compleated',
   // Cast as an Aura for the bestow cost (costs.ts option, script.ts castSpellAbility, rules.ts faceOf).
   'Bestow',
+  // engine/facedown.ts, engine/newmech.ts
+  'Morph', 'Megamorph', 'Disguise', 'Plot', 'Warp', 'Saddle', 'Station', 'Start your engines', 'Sneak',
   // Triggered keywords synthesized as triggers (engine/kwtriggers.ts), rebound (resolve.ts).
   ...TRIGGER_KEYWORDS,
   // Splice onto Arcane: the cube's only Arcane spell is Through the Breach itself, so there is nothing to splice onto.

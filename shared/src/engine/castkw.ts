@@ -13,6 +13,7 @@ import type { CardInstance, GameState } from '../game/types.ts';
 import type { CostPart, OptionDef } from './costs.ts';
 import { turnInfo } from './durations.ts';
 import { getScript } from './script.ts';
+import { plottedTurn, warpCastable } from './newmech.ts';
 
 type ParseCost = (cost: string, selfName?: string) => { mana: string; parts: CostPart[] };
 
@@ -92,6 +93,35 @@ export function applyCastKeywords(state: GameState, c: CardInstance, pid: string
     const d: OptionDef = { id: 'foretell', label: 'Foretell', mana: k.mana, parts: [...(normal?.parts ?? []), ...k.parts], flags: { from: 'exile' }, delve: !!normal?.delve };
     if (c.zone !== 'exile' || when == null) d.unavailable = 'Foretell: foretell it first (exile it face down from your hand during your turn)';
     else if (parseInt(when, 10) >= state.turn) d.unavailable = "Foretell: you can't cast it the turn you foretold it";
+    defs.push(d);
+  }
+  // Plot: cast a plotted card from exile without paying its mana cost, on a later turn, at sorcery speed (engine/newmech.ts).
+  if (kws.some((k) => k.split(':')[0].trim() === 'Plot') || plottedTurn(state, c) != null) {
+    const when = plottedTurn(state, c);
+    const d: OptionDef = { id: 'plot', label: 'Cast plotted card (free)', mana: '', parts: [...(normal?.parts ?? [])], flags: { from: 'exile', plotted: true }, delve: false };
+    if (when == null) d.unavailable = 'Plot: plot it first (exile it from your hand as a sorcery for its plot cost)';
+    else if (when >= state.turn) d.unavailable = "Plot: you can't cast it the turn you plotted it";
+    else if (!sorceryTiming(state, pid)) d.unavailable = 'Plot: cast it only as a sorcery (your main phase, empty stack)';
+    defs.push(d);
+  }
+  // Warp: from your hand for the warp cost (exiled at the next end step); later from exile for its mana cost.
+  for (const [cost] of kwArgs(kws, 'Warp')) {
+    if (!cost || !normal) continue;
+    const k = parseCost(cost, name);
+    const d: OptionDef = { id: 'warp', label: 'Warp', mana: k.mana, parts: [...normal.parts, ...k.parts, { kind: 'other', n: '0', valid: '', text: 'Exiled at the next end step; cast it from exile on a later turn' }], flags: { warped: true }, delve: normal.delve };
+    if (c.zone !== 'hand') d.unavailable = 'Warp only from your hand';
+    defs.push(d);
+  }
+  if (normal && c.zone === 'exile' && warpCastable(state, c)) {
+    defs.push({ ...normal, id: 'warpExile', label: 'Cast from exile (warped earlier)', flags: { ...normal.flags, from: 'exile' } });
+  }
+  // Sneak: during the declare blockers step, for the sneak cost plus returning an unblocked attacker you control.
+  for (const [cost] of kwArgs(kws, 'Sneak')) {
+    if (!cost || !normal) continue;
+    const k = parseCost(`${cost} Return<1/Creature.attacking+YouCtrl+unblockedAttacker/unblocked attacker>`, name);
+    const d: OptionDef = { id: 'sneak', label: 'Sneak', mana: k.mana, parts: [...normal.parts, ...k.parts], flags: { sneaked: true }, delve: normal.delve };
+    if (c.zone !== 'hand') d.unavailable = 'Sneak only from your hand';
+    else if (state.step !== 'blockers' || !state.combat.blockersDeclared || state.activePlayer !== pid) d.unavailable = 'Sneak: only during your declare blockers step';
     defs.push(d);
   }
   // MayFlashSac: cast at instant speed, sacrificed at the next cleanup step.

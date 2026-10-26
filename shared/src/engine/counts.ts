@@ -30,7 +30,7 @@ export interface CountEnv {
   remembered?: string[];
 }
 
-const FLAGS = ['Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn', 'Void', 'OptionalCost', 'OptionalGenericCostPaid'];
+const FLAGS = ['MaxSpeed', 'Revolt', 'Kicked', 'Delirium', 'Threshold', 'Metalcraft', 'Hellbent', 'CommittedCrimeThisTurn', 'Void', 'OptionalCost', 'OptionalGenericCostPaid'];
 export const KNOWN_CONDITIONS = new Set([...FLAGS, 'PlayerTurn', 'NotPlayerTurn', 'Blessing', 'Monarch']);
 const ZONED = { ValidGraveyard: 'graveyard', ValidHand: 'hand', ValidLibrary: 'library', ValidExile: 'exile' } as const;
 const CARD_TYPES = ['Artifact', 'Battle', 'Creature', 'Enchantment', 'Instant', 'Kindred', 'Land', 'Planeswalker', 'Sorcery', 'Tribal'];
@@ -121,6 +121,8 @@ export function conditionTrue(name: string, env: CountEnv): boolean | undefined 
     case 'Void': return 'history' in s ? (s.turnStats?.moves ?? []).some((mv) => mv.from === 'battlefield' && !faceOf(mv.snap, env.lookup).types.includes('Land')) : undefined;
     case 'CommittedCrimeThisTurn': return !!s.turnInfo && s.turnInfo.turn === s.turn && (s.turnInfo.activations[`crime|${env.controller}`] ?? 0) > 0; // triggers.ts trackTurnEvents
     case 'Hellbent': return zoneCards(s, env.controller, 'hand').length === 0;
+    // Start your engines! (engine/newmech.ts): speed 4.
+    case 'MaxSpeed': return (s.players.find((x) => x.pid === env.controller)?.counters.speed ?? 0) >= 4;
     case 'Blessing': case 'Monarch': {
       const p = s.players.find((x) => x.pid === env.controller) as { designations?: string[] } | undefined;
       return !!p?.designations?.includes(name === 'Blessing' ? "City's Blessing" : 'Monarch');

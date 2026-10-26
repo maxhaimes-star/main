@@ -333,7 +333,7 @@ export function castZoneError(state: AnyState, pid: string, c: CardInstance, cos
   }
   const opt = costOption ?? 'normal';
   if (c.zone === 'graveyard' && ['flashback', 'escape', 'mayhem'].includes(opt) && c.owner === pid) return null;
-  if (c.zone === 'exile' && (opt === 'madness' || opt === 'foretell') && c.owner === pid) return null;
+  if (c.zone === 'exile' && ['madness', 'foretell', 'plot', 'warpExile'].includes(opt) && c.owner === pid) return null;
   if (c.zone === 'exile' && c.castAs && c.owner === pid) return null; // on an adventure
   if (mayPlayPermission(state as StaticsState, c.iid, pid, lookup, asGame(state).remembered)) return null;
   return `You can't cast ${name} from ${c.owner === pid ? 'your' : "another player's"} ${c.zone}`;
@@ -387,7 +387,8 @@ function faceCastability(state: AnyState, pid: string, c: CardInstance, face: nu
   const g = asGame(state);
   const iid = c.iid;
   const timing = castTimingError(g, c, pid, face, lookup);
-  if (timing) return { ok: false, reason: timing };
+  // Sneak (engine/newmech.ts): cast in the declare blockers step whatever its type.
+  if (timing && !castOptions(g, iid, face, lookup, pid).some((o) => o.id === 'sneak' && !o.unavailable)) return { ok: false, reason: timing };
   const restricted = castRestriction(state as StaticsState, iid, pid, lookup);
   if (restricted) return { ok: false, reason: restricted };
   let reason = 'Not enough mana';
