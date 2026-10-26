@@ -17,6 +17,7 @@ import { wardReminders } from '../engine/keyword-play.ts';
 import { faceDownCastKind, turnFaceUp } from '../engine/facedown.ts';
 import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
 import { enforceAttackRequirements, enforceBlockRestrictions, takeExtraCombat } from '../engine/combat-rules.ts';
+import { becomeMonarch, takeInitiative } from '../engine/designations.ts';
 import { noteTapped } from '../engine/manatriggers.ts';
 import {
   answerStrictPending, attackError, blockError, blockersError, canBlockAny, castHelp, castManaCost, reduceGeneric, removeSymbols, castZoneError, checkStateBased, executeAutoPay, fixModeOn,
@@ -1089,6 +1090,14 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
     }
     case 'designation': {
       const has = me.designations.includes(a.name);
+      if (a.on && !has && a.name === 'Initiative') {
+        takeInitiative(state, ctx, pid); // unique; ventures into Undercity (the room goes on the stack)
+        return null;
+      }
+      if (a.on && !has && a.name === 'Monarch') {
+        becomeMonarch(state, ctx, pid);
+        return null;
+      }
       if (a.on && !has) {
         // Monarch / initiative are unique.
         if (['Monarch', 'Initiative'].includes(a.name)) for (const p of state.players) p.designations = p.designations.filter((d) => d !== a.name);
