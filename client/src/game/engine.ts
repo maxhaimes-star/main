@@ -1,5 +1,5 @@
 import {
-  abilitiesOfInstance, activatedAbilitiesOf, activeStatics, castOptions, divisionError, effectiveCost, flatten, faceManaCost, isAutomatable, isValidTarget, spellAbility, targetSpecs,
+  abilitiesOfInstance, activatedAbilitiesOf, activeStatics, castOptions, divisionError, effectiveCost, flatten, faceManaCost, isAutomatable, isValidTarget, spellAbility, castSpellAbility, targetSpecs,
   type ActiveStatic, type CastOption, type GameView, type ParsedAbility, type TargetRef, type TargetSpec, type ViewCard,
 } from '@ojb/shared';
 import * as Shared from '@ojb/shared';
@@ -14,6 +14,7 @@ function safe<T>(f: () => T): T | undefined {
 /** What a click on a card in my hand does (engine/strict.ts handClick); 'menu' when the engine can't tell. */
 export const safeHandClick = (g: GameView, me: string, iid: string) => safe(() => Shared.handClick(g, me, iid, getCard)) ?? 'menu';
 export const safeSpell = (cardId: string | undefined, face: number) => cardId ? safe(() => spellAbility(cardId, face)) : undefined;
+export const safeCastSpell = (cardId: string | undefined, face: number, costOption?: string) => cardId ? safe(() => castSpellAbility(cardId, face, costOption) ?? spellAbility(cardId, face)) : undefined;
 export const safeActivated = (cardId: string | undefined, face: number) => (cardId ? safe(() => activatedAbilitiesOf(cardId, face)) : undefined) ?? [];
 /** Activated abilities of a permanent now: script + animate grants + abilities other cards grant it (indexes >= GRANT_BASE / FOREIGN_BASE). */
 export const safeAbilities = (g: GameView, c: { iid: string; cardId?: string; transformed?: boolean }): ReturnType<typeof safeActivated> =>

@@ -3,7 +3,7 @@ import {
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
-import { abilityUsable, attackProblem, blockProblem, castability, safeHandClick, AUTO_LABEL, autoStatus, isStrict, manualOk, phyrexianChoice, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell } from './engine.ts';
+import { abilityUsable, attackProblem, blockProblem, castability, safeHandClick, AUTO_LABEL, autoStatus, isStrict, manualOk, phyrexianChoice, summoningSickNoHaste, castStatus, dividedInfo, optionText, safeAbilities, safeActivated, safeCastOptions, safeDivisionError, safeSpecs, safeSpell, safeCastSpell } from './engine.ts';
 import type { GameCtx, MenuItem, Mode } from './ui.tsx';
 
 type Base = Pick<GameCtx, 'g' | 'me' | 'act' | 'ask' | 'askText' | 'pickModes' | 'pickOption' | 'divide' | 'setMode' | 'opp' | 'target'> & { toast?: (m: string) => void } & { mode: Mode };
@@ -161,7 +161,7 @@ export async function castWithX(base: Base, iid: string, face?: number, manual?:
   }
   let targets: TargetRef[][] | undefined;
   let modes: string[] | undefined;
-  const sa = manual ? undefined : safeSpell(c?.cardId, face ?? 0);
+  const sa = manual ? undefined : safeCastSpell(c?.cardId, face ?? 0, costOption);
   if (sa?.ability.choices?.length) {
     const ch = sa.ability.choices;
     // Mode count now (Flame of Anor: two with a Wizard) and whether a mode may repeat (Mystic Confluence).
