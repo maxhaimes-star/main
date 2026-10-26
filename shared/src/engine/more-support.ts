@@ -9,7 +9,15 @@ export const MORE_APIS = new Set([
   'Explore', 'MultiplyCounter', 'ExchangeControl', 'SetState', 'Protection', 'PeekAndReveal', 'Reveal', 'RollDice', 'FlipCoin', 'DamageResolve',
   'DigUntil', 'CopySpellAbility', 'AlterAttribute', 'Earthbend', 'Airbend', 'Play', '_Remember', '_RepeatCheck', '_SetChosenType', '_Throne',
   'AddPhase', 'Incubate', '_Madness', '_ToGraveyard', '_Replicate', '_FlashSac', '_Fading', '_CumUpkeep', '_Cascade', '_Storm', '_LivingWeapon', '_Ravenous', '_Backup', '_PutBottom',
+  // engine/facedown.ts
+  'Manifest', 'Cloak', 'ManifestDread',
 ]);
+
+/** Defined$ ValidLibrary Card.TopLibrary+OwnedBy <player> (Etrata: "cloak the top card of that player's library"). */
+export const TOP_OF_LIBRARY_RE = /^ValidLibrary Card\.TopLibrary\+(?:(?:OwnedBy|ControlledBy) (\w+)|ActivePlayerCtrl)$/;
+
+/** DefinedPlayer$ values of Manifest / Cloak / ManifestDread steps (engine/facedown.ts). */
+export const FACEDOWN_PLAYERS = new Set(['You', 'Targeted', 'TargetedPlayer', 'TargetedController', 'TargetedOwner', 'RememberedController', 'RememberedOwner', 'TriggeredTarget', 'TriggeredCardController', 'Opponent']);
 
 /** Defined$ values more.ts resolves (beyond script.ts SUPPORTED_DEFINED). */
 export const MORE_DEFINED = new Set([
@@ -62,6 +70,13 @@ export function moreReason(step: ParsedAbility): string | null | undefined {
     case 'CopySpellAbility': return null;
     case 'FlipCoin': return p.FlipUntilYouLose || p.Amount || p.RememberResult || p.RememberNumber || p.RememberLoser || p.ForEachPlayer ? 'FlipCoin (several flips)' : null;
     case 'AddPhase': return p.ExtraPhase === 'Combat' ? null : `AddPhase (${p.ExtraPhase})`;
+    case 'Manifest': case 'Cloak': case 'ManifestDread': {
+      // engine/facedown.ts
+      if (p.Choices) return `${step.api} (Choices$)`;
+      if (p.Defined && !['TopOfLibrary', 'Remembered'].includes(p.Defined) && !TOP_OF_LIBRARY_RE.test(p.Defined)) return `${step.api} (Defined$ ${p.Defined})`;
+      if (p.DefinedPlayer && !FACEDOWN_PLAYERS.has(p.DefinedPlayer)) return `${step.api} (DefinedPlayer$ ${p.DefinedPlayer})`;
+      return null;
+    }
   }
   return null;
 }

@@ -116,7 +116,8 @@ export function hasKeyword(inst: CardInstance, lookup: Lookup, kw: string, state
     if (mods.removeKw.some((k) => k.toLowerCase() === kw.toLowerCase())) return false;
     if (mods.addKw.some((k) => k.toLowerCase() === kw.toLowerCase())) return true;
   }
-  if (inst.faceDown) return false;
+  // Disguise / cloak: a face-down permanent with ward {2} (engine/facedown.ts).
+  if (inst.faceDown) return kw.toLowerCase() === 'ward' && (inst.faceDownAs === 'disguise' || inst.faceDownAs === 'cloak');
   const f = faceOf(inst, lookup);
   if (f.keywords.some((k) => k.toLowerCase() === kw.toLowerCase())) return true;
   return !!inst.note && inst.note.toLowerCase().includes(kw.toLowerCase());

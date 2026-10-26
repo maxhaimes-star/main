@@ -34,7 +34,7 @@ export function canSee(state: GameState, viewer: string | null, c: CardInstance)
 function hide(c: CardInstance): HiddenCard {
   return {
     iid: c.iid, hidden: true, owner: c.owner, controller: c.controller, zone: c.zone, tapped: c.tapped,
-    counters: c.counters, faceDown: c.faceDown, attachedTo: c.attachedTo, attacking: c.attacking, blocking: c.blocking,
+    counters: c.counters, faceDown: c.faceDown, ...(c.faceDown && c.faceDownAs ? { faceDownAs: c.faceDownAs } : {}), attachedTo: c.attachedTo, attacking: c.attacking, blocking: c.blocking,
   };
 }
 

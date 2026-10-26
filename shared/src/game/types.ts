@@ -14,6 +14,8 @@ export const STEP_LABELS: Record<Step, string> = {
   main2: 'Main 2', end: 'End', cleanup: 'Cleanup',
 };
 
+export type FaceDownKind = 'morph' | 'disguise' | 'manifest' | 'cloak';
+
 export type Zone = 'library' | 'hand' | 'battlefield' | 'graveyard' | 'exile' | 'stack' | 'command' | 'sideboard';
 export const PLAYER_ZONES = ['library', 'hand', 'graveyard', 'exile', 'command', 'sideboard'] as const;
 export type PlayerZone = (typeof PLAYER_ZONES)[number];
@@ -29,6 +31,11 @@ export interface CardInstance {
   zone: Zone;
   tapped: boolean;
   faceDown: boolean;
+  /**
+   * How a face-down permanent became face down (engine/facedown.ts): cast face down with morph / disguise, manifested
+   * (manifest, manifest dread) or cloaked. Disguise and cloak give it ward {2}. Public information; cleared when it turns face up.
+   */
+  faceDownAs?: FaceDownKind;
   /** Face-down in exile and nobody may look at it, not even its owner (Bomat Courier: "You can't look at it."). */
   unseen?: boolean;
   /** Showing back face (transformed / MDFC back / flipped). */
@@ -284,7 +291,9 @@ export type GameEvent =
   /** An activated ability (not a mana ability) was activated (Mode$ AbilityCast; Cycled when Keyword$ Cycling). */
   | { t: 'activated'; iid: string; pid: string; item: string; keyword?: string; loyalty?: boolean; exhaust?: boolean; tapCost?: boolean }
   /** A player scried / surveilled N (Mode$ Scry / Surveil). */
-  | { t: 'scry'; pid: string; mode: 'scry' | 'surveil'; n: number };
+  | { t: 'scry'; pid: string; mode: 'scry' | 'surveil'; n: number }
+  /** A face-down permanent was turned face up (Mode$ TurnFaceUp); `pid` turned it (its controller, or the effect's controller). */
+  | { t: 'faceUp'; iid: string; pid: string };
 
 /**
  * Actions a player can send. All are validated in the reducer.
@@ -343,6 +352,8 @@ type GameActionBody =
   | { t: 'damage'; iid: string; delta: number }
   | { t: 'transform'; iid: string }
   | { t: 'faceDown'; iid: string; faceDown: boolean }
+  /** Special action: turn a face-down permanent you control face up by paying its morph / disguise / mana cost (engine/facedown.ts). */
+  | { t: 'turnFaceUp'; iid: string }
   | { t: 'attach'; iid: string; to: string | null }
   | { t: 'control'; iid: string; pid: string }
   | { t: 'createToken'; token: import('../cards.ts').TokenData; n: number; tapped?: boolean; pid?: string }
@@ -379,7 +390,7 @@ type GameActionBody =
 
 // ------------------------------------------------------------ client view
 
-export interface HiddenCard { iid: string; hidden: true; owner: string; controller: string; zone: Zone; tapped: boolean; counters: Record<string, number>; faceDown: boolean; attachedTo?: string; attacking?: string; blocking?: string }
+export interface HiddenCard { iid: string; hidden: true; owner: string; controller: string; zone: Zone; tapped: boolean; counters: Record<string, number>; faceDown: boolean; faceDownAs?: FaceDownKind; attachedTo?: string; attacking?: string; blocking?: string }
 export type ViewCard = CardInstance | HiddenCard;
 
 export interface ViewPlayer extends Omit<GamePlayer, 'zones' | 'peek'> {

@@ -32,6 +32,8 @@ import { isValidTarget } from '../engine/targets.ts';
 import { attackRestriction, blockRestriction } from '../engine/statics.ts';
 import { abilityUsability, attackError, autoPayPreview, blockError, castability, isLandCard, landPlaysLeft, manaSources } from '../engine/strict.ts';
 import { cardPower } from '../power.ts';
+import { faceUpCosts } from '../engine/facedown.ts';
+import { canPayMana } from '../engine/paycost.ts';
 
 export type BotLevel = 'easy' | 'normal';
 export const BOT_LEVELS: BotLevel[] = ['easy', 'normal'];
@@ -92,6 +94,7 @@ export function actionKey(a: GameAction): string {
     case 'cast': return `cast:${a.iid}:${a.face ?? ''}:${a.costOption ?? ''}`;
     case 'activate': return `act:${a.iid}:${a.ability}`;
     case 'playLand': return `land:${a.iid}`;
+    case 'turnFaceUp': return `up:${a.iid}`;
     case 'choose': return `choose:${a.id}:${a.value}`;
     case 'chooseTargets': return `ct:${a.id}:${JSON.stringify(a.targets)}`;
     case 'declareAttacker': return `atk:${a.iid}:${a.target}`;
@@ -915,7 +918,12 @@ function abilityAction(ctx: Ctx, main: boolean): GameAction | null {
   const best: { a: GameAction; value: number }[] = [];
   for (const iid of v.battlefield) {
     const c = visible(v, iid);
-    if (!c || c.controller !== pid || c.faceDown) continue;
+    if (!c || c.controller !== pid) continue;
+    if (c.faceDown) {
+      // Morph / disguise / manifested creature: turn it face up in a main phase when we can pay (engine/facedown.ts).
+      if (main && !failed(mem, v, `up:${iid}`) && safe(() => faceUpCosts(c, L).some((m) => canPayMana(asState(v), pid, m, 0, L)), false)) best.push({ a: { t: 'turnFaceUp', iid }, value: 2.5 });
+      continue;
+    }
     const entries = safe(() => abilitiesOfInstance(c, asState(v) as never, L), [] as ActivatedEntry[]);
     const walker = safe(() => faceOf(c, L).types.includes('Planeswalker'), false);
     for (const e of entries) {

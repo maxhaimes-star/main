@@ -8,6 +8,7 @@
  * (exile a blue card, return an Island, sacrifice two Mountains, delve) become Pending questions for the
  * caster while the spell waits on the stack.
  */
+import { faceDownCastKind } from './facedown.ts';
 import { type CardData, parseManaSymbols } from '../cards.ts';
 import { getCard } from '../cube.ts';
 import { cardName, faceOf, type Lookup, payFromPool } from '../game/rules.ts';
@@ -296,6 +297,9 @@ function optionDefs(state: GameState, c: CardInstance, pid: string, face: number
     const what = [k.mana, ...k.parts.map((x) => x.text)].filter(Boolean).join(', ');
     defs.push({ ...normal, id: 'optcost', label: `Cast and ${what.charAt(0).toLowerCase()}${what.slice(1)}`, mana: normal.mana + k.mana, parts: [...normal.parts, ...k.parts], flags: { ...normal.flags, optionalCost: true } });
   }
+  // Morph / megamorph / disguise: cast face down as a 2/2 creature for {3} (engine/facedown.ts).
+  const fdKind = !face ? faceDownCastKind(c) : undefined;
+  if (fdKind) defs.push({ id: 'faceDown', label: `Cast face down (${fdKind})`, mana: '{3}', parts: [], flags: {}, delve: false, ...(c.zone !== 'hand' ? { unavailable: 'Only from your hand' } : {}) });
   applyCastKeywords(state, c, pid, face, defs, name, parseCost, lookup); // spectacle, multikicker, mayhem ... (engine/castkw.ts)
   applyPermissions(state, c, pid, face, defs, lookup); // casting from exile / graveyard / library (engine/permissions.ts)
   // Can the non-mana parts be paid?

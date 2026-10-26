@@ -50,6 +50,7 @@ export { turnInfo } from './durations.ts';
 export type { ActivatedEntry } from './script.ts';
 export { synthAbilities, levelStats, wardCost, KEYWORD_APIS, type LevelStats, type SynthAbility } from './keywords.ts';
 export { levelOf, levelStatsOf } from './keyword-play.ts';
+export { faceDownKeyword, faceUpCost, faceUpCosts } from './facedown.ts';
 export { charmLimits } from './play.ts';
 export { cantBeCountered, damagePrevented, replacementGap, replacementsOf } from './replacements.ts';
 export { HANDLED_KEYWORDS, keywordGap } from './mechanics.ts';

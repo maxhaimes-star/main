@@ -43,6 +43,8 @@ export const SUPPORTED_MODES = new Set([
   'BecomesTarget', 'Transformed', 'Taps', 'TapsForMana', 'BecomeMonarch', 'SearchedLibrary', 'DamageAll',
   'TokenCreated', 'TokenCreatedOnce', 'CounterAdded', 'CounterAddedOnce', 'AttackerUnblocked', 'AttackerUnblockedOnce',
   'LifeGained', 'LifeLost', 'CommitCrime', 'AttackerBlocked', 'AbilityCast', 'Cycled', 'Scry', 'Surveil',
+  // engine/facedown.ts
+  'TurnFaceUp',
 ]);
 
 /** Trigger parameters the engine understands; a trigger with any other parameter is left to the players. */
@@ -57,6 +59,9 @@ const KNOWN_PARAMS = new Set([
   // the Nth counter, damage amounts, attacking with a <type>, "at the beginning of your second main phase".
   'FirstTime', 'PlayerTurn', 'OpponentTurn', 'Revolt', 'Threshold', 'Hellbent', 'Valiant', 'CounterAmount', 'DamageAmount', 'ValidAttackers', 'PhaseCount', 'FirstCombat',
 ]);
+
+/** A trigger parameter the engine checks (ValidCause$ only for TurnFaceUp). */
+const knownParam = (k: string, mode: string | undefined) => KNOWN_PARAMS.has(k) || (k === 'ValidCause' && mode === 'TurnFaceUp');
 
 const PROWESS_LINE = 'DB$ Pump | Defined$ Self | NumAtt$ +1 | NumDef$ +1 | SpellDescription$ Prowess: +1/+1 until end of turn.';
 
@@ -93,7 +98,7 @@ export function triggerSupport(cardId: string, face: number, index: number): { d
     return un.length ? { detect: true, chain: false, reason: `effect ${un[0].split(' ')[0]}` } : { detect: true, chain: true };
   }
   if (!SUPPORTED_MODES.has(p.Mode)) return { detect: false, chain: false, reason: `mode ${p.Mode}` };
-  const unknown = Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
+  const unknown = Object.keys(p).find((k) => !knownParam(k, p.Mode));
   const chain = triggerChain(cardId, face, p.Execute);
   const cost = !!chain && chain.kind === 'AB' && !!chain.params.Cost && parseCostTokens(chain.params.Cost).unknown.length > 0;
   const un = chain ? isAutomatable(chain).unsupported : ['no chain'];
@@ -486,6 +491,14 @@ function matchEvent(state: GameState, ctx: Ctx, host: Host, p: Record<string, st
       if (r === false) return null;
       return r === 'unknown' ? 'unknown' : { mode, player: ev.pid };
     }
+    case 'TurnFaceUp': {
+      if (ev.t !== 'faceUp') return null;
+      r = matchC(state.cards[ev.iid], p.ValidCard, env);
+      // ValidCause$ SpellAbility.YouCtrl (Growing Dread): "whenever you turn a permanent face up".
+      if (p.ValidCause) r = and(r, /YouCtrl/.test(p.ValidCause) ? ev.pid === env.controller : 'unknown');
+      if (r === false) return null;
+      return r === 'unknown' ? 'unknown' : { mode, card: ev.iid, player: ev.pid };
+    }
     case 'Transformed': {
       if (ev.t !== 'transformed') return null;
       r = matchC(state.cards[ev.iid], p.ValidCard, env);
@@ -790,7 +803,7 @@ function detect(state: GameState, ctx: Ctx) {
           if (!hit) continue;
           const extra = extraParams(state, ctx, c, p, hit === 'unknown' ? undefined : hit, ev);
           if (extra === false) continue;
-          const unknownParam = extra === 'unknown' ? 'condition' : Object.keys(p).find((k) => !KNOWN_PARAMS.has(k));
+          const unknownParam = extra === 'unknown' ? 'condition' : Object.keys(p).find((k) => !knownParam(k, p.Mode));
           const faceName = getScript(t.ref?.cardId ?? host.id ?? '')?.[t.ref?.face ?? host.face]?.name ?? hostLabel(host, ctx);
           const desc = describe(p.TriggerDescription ?? 'a triggered ability', faceName);
           if (hit === 'unknown' || unknownParam) {

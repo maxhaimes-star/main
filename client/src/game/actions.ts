@@ -1,5 +1,5 @@
 import {
-  activatedAbilities, castableFaces, charmLimits, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
+  activatedAbilities, castableFaces, faceUpCosts, charmLimits, effectiveCost, faceOf, type GameAction, type GameView, isHidden, loyaltyAbilities, manaOptionsFor, triggeredAbilities, type CardInstance,
   type ManaOption, type TargetRef,
 } from '@ojb/shared';
 import { getCard } from '../cards.tsx';
@@ -304,6 +304,11 @@ export function menuFor(base: Base, iid: string): MenuItem[] {
       const u = castability(g, me, iid, 1);
       const label = `Cast a copy of ${spell.name}`;
       items.push(u && !u.ok ? { label, disabled: true, hint: u.reason ?? "Can't cast it now" } : { label, hint: spell.manaCost, onClick: () => castWithX(base, iid, 1) });
+    }
+    // Face-down (morph / disguise / manifest / cloak): turning it face up is a special action paying its cost.
+    if (c.faceDown && c.controller === me && !isHidden(c)) {
+      const costs = faceUpCosts(c as CardInstance, getCard);
+      if (costs.length) items.push({ label: 'Turn face up', hint: costs.join(' or '), onClick: () => act({ t: 'turnFaceUp', iid }) });
     }
     const scripted = all.filter((e) => e.ability.api !== '_Unlock');
     const manualLoyalty: MenuItem[] = loyaltyAbilities(face.oracle).map((l) => ({

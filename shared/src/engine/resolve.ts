@@ -22,6 +22,7 @@ import { answerTapCost } from './turns.ts';
 import { answerExtPending, execExtStep, EXT_APIS, type StepApi } from './ext.ts';
 import { blightOn } from './setmech.ts';
 import { canPayCost, costText, parseCostTokens, payCostNow, timesPayable } from './paycost.ts';
+import { answerFaceDownPending } from './facedown.ts';
 import { answerMorePending, answerMoreTargets, execMoreStep, MORE_APIS, moreDefinedValue, moreVar, type MoreRun } from './more.ts';
 import { checkTargets } from './play.ts';
 import { enterAttacking } from './combat-rules.ts';
@@ -2166,6 +2167,7 @@ export function answerPending(state: GameState, ctx: Ctx, pid: string, id: strin
   if (ext === undefined) ext = answerTapCost(state, ctx, pend, value);
   if (ext === undefined) ext = answerExtPending(state, ctx, pend, value);
   if (ext === undefined) ext = answerVenture(state, ctx, pend, value);
+  if (ext === undefined) ext = answerFaceDownPending(state, ctx, pend, value); // engine/facedown.ts
   if (ext !== undefined) return ext;
   const more = answerMorePending(state, ctx, pend, value); // engine/more.ts
   if (more !== undefined) return more;

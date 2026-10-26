@@ -14,6 +14,7 @@ import { activateRestriction, attackRestriction, blockRestriction, combatReminde
 import { tokenCopy } from '../engine/copy.ts';
 import { skipsStep, untapPrevented } from '../engine/replacements.ts';
 import { wardReminders } from '../engine/keyword-play.ts';
+import { faceDownCastKind, turnFaceUp } from '../engine/facedown.ts';
 import { nextTurnPlayer, routeAction, turnStarted } from '../engine/turns.ts';
 import { enforceAttackRequirements, enforceBlockRestrictions, takeExtraCombat } from '../engine/combat-rules.ts';
 import { noteTapped } from '../engine/manatriggers.ts';
@@ -392,7 +393,7 @@ function finishSpell(state: GameState, ctx: Ctx, item: StackItem, quiet: boolean
     if (item.x && /\{X\}/.test(face.manaCost) && face.types.includes('Creature') && /ravenous|enters with X/i.test(face.oracle)) {
       inst.counters['+1/+1'] = item.x;
     }
-    if (!quiet) log(state, ctx, item.controller, `${face.name} resolves.`);
+    if (!quiet) log(state, ctx, item.controller, `${inst.faceDown ? 'A face-down spell' : face.name} resolves.`);
   } else {
     moveCard(state, ctx, item.iid!, 'graveyard');
     if (!quiet) log(state, ctx, item.controller, `${face.name} resolves.`);
@@ -468,6 +469,8 @@ export function applyAction(state: GameState, pid: string, action: GameAction, c
   const route = routeAction(state, pid, action);
   if ('error' in route) return route.error;
   pid = route.pid;
+  // The 'faceDown' cast option (morph / disguise, engine/facedown.ts) is a face-down cast.
+  if (action.t === 'cast' && action.costOption === 'faceDown') action = { ...action, faceDown: true, costOption: undefined };
   const me = state.players.find((p) => p.pid === pid);
   if (!me) return 'You are not playing in this game';
   if (state.phase === 'over' && action.t !== 'chat') return 'The game is over';
@@ -770,6 +773,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       let strictPay: ReturnType<typeof planAutoPay> = null;
       if (state.strict) {
         const fix = fixModeOn(state);
+        if (a.faceDown && !fix && (c.zone !== 'hand' || !faceDownCastKind(c))) return `${cardName(c, ctx.lookup)} can't be cast face down (only cards with morph or disguise, from your hand)`;
         if (!a.faceDown && isLandCard(c, ctx.lookup, a.face ?? 0)) return `${cardName(c, ctx.lookup)} is a land — play it instead of casting it`;
         const zoneErr = castZoneError(state, pid, c, a.costOption, ctx.lookup, a.face);
         if (zoneErr && !fix) return zoneErr;
@@ -801,6 +805,7 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       c.controller = pid;
       c.revealedTo = [];
       c.faceDown = !!a.faceDown;
+      c.faceDownAs = a.faceDown ? faceDownCastKind(c) ?? 'morph' : undefined;
       c.castAs = undefined;
       c.transformed = false;
       if (data?.faces && a.face != null && a.face > 0) {
@@ -1007,11 +1012,13 @@ function reduce(state: GameState, me: GamePlayer, a: GameAction, ctx: Ctx): stri
       log(state, ctx, pid, `${name} transforms it into ${f.name}.`);
       return null;
     }
+    case 'turnFaceUp': return turnFaceUp(state, ctx, pid, a.iid); // special action (engine/facedown.ts)
     case 'faceDown': {
       const c = card(state, a.iid);
       if (!c || !canTouch(state, pid, c)) return 'Not your card';
       const was = cardName(c, ctx.lookup);
       c.faceDown = a.faceDown;
+      if (!a.faceDown) c.faceDownAs = undefined;
       log(state, ctx, pid, a.faceDown ? `${name} turns a card face down.` : `${name} turns ${was === 'a face-down card' ? cardName(c, ctx.lookup) : was} face up.`);
       return null;
     }

@@ -27,6 +27,7 @@ import { flatten, getScript, INCUBATOR_TOKEN, parseAbility, registerScripts, SCR
 import { isValidTarget, matchCard, type MatchEnv } from './targets.ts';
 import type { AutoCont, AutoInfo, ParsedAbility, Pending, TargetRef, TargetSpec } from './types.ts';
 import type { UniqueRun } from './unique.ts';
+import { execFaceDownStep, revealFaceUp } from './facedown.ts';
 export { MORE_APIS } from './more-support.ts';
 
 interface Objs { cards: string[]; players: string[] }
@@ -396,7 +397,7 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
       for (const iid of o?.cards ?? []) {
         const c = state.cards[iid];
         if (!c || c.zone !== 'battlefield') continue;
-        if (p.Mode === 'TurnFaceUp' || p.Mode === 'TurnFace') { c.faceDown = false; log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} is turned face up.`); continue; }
+        if (p.Mode === 'TurnFaceUp' || p.Mode === 'TurnFace') { if (!c.faceDown) continue; revealFaceUp(state, ctx, r.controller, c); log(state, ctx, r.controller, `${cardName(c, ctx.lookup)} is turned face up.`); continue; }
         const data = c.cardId ? ctx.lookup(c.cardId) : undefined;
         if (!(c.token?.back && !c.cardId) && (!data?.faces || data.faces.length < 2)) continue;
         const before = cardName(c, ctx.lookup);
@@ -502,7 +503,7 @@ export function execMoreStep(state: GameState, ctx: Ctx, r: MoreRun): Result | u
     }
     case 'Play': return play(state, ctx, r);
   }
-  return undefined;
+  return execFaceDownStep(state, ctx, r); // Manifest / Cloak / ManifestDread
 }
 
 /** Transformed this action (Mode$ Transformed triggers, triggers.ts). */

@@ -7,6 +7,7 @@ import { cardName, effectivePT, faceOf, hasKeyword, isCreature } from '../game/r
 import { type Ctx, emit, log, moveCard, player, randomId } from '../game/state.ts';
 import type { CardInstance, GameState, StackItem } from '../game/types.ts';
 import { levelStats, type LevelStats } from './keywords.ts';
+import { faceDownWard } from './facedown.ts';
 import { getScript, parseParams, scriptFaceOf } from './script.ts';
 import { canPayMana, payMana } from './paycost.ts';
 import { type AutoInfo, type ParsedAbility, type Pending, SYNTH_BASE, type TargetRef } from './types.ts';
@@ -214,6 +215,7 @@ export function execKeywordStep(state: GameState, ctx: Ctx, step: ParsedAbility,
 
 /** A permanent's ward cost as a Forge cost ("2", "PayLife<2>"), from its K:Ward line or a static granting it (Lavaspur Boots). */
 export function wardForgeCost(state: GameState, c: CardInstance, lookup: Ctx['lookup']): string | undefined {
+  if (c.faceDown) return faceDownWard(c) ? '2' : undefined; // disguise / cloak (engine/facedown.ts)
   const own = scriptFaceOf(c)?.keywords.find((k) => /^Ward:/.test(k));
   if (own) return own.slice(5).trim();
   if (!hasKeyword(c, lookup, 'Ward', state)) return undefined;
@@ -244,7 +246,7 @@ export function wardReminders(state: GameState, ctx: Ctx, pid: string, targets: 
     emit(state, { t: 'targeted', target: key, item: item.id, sourceIid: item.iid ?? item.sourceIid, spell: item.kind === 'spell', pid });
     if (ref.kind !== 'card') continue;
     const c = state.cards[ref.iid];
-    if (!c || c.zone !== 'battlefield' || c.controller === pid || c.faceDown) continue;
+    if (!c || c.zone !== 'battlefield' || c.controller === pid || (c.faceDown && !faceDownWard(c))) continue;
     const cost = wardForgeCost(state, c, ctx.lookup);
     if (!cost) continue;
     const name = cardName(c, ctx.lookup);

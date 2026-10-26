@@ -38,7 +38,7 @@ import {
   abilitiesOfInstance, activatedAbilitiesOf, adjustCost, applyAction, castOptions, type CardData, type Color, createGame, type Ctx,
   effectivePT, faceOf, landPlaysAllowed, landPlaysLeft, mayPlayFrom, topCardVisible, type GameAction, type GameState, hasKeyword, isCreature, isHidden, isValidTarget, manaOptionsFor, parseCost,
   parseManaSymbols, type Pending, castSpellAbility, charmLimits, type TargetRef, type TargetSpec, targetSpecs, viewFor,
-  type BotLevel, type BotMemory, botNeedsToAct, botStep, newBotMemory,
+  faceUpCosts, type BotLevel, type BotMemory, botNeedsToAct, botStep, newBotMemory,
 } from '../shared/src/index.ts';
 
 // ------------------------------------------------------------------ rng
@@ -366,6 +366,21 @@ function abilityPlays(G: Game, pid: string): Play[] {
   return out;
 }
 
+/** Turn a face-down permanent face up (special action: morph / disguise cost, or a manifested creature card's mana cost). */
+function faceUpPlays(G: Game, pid: string): Play[] {
+  const { g } = G;
+  const out: Play[] = [];
+  for (const iid of g.battlefield) {
+    const c = g.cards[iid];
+    if (c.controller !== pid || !c.faceDown) continue;
+    const costs = faceUpCosts(c, getCard);
+    if (!costs.length) continue;
+    const name = c.cardId ? getCard(c.cardId)?.name ?? 'a face-down card' : 'a face-down card';
+    out.push({ label: `turn ${name} face up`, card: name, run: () => { G.context = name; return payThenDo(G, pid, costs[0], 0, undefined, () => act(G, pid, { t: 'turnFaceUp', iid })); } });
+  }
+  return out;
+}
+
 function landPlays(G: Game, pid: string): Play[] {
   const { g } = G;
   const me = g.players.find((p) => p.pid === pid)!;
@@ -425,6 +440,7 @@ function priorityAction(G: Game, pid: string) {
   const wantSpell = main ? rng() < 0.8 : rng() < 0.15;
   if (wantSpell) plays.push(...castPlays(G, pid));
   if (G.activations < 8 && rng() < (main ? 0.5 : 0.1)) plays.push(...abilityPlays(G, pid));
+  if (rng() < (main ? 0.5 : 0.1)) plays.push(...faceUpPlays(G, pid));
   for (const p of shuffled(rng, plays)) {
     if (p.run()) { if (p.label.startsWith('activate')) G.activations++; return; }
     if (g.priority !== pid || g.pending.length) return; // something changed (e.g. a cost question)

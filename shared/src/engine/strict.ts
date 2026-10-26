@@ -482,7 +482,7 @@ export const MANUAL_ACTIONS = new Set<GameAction['t']>([
 ]);
 
 /** Actions that use the stack / need priority in strict mode. */
-const PRIORITY_ACTIONS = new Set<GameAction['t']>(['cast', 'activate', 'playLand']);
+const PRIORITY_ACTIONS = new Set<GameAction['t']>(['cast', 'activate', 'playLand', 'turnFaceUp']);
 
 /** Strict-mode gate, before the reducer runs the action. null = go ahead. */
 type PeekResult = Record<'top' | 'bottom' | 'graveyard' | 'hand' | 'battlefield' | 'exile', string[]> & { shuffle?: boolean };

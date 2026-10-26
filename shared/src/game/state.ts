@@ -197,5 +197,7 @@ export function moveCardRaw(state: GameState, ctx: Ctx, iid: string, to: Zone, o
     else if (to === 'library' || opts.position === 'top') z.unshift(iid);
     else z.push(iid);
   }
+  if (to === 'battlefield' && from !== 'battlefield' && opts.faceDown && opts.faceDownAs) inst.faceDownAs = opts.faceDownAs;
+  if (!inst.faceDown || (to !== 'battlefield' && to !== 'stack')) inst.faceDownAs = undefined;
   afterMove(state, ctx, inst, from, to);
 }
