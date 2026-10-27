@@ -1,0 +1,351 @@
+/* ======================================================================================
+   Phone / touch support. No animations, no hover reliance.
+   - (hover: none) and (pointer: coarse)  -> touch-only tweaks (bottom sheet, tap targets)
+   - (max-width: 820px), (max-height: 500px) -> phone-sized viewports (lobby/draft/... single column)
+   - .table.lay-portrait / .table.lay-landscape (set from JS, see touch.ts useLayout) -> game table
+   Desktop layout above ~900px width is untouched.
+   ====================================================================================== */
+
+:root { --safe-t: env(safe-area-inset-top, 0px); --safe-r: env(safe-area-inset-right, 0px); --safe-b: env(safe-area-inset-bottom, 0px); --safe-l: env(safe-area-inset-left, 0px); }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+.show-touch { display: none; }
+
+/* ---------- bottom sheet (card zoom + actions); used wherever there is no hover */
+.sheet-bg { position: fixed; inset: 0; z-index: 180; background: #000a; display: flex; align-items: flex-end; justify-content: center; }
+.sheet {
+  width: min(600px, 100%); max-height: 94vh; max-height: 94dvh; display: flex; flex-direction: column; background: var(--bg2);
+  border-top: 2px solid var(--accent); border-radius: 16px 16px 0 0; padding: 8px 14px calc(12px + var(--safe-b)); box-shadow: 0 -8px 30px #000a;
+}
+.sheet-head { display: flex; align-items: center; gap: 6px; font-size: 16px; padding-bottom: 6px; flex: none; }
+.sheet-close { margin-left: auto; min-width: 44px; min-height: 44px; padding: 0; }
+.sheet-body { display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.sheet-card { width: min(58vw, calc(38vh * .716), calc(38dvh * .716), 280px); flex: none; }
+.sheet-card .card-img { box-shadow: 0 6px 20px #000c; }
+.sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.sheet-actions button { min-height: 46px; flex: 1 1 140px; font-size: 15px; }
+.sheet-actions button.primary { flex-basis: 100%; font-size: 17px; }
+.sheet-actions small { opacity: .7; }
+.sheet-extra { flex: 1 1 100%; font-size: 13px; color: var(--accent2); }
+.sheet-group { flex: 1 1 100%; display: flex; flex-direction: column; gap: 6px; }
+.sheet-sub { display: flex; flex-direction: column; gap: 6px; padding-left: 10px; border-left: 2px solid var(--line); }
+.sheet-sub button { text-align: left; }
+.sheet-dismiss { flex-basis: 100%; background: transparent; }
+@media (orientation: landscape) and (max-height: 500px) {
+  .sheet { width: min(760px, 100%); max-height: 100vh; max-height: 100dvh; padding: 6px calc(14px + var(--safe-r)) calc(8px + var(--safe-b)) calc(14px + var(--safe-l)); border-radius: 12px 12px 0 0; }
+  .sheet-body { flex-direction: row; align-items: flex-start; }
+  .sheet-card { width: calc((100vh - 70px) * .716); width: calc((100dvh - 70px) * .716); max-width: 40%; }
+  .sheet-actions { min-width: 0; }
+  .sheet-actions button { min-height: 42px; }
+}
+
+/* ---------- touch devices */
+@media (hover: none) and (pointer: coarse) {
+  .hide-touch { display: none !important; }
+  .show-touch { display: inline; }
+  html, body { touch-action: manipulation; }
+  button:hover:not(:disabled) { border-color: var(--line); }
+  button.primary:hover:not(:disabled) { background: var(--accent); }
+  .tcard, .hcard, .zcard, .cube-card, .stack-item, .zone, .phase { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .tcard .dots, .hover-preview { display: none; }
+  .tcard:not(.tapped):not(.attacking):not(.blocking):hover { transform: none; }
+  .tcard.tapped:hover { transform: translateY(var(--sy)) rotate(90deg); }
+  .cube-card:hover, .zone:hover { transform: none; }
+  .preview-panel { display: none; }
+  input[type=checkbox], input[type=radio] { width: 22px; height: 22px; }
+  button { min-height: 44px; }
+  button.tiny { min-height: 40px; padding: 4px 12px; }
+  button.link { min-height: 44px; }
+  .table button.tiny { min-height: 36px; }
+  .ctx-item { min-height: 44px; display: flex; align-items: center; }
+}
+
+/* ---------- phone-sized viewports: pages */
+@media (max-width: 820px), (max-height: 500px) {
+  input, select, textarea { font-size: 16px; min-height: 44px; } /* >=16px stops iOS zooming on focus */
+  input[type=checkbox], input[type=radio] { min-height: 0; }
+  label { margin: 10px 0; }
+
+  .home { align-items: flex-start; padding: calc(12px + var(--safe-t)) calc(12px + var(--safe-r)) calc(12px + var(--safe-b)) calc(12px + var(--safe-l)); }
+  .home-card { padding: 16px; }
+  .home-card h1 { font-size: 26px; }
+
+  .lobby, .draft, .auction, .deckbuilder {
+    grid-template-columns: 1fr; height: auto; min-height: 100%; gap: 8px;
+    padding: calc(52px + var(--safe-t)) calc(12px + var(--safe-r)) calc(12px + var(--safe-b)) calc(12px + var(--safe-l)); /* top strip leaves room for the chat button */
+  }
+  .lobby-main, .draft-main, .auction-main, .db-main { overflow: visible; padding-bottom: 110px; }
+  .lobby-side, .side { position: static; max-height: none; overflow: visible; }
+  .lobby-side:empty, .side:empty { display: none; }
+  .lobby-main h1 { font-size: 24px; margin-top: 0; }
+  .share { flex-direction: column; align-items: stretch; }
+  .share code { word-break: break-all; white-space: normal; }
+  .modes { grid-template-columns: 1fr; }
+  .mode { min-height: 64px; }
+  .settings, .set-packs { grid-template-columns: 1fr; }
+  .setting.check { min-height: 44px; }
+  .filters input { min-width: 0; width: 100%; }
+  .players li { min-height: 44px; }
+  .lobby-main > button.primary.big { position: sticky; bottom: calc(8px + var(--safe-b)); width: 100%; min-height: 52px; z-index: 5; box-shadow: 0 0 0 8px var(--bg); }
+  .chat { top: calc(8px + var(--safe-t)); right: calc(8px + var(--safe-r)); left: auto; bottom: auto; }
+  .chat-toggle { min-height: 40px; }
+  .toast { bottom: calc(96px + var(--safe-b)); max-width: 92vw; }
+  .banner.warn { padding-top: calc(4px + var(--safe-t)); }
+
+  /* full-screen chat sheet */
+  .chat.open { inset: 0; z-index: 140; }
+  .chat.open .chat-toggle { display: none; }
+  .chat.open .chat-body { position: fixed; inset: 0; width: auto; margin: 0; border: 0; border-radius: 0; display: flex; flex-direction: column; gap: 8px; padding: calc(10px + var(--safe-t)) calc(12px + var(--safe-r)) calc(10px + var(--safe-b)) calc(12px + var(--safe-l)); }
+  .chat.open .chat-head { display: flex; justify-content: space-between; align-items: center; font-size: 18px; }
+  .chat.open .chat-msgs { flex: 1; max-height: none; font-size: 15px; margin: 0; }
+
+  /* packs: 3 columns */
+  .card-grid, .card-grid.small { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .pool-stack .cube-card { margin-bottom: -110px; }
+  .pool-stack .cube-card:last-child { margin-bottom: 0; }
+  .pool-group { flex: 0 0 110px; }
+  .picks-head { flex-wrap: wrap; gap: 8px; }
+  .draft-head { gap: 4px 12px; }
+  .draft-head h2 { font-size: 18px; margin: 4px 0; }
+  .countdown .bar { width: 90px; }
+
+  /* sticky primary actions */
+  .sticky-actions {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; margin: 0; background: var(--bg2); border-top: 1px solid var(--line);
+    padding: 8px calc(12px + var(--safe-r)) calc(8px + var(--safe-b)) calc(12px + var(--safe-l)); box-shadow: 0 -6px 16px #0008;
+  }
+  .sticky-actions > button.primary.big { width: 100%; min-height: 52px; }
+  .bid-buttons.sticky-actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .bid-buttons.sticky-actions button, .bid-buttons.sticky-actions input { min-height: 46px; width: 100%; padding-left: 4px; padding-right: 4px; }
+  .bid-buttons.sticky-actions .pass-btn, .bid-buttons.sticky-actions .nobid-btn { grid-column: span 2; }
+  .bid-buttons.sticky-actions input { grid-column: span 1; }
+  .auction-main { padding-bottom: 170px; }
+  .lot { flex-direction: column; align-items: center; padding: 12px; gap: 10px; }
+  .lot-card { width: min(52vw, 220px); }
+  .lot-info { width: 100%; }
+  .budgets td, .budgets th { padding: 8px 6px; }
+
+  /* deckbuilder: horizontally scrollable columns */
+  .db-head { position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 6px 0; gap: 6px 12px; }
+  .db-head h2 { font-size: 18px; margin: 0; }
+  .db-head .curve { display: none; }
+  .ready { margin-left: auto; min-height: 44px; background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
+  .db-columns { -webkit-overflow-scrolling: touch; padding-bottom: 90px; margin: 0 calc(-12px - var(--safe-r)) 0 calc(-12px - var(--safe-l)); padding-left: 12px; padding-right: 12px; scroll-snap-type: x proximity; }
+  .db-col { width: 100px; scroll-snap-align: start; }
+  .db-col .stacked { margin-bottom: -96px; }
+  .basics { gap: 8px; }
+  .basic { min-height: 44px; }
+  .basic button.tiny { min-width: 44px; }
+  .challenge, .match-row { min-height: 44px; }
+
+  /* constructed import */
+  .deck-import textarea { min-height: 240px; font-size: 16px; }
+  .deckbuilder.constructed .deck-check button.primary {
+    position: fixed; left: calc(12px + var(--safe-l)); right: calc(12px + var(--safe-r)); bottom: calc(10px + var(--safe-b)); z-index: 60; min-height: 52px; box-shadow: 0 0 0 8px var(--bg);
+  }
+  .search-hit { min-height: 44px; }
+
+  /* context menu becomes a bottom sheet; modals are full screen */
+  .ctx-menu { left: 0 !important; right: 0; top: auto !important; bottom: 0; max-width: none; max-height: 72vh; max-height: 72dvh; overflow-y: auto; border-radius: 16px 16px 0 0; border-bottom: 0; padding: 6px 8px calc(10px + var(--safe-b)); z-index: 210; font-size: 16px; }
+  .ctx-title { font-size: 15px; padding: 8px; }
+  .ctx-item { min-height: 46px; display: flex; align-items: center; padding: 8px 12px; }
+  .ctx-sub { position: static; display: block; min-width: 0; max-width: none; max-height: none; border: 0; box-shadow: none; padding: 0 0 0 12px; background: transparent; flex: 1 1 100%; }
+  .ctx-item.has-sub { flex-wrap: wrap; }
+  .modal-bg { align-items: flex-end; }
+  .modal { width: 100%; max-width: 100%; min-width: 0; max-height: 100vh; max-height: 100dvh; border-radius: 16px 16px 0 0; padding: 12px calc(14px + var(--safe-r)) calc(14px + var(--safe-b)) calc(14px + var(--safe-l)); }
+  .modal.wide { height: 100vh; height: 100dvh; border-radius: 0; padding-top: calc(10px + var(--safe-t)); }
+  .modal .row button, .modal-head button { min-height: 44px; }
+  .modal-head button.tiny { min-width: 44px; }
+  .zone-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .custom-token input { flex: 1 1 100%; }
+  .custom-token input.short { flex: 1 1 28%; width: auto; }
+  .mulligan { width: 100%; max-height: 100dvh; overflow: auto; border-radius: 0; }
+  .mull-hand .zcard { width: min(30vw, 150px); }
+  .prompt { min-width: 0; }
+  .overlay-msg { padding: 16px 20px; max-width: 92vw; }
+  .sb-cols { grid-template-columns: 1fr; }
+  .between-games { padding: calc(12px + var(--safe-t)) calc(12px + var(--safe-r)) calc(12px + var(--safe-b)) calc(12px + var(--safe-l)); }
+  .opt-item { min-height: 52px; }
+  .pend-card { width: 80px; }
+  .revealed-pick .rv { width: 28vw; }
+  .target-picker { max-height: 46vh; padding-bottom: calc(8px + var(--safe-b)); }
+  .center-msg { padding: 32px 16px; }
+}
+
+/* ======================================================================================
+   Game table on phones
+   ====================================================================================== */
+.table { --H: 100vh; }
+@supports (height: 100dvh) { .table { --H: 100dvh; } }
+.rotate-hint, .side-head, .zlabel, .log-btn, .more-btn, .priority .land-chip { display: none; }
+
+.table.lay-portrait, .table.lay-landscape {
+  height: var(--H); grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); -webkit-user-select: none; user-select: none;
+  padding: var(--safe-t) var(--safe-r) var(--safe-b) var(--safe-l);
+}
+.lay-portrait .table-core, .lay-landscape .table-core { min-height: 0; }
+.lay-portrait .side-toggle, .lay-landscape .side-toggle { display: none; }
+
+/* game menu / log sheet */
+.lay-portrait.log-closed .table-side, .lay-landscape.log-closed .table-side { display: none; }
+.lay-portrait.log-open .table-side, .lay-landscape.log-open .table-side {
+  display: flex; position: fixed; inset: 0; z-index: 140; background: var(--bg2); border: 0; gap: 8px;
+  padding: calc(8px + var(--safe-t)) calc(12px + var(--safe-r)) calc(8px + var(--safe-b)) calc(12px + var(--safe-l)); overflow: auto;
+}
+.lay-portrait .side-head, .lay-landscape .side-head { display: flex; justify-content: space-between; align-items: center; font-size: 18px; flex: none; }
+.lay-portrait .side-close, .lay-landscape .side-close { min-height: 44px; }
+.lay-portrait .table-side .auto-toggles, .lay-landscape .table-side .auto-toggles { margin: 0; flex-wrap: wrap; gap: 6px 16px; font-size: 15px; flex: none; }
+.lay-portrait .table-side .auto-toggles .tgl, .lay-landscape .table-side .auto-toggles .tgl { min-height: 44px; }
+.lay-portrait .table-side .my-tools, .lay-landscape .table-side .my-tools { flex: none; gap: 8px; }
+.lay-portrait .table-side .my-tools button, .lay-landscape .table-side .my-tools button { min-height: 44px; font-size: 15px; }
+.lay-portrait .table-side .game-log, .lay-landscape .table-side .game-log { min-height: 180px; }
+.lay-portrait .log-entries, .lay-landscape .log-entries { font-size: 14px; }
+.lay-portrait .game-log input, .lay-landscape .game-log input { font-size: 16px; min-height: 44px; flex: none; }
+
+/* shared compact pieces */
+.lay-portrait .note, .lay-landscape .note, .lay-portrait .token-badge, .lay-landscape .token-badge, .lay-portrait .facedown-peek, .lay-landscape .facedown-peek { display: none; }
+.lay-portrait .battlefield, .lay-landscape .battlefield { padding: 2px 4px; gap: 2px; border-radius: 8px; }
+/* battlefield rows: sized in JS like on desktop (smaller bounds), see boardLayout.ts */
+
+.lay-portrait .player-panel, .lay-landscape .player-panel { gap: 2px; padding: 3px 6px; border-radius: 10px; scrollbar-width: none; }
+.lay-portrait .pp-name, .lay-landscape .pp-name { font-size: 12px; max-width: 100%; }
+.lay-portrait .pp-name, .lay-landscape .pp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lay-portrait .pp-counts span:nth-child(n+2), .lay-landscape .pp-counts span:nth-child(n+2) { display: none; } /* library / graveyard live in the pills */
+.lay-portrait .pp-counts, .lay-landscape .pp-counts { font-size: 12px; }
+.lay-portrait .life-num, .lay-landscape .life-num { width: 42px; font-size: 21px; border-width: 2px; }
+.lay-portrait .life button, .lay-landscape .life button { width: 30px; height: 30px; min-height: 0; font-size: 16px; }
+.lay-portrait .pcounters .tiny, .lay-landscape .pcounters .tiny, .lay-portrait .player-panel > button.tiny, .lay-landscape .player-panel > button.tiny, .lay-portrait .mana-pool .tiny, .lay-landscape .mana-pool .tiny { display: none; }
+.lay-portrait .pcounters:not(:has(.pctr)), .lay-landscape .pcounters:not(:has(.pctr)) { display: none; }
+.lay-portrait .pctr, .lay-landscape .pctr, .lay-portrait .desig, .lay-landscape .desig { font-size: 11px; padding: 0 4px; }
+.lay-portrait .pip, .lay-landscape .pip { min-width: 16px; height: 16px; font-size: 10px; }
+
+/* piles condensed into count pills */
+.lay-portrait .zones, .lay-landscape .zones { gap: 4px; }
+.lay-portrait .zone, .lay-landscape .zone { width: auto; height: auto; aspect-ratio: auto; display: flex; align-items: center; justify-content: center; min-width: 44px; min-height: 30px; padding: 0 8px; background: #0d1117e6; border: 1px solid #2c3544; border-radius: 15px; }
+.lay-portrait .zone .card-img, .lay-landscape .zone .card-img, .lay-portrait .zone .empty-zone, .lay-landscape .zone .empty-zone, .lay-portrait .zone-count, .lay-landscape .zone-count { display: none; }
+.lay-portrait .zlabel, .lay-landscape .zlabel { display: inline; font-size: 12px; font-weight: 700; white-space: nowrap; color: #cfd6e4; }
+.lay-portrait .zone.drop-over, .lay-landscape .zone.drop-over { outline: 0; }
+.lay-portrait .revealed-top, .lay-landscape .revealed-top { display: none; }
+
+/* phase bar */
+.lay-portrait .center-bar, .lay-landscape .center-bar { gap: 6px; padding: 0 8px; }
+.lay-portrait .turn-info, .lay-landscape .turn-info { min-width: 0; font-size: 12px; flex: none; }
+.lay-portrait .turn-info .muted, .lay-landscape .turn-info .muted, .lay-portrait .extra-badge, .lay-landscape .extra-badge { display: none; }
+.lay-portrait .phases, .lay-landscape .phases {
+  position: relative; justify-content: flex-start; overflow-x: auto; overflow-y: hidden; min-width: 0; scrollbar-width: none; touch-action: pan-x; padding: 4px 0;
+}
+.lay-portrait .phases::-webkit-scrollbar, .lay-landscape .phases::-webkit-scrollbar { display: none; }
+.lay-portrait .phase, .lay-landscape .phase { padding: 3px 9px; font-size: 11px; flex: none; }
+.lay-portrait .log-btn, .lay-landscape .log-btn { display: inline-flex; align-items: center; justify-content: center; flex: none; min-height: 32px; padding: 0 12px; font-size: 13px; border-radius: 14px; }
+.lay-portrait .combat-panel, .lay-landscape .combat-panel { left: 6px; right: 6px; transform: none; max-width: none; font-size: 13px; }
+.lay-portrait .combat-panel button, .lay-landscape .combat-panel button { min-height: 40px; }
+
+/* pass button */
+.lay-portrait .priority .ok, .lay-landscape .priority .ok { font-size: 16px; min-width: 112px; min-height: 48px; padding: 8px 18px; }
+.lay-portrait .priority, .lay-landscape .priority { gap: 6px; }
+.lay-portrait .more-btn, .lay-landscape .more-btn { display: inline-flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; padding: 0; font-size: 20px; border-radius: 50%; background: #000b; }
+.lay-portrait .attack-all button, .lay-landscape .attack-all button { min-height: 44px; padding: 6px 9px; font-size: 12px; }
+.lay-portrait .priority .land-chip, .lay-landscape .priority .land-chip { display: inline-block; margin: 0; background: #000b; }
+.lay-portrait .waiting, .lay-landscape .waiting { font-size: 12px; padding: 6px 10px; }
+
+/* hand: horizontally scrollable overlapping row */
+.lay-portrait .hand, .lay-landscape .hand {
+  justify-content: flex-start; overflow-x: auto; overflow-y: hidden; padding: 0 8px; -webkit-overflow-scrolling: touch; touch-action: pan-x; scrollbar-width: none; overscroll-behavior-x: contain;
+}
+.lay-portrait .hand::-webkit-scrollbar, .lay-landscape .hand::-webkit-scrollbar { display: none; }
+.lay-portrait .hand::before, .lay-portrait .hand::after, .lay-landscape .hand::before, .lay-landscape .hand::after { content: ''; margin: auto; }
+.lay-portrait .hcard, .lay-landscape .hcard { transform: none; margin-left: calc(var(--hw) * -0.2); }
+.lay-portrait .hcard:first-of-type, .lay-landscape .hcard:first-of-type { margin-left: 0; }
+.lay-portrait .hcard:hover, .lay-landscape .hcard:hover, .lay-portrait .hcard.uncastable:hover, .lay-landscape .hcard.uncastable:hover { transform: none; z-index: auto !important; }
+.lay-portrait .hcard::after, .lay-landscape .hcard::after { display: none; }
+.lay-portrait .hand .land-plays, .lay-landscape .hand .land-plays, .lay-portrait .hand .hand-hint, .lay-landscape .hand .hand-hint { display: none; }
+
+/* stack: compact chips instead of the fanned pile */
+.lay-portrait .stack, .lay-landscape .stack { background: none; scrollbar-width: none; }
+.lay-portrait .stack-title, .lay-landscape .stack-title { font-size: 10px; margin: 0; flex: none; }
+.lay-portrait .stack-item, .lay-landscape .stack-item {
+  display: flex; align-items: center; gap: 6px; background: #000c; border: 1px solid #5d5230; border-radius: 8px; padding: 3px 6px 3px 3px; width: auto; flex: none;
+}
+.lay-portrait .stack-item.top, .lay-landscape .stack-item.top { border-color: var(--gold); }
+.lay-portrait .stack-item ~ .stack-item, .lay-landscape .stack-item ~ .stack-item { margin-top: 0; }
+.lay-portrait .stack-item .card-img, .lay-landscape .stack-item .card-img, .lay-portrait .stack-img, .lay-landscape .stack-img,
+.lay-portrait .stack-ability, .lay-landscape .stack-ability { width: 30px !important; flex: none; box-shadow: none; font-size: 14px; padding-top: 0; align-items: center; }
+.lay-portrait .stack-text, .lay-landscape .stack-text { position: static; background: none; min-height: 0; max-height: none; padding: 0; font-size: 11px; border-radius: 0; justify-content: flex-start; flex: 1 1 auto; min-width: 0; }
+.lay-portrait .stack-text small, .lay-landscape .stack-text small { display: none; }
+.lay-portrait .stack-btns, .lay-landscape .stack-btns { position: static; flex-direction: row; }
+.lay-portrait .stack-kind, .lay-landscape .stack-kind { display: none; }
+.lay-portrait .stack-btns button, .lay-landscape .stack-btns button { min-height: 30px; }
+
+/* in-game prompts */
+.lay-portrait .mode-hint, .lay-landscape .mode-hint {
+  position: static; transform: none; flex: 1 1 auto; min-width: 0; font-size: 13px; padding: 4px 8px; text-align: center; justify-content: center; flex-wrap: wrap; z-index: 160;
+}
+.lay-landscape .center-bar:has(.mode-hint) > .phases, .lay-landscape .center-bar:has(.mode-hint) > .turn-info { display: none; }
+.lay-portrait > .mode-hint, .lay-landscape > .mode-hint { position: fixed; left: calc(8px + var(--safe-l)); right: calc(8px + var(--safe-r)); top: calc(4px + var(--safe-t)); }
+.lay-portrait .mode-hint button, .lay-landscape .mode-hint button { min-height: 40px; padding: 4px 14px; }
+.lay-portrait .undo-req, .lay-landscape .undo-req { left: 8px; right: 8px; transform: none; top: calc(44px + var(--safe-t)); flex-wrap: wrap; font-size: 13px; }
+.lay-portrait .control-banner, .lay-landscape .control-banner, .lay-portrait .fix-banner, .lay-landscape .fix-banner { font-size: 12px; padding: 3px 8px; gap: 6px; margin-bottom: 0; }
+
+/* ---------- portrait: stacked layout */
+.table.lay-portrait {
+  --hh: 106px; --hw: 68px;
+  --cw0: clamp(40px, calc(((var(--H) - var(--hh) - var(--safe-t) - var(--safe-b) - 112px) / 2 - 40px) / 3.05), 74px);
+}
+.lay-portrait .rotate-hint {
+  display: flex; align-items: center; justify-content: center; gap: 8px; flex: none; height: 18px; font-size: 11px; color: var(--muted); background: #0006;
+}
+.lay-portrait .rotate-hint button { min-height: 0; height: 16px; padding: 0 6px; font-size: 10px; line-height: 1; background: none; border: 0; color: var(--muted); }
+.lay-portrait .player-area {
+  grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "panel zones" "bf bf"; gap: 2px 6px; padding: 2px 6px;
+}
+.lay-portrait .player-area.bottom { grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: "bf bf" "panel zones"; padding-bottom: 2px; }
+.lay-portrait .player-panel { grid-area: panel; flex-direction: row; flex-wrap: nowrap; justify-content: flex-start; align-items: center; gap: 8px; align-self: center; overflow: hidden; }
+.lay-portrait .battlefield { grid-area: bf; }
+.lay-portrait .zones { grid-area: zones; flex-direction: row; align-items: center; justify-content: flex-end; overflow: visible; }
+.lay-portrait .life { order: -1; }
+.lay-portrait .center-bar { flex-wrap: wrap; height: auto; padding: 3px 8px 5px; gap: 3px 6px; }
+.lay-portrait .phases { flex: 1 1 0; }
+.lay-portrait .center-row2 { flex: 1 1 100%; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lay-portrait .center-row2 .stack { position: static; flex: 1 1 0; min-width: 0; width: auto; max-height: none; align-self: auto; display: flex; flex-direction: row; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 0; touch-action: pan-x; }
+.lay-portrait .center-row2 .stack-item { max-width: 62%; }
+.lay-portrait .center-row2 .priority { position: static; flex: 1 1 auto; flex-direction: row; align-items: center; justify-content: flex-end; }
+.lay-portrait .center-row2 .stack ~ .priority { flex: none; }
+.lay-portrait .hand { padding-right: 8px; padding-left: 8px; }
+
+/* ---------- landscape: compact Arena layout */
+.table.lay-landscape {
+  --hh: 78px; --hw: 54px;
+  --cw0: clamp(30px, calc(((var(--H) - var(--hh) - var(--safe-t) - var(--safe-b) - 30px) / 2 - 8px) / 2.95), 58px);
+}
+.lay-landscape .player-area { grid-template-columns: 88px minmax(0, 1fr) auto; gap: 4px; padding: 2px 6px; }
+.lay-landscape .player-area.bottom { padding-bottom: 0; }
+.lay-landscape .player-panel { justify-content: center; gap: 1px; padding: 3px 4px; }
+.lay-landscape .life-num { width: 40px; font-size: 20px; }
+.lay-landscape .zones { gap: 5px; justify-content: center; }
+.lay-landscape .zone { min-width: 50px; }
+.lay-landscape .center-bar { height: 30px; }
+.lay-landscape .phases { flex: 1 1 0; }
+.lay-landscape .stack { align-self: stretch; width: 138px; padding: 2px 6px; display: flex; flex-direction: column; gap: 4px; background: #0008; border-left: 1px solid #3a3320; }
+.lay-landscape .stack-item { max-width: 100%; }
+.lay-landscape .stack-text { font-size: 10px; max-height: 3.6em; overflow: hidden; }
+.lay-landscape .priority { right: calc(8px + var(--safe-r)); bottom: 6px; flex-direction: row; align-items: center; }
+.lay-landscape .priority > .sub-actions { display: none; }
+.lay-landscape .hand { padding-left: 8px; padding-right: 190px; }
+
+.lay-portrait .pool-pip, .lay-landscape .pool-pip { min-width: 20px; height: 20px; font-size: 11px; }
+.lay-portrait .pool-chip .mp-label, .lay-landscape .pool-chip .mp-label { display: none; }
+
+.lay-portrait .table-side .stops-editor, .lay-landscape .table-side .stops-editor { flex: 1 1 100%; font-size: 14px; }
+.lay-portrait .se-row, .lay-landscape .se-row { min-height: 36px; }
+
+.lay-portrait .rz-card, .lay-landscape .rz-card { width: 26px; }
+.lay-portrait .rz-entry.compact .rz-card, .lay-landscape .rz-entry.compact .rz-card { width: 22px; }
+.lay-portrait .rz, .lay-landscape .rz { padding: 2px 6px; }
+.lay-portrait .rz-list, .lay-landscape .rz-list { max-height: 24vh; }
+.lay-landscape .rz-chip { position: static; }
+/* Short landscape phones: the collapsed strip is a single thin row so the board keeps its height. */
+.lay-landscape .rz:not(.open) { flex-direction: row; align-items: center; gap: 8px; padding: 1px 6px; }
+.lay-landscape .rz:not(.open) .rz-head { order: 2; flex: none; }
+.lay-landscape .rz:not(.open) .rz-title { display: none; }
+.lay-landscape .rz:not(.open) .rz-entry { order: 1; flex: 1; }
+.lay-landscape .rz:not(.open) .rz-card { width: 18px; }
+.lay-landscape .rz:not(.open) .rz-meta { flex-direction: row; gap: 6px; align-items: baseline; }

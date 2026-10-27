@@ -1,0 +1,17 @@
+# One-click deploy on Render: New → Blueprint → pick this repo.
+services:
+  - type: web
+    name: ojb-cube
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build-carddb && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"
+      # Encrypts and signs the room snapshots browsers keep so rooms survive restarts (server/src/snapshot.ts). Must stay the same.
+      - key: ROOM_SECRET
+        generateValue: true
